@@ -81,6 +81,9 @@ ppLlvmGlobal (var@(LMGlobalVar _ _ link x a c), dat) =
 
     in ppAssignment var $ texts link <+> const' <+> rhs <> sect <> align
 
+ppLlvmGlobal (var@(LMMetaVar _), Just val) =
+  ppAssignment var (texts val)
+
 ppLlvmGlobal oth = error $ "Non Global var ppr as global! " ++ show oth
 
 

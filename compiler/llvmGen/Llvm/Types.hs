@@ -42,7 +42,8 @@ data LlvmType
   | LMVoid               -- ^ Void type
   | LMStruct [LlvmType]  -- ^ Structure type
   | LMAlias LlvmAlias    -- ^ A type alias
-
+  | LMMetaType           -- ^ Type of meta data
+    
   -- | Function type, used to create pointers to functions
   | LMFunction LlvmFunctionDecl
   deriving (Eq)
@@ -58,6 +59,7 @@ instance Show LlvmType where
   show (LMLabel       ) = "label"
   show (LMVoid        ) = "void"
   show (LMStruct tys  ) = "<{" ++ (commaCat tys) ++ "}>"
+  show (LMMetaType    ) = ""
 
   show (LMFunction (LlvmFunctionDecl _ _ _ r varg p _))
     = let varg' = case varg of
@@ -86,11 +88,14 @@ data LlvmVar
   | LMNLocalVar LMString LlvmType
   -- | A constant variable
   | LMLitVar LlvmLit
+  -- | Metadata
+  | LMMetaVar !Int
   deriving (Eq)
 
 instance Show LlvmVar where
-  show (LMLitVar x) = show x
-  show (x         ) = show (getVarType x) ++ " " ++ getName x
+  show (LMLitVar x)  = show x
+  show (LMMetaVar x) = "!" ++ show x
+  show (x         )  = show (getVarType x) ++ " " ++ getName x
 
 
 -- | Llvm Literal Data.
@@ -131,6 +136,12 @@ data LlvmStatic
   | LMAdd LlvmStatic LlvmStatic        -- ^ Constant addition operation
   | LMSub LlvmStatic LlvmStatic        -- ^ Constant subtraction operation
 
+  -- metadata: Used for recording debug information
+    
+  | LMMeta [LlvmStatic]                -- ^ A list of literals and other metadata
+  | LMMetaString LMString              -- ^ Literal metadata string
+  | LMMetaRef !Int                     -- ^ Reference to a global metadata node
+
 instance Show LlvmStatic where
   show (LMComment       s) = "; " ++ unpackFS s
   show (LMStaticLit   l  ) = show l
@@ -158,6 +169,14 @@ instance Show LlvmStatic where
                 else error $ "LMSub with different types! s1: "
                         ++ show s1 ++ ", s2: " ++ show s2
 
+  show (LMMeta ls)
+     = "metadata !{" ++ intercalate ", " (map show ls) ++ "}"
+
+  show (LMMetaString str)
+     = "metadata !\"" ++ unpackFS str ++ "\""
+       
+  show (LMMetaRef n)
+     = "metadata !" ++ show n
 
 -- | Concatenate an array together, separated by commas
 commaCat :: Show a => [a] -> String
@@ -174,6 +193,7 @@ getName v@(LMGlobalVar _ _ _ _ _ _) = "@" ++ getPlainName v
 getName v@(LMLocalVar  _ _        ) = "%" ++ getPlainName v
 getName v@(LMNLocalVar _ _        ) = "%" ++ getPlainName v
 getName v@(LMLitVar    _          ) = getPlainName v
+getName v@(LMMetaVar   _          ) = "!" ++ getPlainName v
 
 -- | Return the variable name or value of the 'LlvmVar'
 -- in a plain textual representation (e.g. @x@, @y@ or @42@).
@@ -183,6 +203,7 @@ getPlainName (LMLocalVar  x LMLabel  ) = show x
 getPlainName (LMLocalVar  x _        ) = "l" ++ show x
 getPlainName (LMNLocalVar x _        ) = unpackFS x
 getPlainName (LMLitVar    x          ) = getLit x
+getPlainName (LMMetaVar   n          ) = show n
 
 -- | Print a literal value. No type.
 getLit :: LlvmLit -> String
@@ -199,6 +220,7 @@ getVarType (LMGlobalVar _ y _ _ _ _) = y
 getVarType (LMLocalVar  _ y        ) = y
 getVarType (LMNLocalVar _ y        ) = y
 getVarType (LMLitVar    l          ) = getLitType l
+getVarType (LMMetaVar   _          ) = LMMetaType
 
 -- | Return the 'LlvmType' of a 'LlvmLit'
 getLitType :: LlvmLit -> LlvmType
@@ -219,6 +241,9 @@ getStatType (LMBitc        _ t) = t
 getStatType (LMPtoI        _ t) = t
 getStatType (LMAdd         t _) = getStatType t
 getStatType (LMSub         t _) = getStatType t
+getStatType (LMMeta        _  ) = LMMetaType
+getStatType (LMMetaString  _  ) = LMMetaType
+getStatType (LMMetaRef     _  ) = LMMetaType
 getStatType (LMComment       _) = error "Can't call getStatType on LMComment!"
 
 -- | Return the 'LlvmType' of the 'LMGlobal'
@@ -247,6 +272,7 @@ pVarLift (LMGlobalVar s t l x a c) = LMGlobalVar s (pLift t) l x a c
 pVarLift (LMLocalVar  s t        ) = LMLocalVar  s (pLift t)
 pVarLift (LMNLocalVar s t        ) = LMNLocalVar s (pLift t)
 pVarLift (LMLitVar    _          ) = error $ "Can't lower a literal type!"
+pVarLift (LMMetaVar   _          ) = error $ "Can't lower a metadata type!"
 
 -- | Remove the pointer indirection of the supplied type. Only 'LMPointer'
 -- constructors can be lowered.
@@ -260,6 +286,7 @@ pVarLower (LMGlobalVar s t l x a c) = LMGlobalVar s (pLower t) l x a c
 pVarLower (LMLocalVar  s t        ) = LMLocalVar  s (pLower t)
 pVarLower (LMNLocalVar s t        ) = LMNLocalVar s (pLower t)
 pVarLower (LMLitVar    _          ) = error $ "Can't lower a literal type!"
+pVarLower (LMMetaVar   _          ) = error $ "Can't lower a metadata type!"
 
 -- | Test if the given 'LlvmType' is an integer
 isInt :: LlvmType -> Bool
@@ -300,6 +327,7 @@ llvmWidthInBits LMVoid          = 0
 llvmWidthInBits (LMStruct tys)  = sum $ map llvmWidthInBits tys
 llvmWidthInBits (LMFunction  _) = 0
 llvmWidthInBits (LMAlias (_,t)) = llvmWidthInBits t
+llvmWidthInBits (LMMetaType)    = error "llvm metadata has no runtime representation!"
 
 
 -- -----------------------------------------------------------------------------
