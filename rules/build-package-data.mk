@@ -43,6 +43,9 @@ $1_$2_CONFIGURE_OPTS += --configure-option=CFLAGS="$$(filter-out -Werror,$$(SRC_
 $1_$2_CONFIGURE_OPTS += --configure-option=LDFLAGS="$$(SRC_LD_OPTS) $$(CONF_GCC_LINKER_OPTS_STAGE$3) $$($1_LD_OPTS) $$($1_$2_LD_OPTS)"
 $1_$2_CONFIGURE_OPTS += --configure-option=CPPFLAGS="$$(SRC_CPP_OPTS) $$(CONF_CPP_OPTS_STAGE$3) $$($1_CPP_OPTS) $$($1_$2_CPP_OPTS)"
 
+$1_$2_CONFIGURE_OPTS += --gcc-options="$$(SRC_CPP_OPTS) $$(CONF_CPP_OPTS_STAGE$3) $$($1_CPP_OPTS) $$($1_$2_CPP_OPTS)"
+$1_$2_CONFIGURE_OPTS += --ld-options="$$(SRC_LD_OPTS) $$(CONF_GCC_LINKER_OPTS_STAGE$3) $$($1_LD_OPTS) $$($1_$2_LD_OPTS)"
+
 ifneq "$$(ICONV_INCLUDE_DIRS)" ""
 $1_$2_CONFIGURE_OPTS += --configure-option=--with-iconv-includes="$$(ICONV_INCLUDE_DIRS)"
 endif
