@@ -1037,7 +1037,7 @@ gcWorkerThread (Capability *cap)
     debugTrace(DEBUG_gc, "GC thread %d standing by...", gct->thread_index);
     ACQUIRE_SPIN_LOCK(&gct->gc_spin);
     
-#ifdef USE_PAPI
+#if defined(USE_PAPI) && false // PMW: Doesn't work right now...
     // start performance counters in this thread...
     if (gct->papi_events == -1) {
         papi_init_eventset(&gct->papi_events);
@@ -1066,7 +1066,7 @@ gcWorkerThread (Capability *cap)
     pruneSparkQueue(cap);
 #endif
 
-#ifdef USE_PAPI
+#if defined(USE_PAPI) && false // PMW: Doesn't work right now...
     // count events in this thread towards the GC totals
     papi_thread_stop_gc1_count(gct->papi_events);
 #endif

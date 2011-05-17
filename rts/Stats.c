@@ -711,7 +711,12 @@ stat_exit(int alloc)
             */
 
 #if USE_PAPI
-            papi_stats_report();
+		{
+			Task *task; nat i;
+			for (i = 0, task = all_tasks; task != NULL; i++, task = task->all_link) {
+				papi_stats_report(task);
+			}
+		}
 #endif
 #if defined(THREADED_RTS) && defined(PROF_SPIN)
             {

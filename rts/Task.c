@@ -18,6 +18,7 @@
 #include "Schedule.h"
 #include "Hash.h"
 #include "Trace.h"
+#include "Papi.h"
 
 #if HAVE_SIGNAL_H
 #include <signal.h>
@@ -118,6 +119,9 @@ allocTask (void)
         task = newTask(rtsFalse);
 #if defined(THREADED_RTS)
         task->id = osThreadId();
+#endif
+#if defined(USE_PAPI)
+		papi_init_task(task);
 #endif
         setMyTask(task);
         return task;
@@ -390,6 +394,11 @@ workerStart(Task *task)
 
     // set the thread-local pointer to the Task:
     setMyTask(task);
+
+#ifdef USE_PAPI
+	// thread-local PAPI initialization
+	papi_init_task(task);
+#endif
 
     newInCall(task);
 

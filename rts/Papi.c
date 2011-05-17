@@ -73,10 +73,6 @@ struct _papi_events {
 /* While PAPI reporting is going on this flag is on */
 int papi_is_reporting;
 
-/* Event sets and counter arrays for GC and mutator */
-
-int MutatorEvents = PAPI_NULL;
-int GCEvents = PAPI_NULL;
 
 int papi_error;
 
@@ -90,17 +86,6 @@ static nat n_papi_events = 0;
 /* Events counted during GC and Mutator execution */
 /* There's a trailing comma, do all C compilers accept that? */
 static struct _papi_events papi_events[MAX_PAPI_EVENTS];
-long_long MutatorCounters[MAX_PAPI_EVENTS];
-long_long GC0Counters[MAX_PAPI_EVENTS];
-long_long GC1Counters[MAX_PAPI_EVENTS];
-
-long_long start_mutator_cycles;
-long_long mutator_cycles = 0;
-long_long start_gc_cycles;
-long_long gc0_cycles = 0;
-long_long gc1_cycles = 0;
-
-
 
 static long_long papi_counter(long_long values[],int event);
 static void papi_add_events(int EventSet);
@@ -256,25 +241,25 @@ papi_report(long_long counters[])
 }
 
 void
-papi_stats_report (void)
+papi_stats_report (struct Task_ * task)
 {
     statsPrintf("  Mutator CPU counters\n");
-    papi_report_event("CYCLES", mutator_cycles);
-    papi_report(MutatorCounters);
+    papi_report_event("CYCLES", task->mutator_cycles);
+    papi_report(task->MutatorCounters);
     
     statsPrintf("\n  GC(0) CPU counters\n");
-    papi_report_event("CYCLES", gc0_cycles);
-    papi_report(GC0Counters);
+    papi_report_event("CYCLES", task->gc0_cycles);
+    papi_report(task->GC0Counters);
 
     statsPrintf("\n  GC(1) CPU counters\n");
-    papi_report_event("CYCLES", gc1_cycles);
-    papi_report(GC1Counters);
+    papi_report_event("CYCLES", task->gc1_cycles);
+    papi_report(task->GC1Counters);
 }
     
 void
 papi_init_eventset (int *event_set)
 {
-    PAPI_register_thread();
+	*event_set = PAPI_NULL;
     PAPI_CHECK( PAPI_create_eventset(event_set));
 	PAPI_set_multiplex(*event_set);
     papi_add_events(*event_set);
@@ -310,8 +295,29 @@ papi_init (void)
 
     init_countable_events();
 
-    papi_init_eventset(&MutatorEvents);
-    papi_init_eventset(&GCEvents);
+
+}
+
+void papi_init_task(struct Task_ *task)
+{
+
+    PAPI_CHECK(PAPI_register_thread());
+
+    papi_init_eventset(&task->MutatorEvents);
+    papi_init_eventset(&task->GCEvents);
+
+	// Initialize all counters
+	nat i;
+	for(i = 0; i < MAX_PAPI_EVENTS; i++) {
+		task->MutatorCounters[i] = 0;
+		task->GC0Counters[i] = 0;
+		task->GC1Counters[i] = 0;
+	}
+	task->start_mutator_cycles = 0;
+	task->mutator_cycles = 0;
+	task->start_gc_cycles = 0;
+	task->gc0_cycles = 0;
+	task->gc1_cycles = 0;
 
 #ifdef TRACING
 	if (RtsFlags.GcFlags.giveStats >= 1) {
@@ -377,50 +383,48 @@ papi_add_events(int EventSet)
 void
 papi_start_mutator_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    PAPI_CHECK( PAPI_start(MutatorEvents));
-    start_mutator_cycles = PAPI_cycles();
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+    PAPI_CHECK( PAPI_start(task->MutatorEvents));
+    task->start_mutator_cycles = PAPI_cycles();
 }
 
 void
 papi_stop_mutator_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    mutator_cycles += PAPI_cycles() - start_mutator_cycles;
-    PAPI_CHECK( PAPI_accum(MutatorEvents,MutatorCounters));
-    PAPI_CHECK( PAPI_stop(MutatorEvents,NULL));
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+	if (!task->start_mutator_cycles) return;
+	if(PAPI_cycles() > task->start_mutator_cycles) 
+		task->mutator_cycles += PAPI_cycles() - task->start_mutator_cycles;
+	task->start_mutator_cycles = 0;
+    PAPI_CHECK( PAPI_accum(task->MutatorEvents,task->MutatorCounters));
+    PAPI_CHECK( PAPI_stop(task->MutatorEvents,NULL));
 }
 
 void
 papi_start_gc_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    PAPI_CHECK( PAPI_start(GCEvents));
-    start_gc_cycles = PAPI_cycles();
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+    PAPI_CHECK( PAPI_start(task->GCEvents));
+    task->start_gc_cycles = PAPI_cycles();
 }
 
 void
 papi_stop_gc0_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    PAPI_CHECK( PAPI_accum(GCEvents,GC0Counters));
-    PAPI_CHECK( PAPI_stop(GCEvents,NULL));
-    gc0_cycles += PAPI_cycles() - start_gc_cycles;
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+    PAPI_CHECK( PAPI_accum(task->GCEvents,task->GC0Counters));
+    PAPI_CHECK( PAPI_stop(task->GCEvents,NULL));
+    task->gc0_cycles += PAPI_cycles() - task->start_gc_cycles;
 }
 
 
 void
 papi_stop_gc1_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    PAPI_CHECK( PAPI_accum(GCEvents,GC1Counters));
-    PAPI_CHECK( PAPI_stop(GCEvents,NULL));
-    gc1_cycles += PAPI_cycles() - start_gc_cycles;
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+    PAPI_CHECK( PAPI_accum(task->GCEvents,task->GC1Counters));
+    PAPI_CHECK( PAPI_stop(task->GCEvents,NULL));
+    task->gc1_cycles += PAPI_cycles() - task->start_gc_cycles;
 }
 
 
