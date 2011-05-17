@@ -96,11 +96,11 @@ static void papi_overflow_handler(int EventSet, void *IP, long_long overflow, vo
 
 static nat max_hardware_counters = 2;
 
-
 /* Instruction pointer sampling */
 #ifdef TRACING
-#define INSTR_PTR_SAMPLE_PERIOD 100000 /* How often to read the IP. In cycles */
-#define INSTR_PTR_SAMPLE_SIZE   1024   /* How many IPs to read before generating an event */
+#define INSTR_PTR_SAMPLE_PERIOD     100000 /* How often to read the IP. In cycles */
+#define INSTR_PTR_SAMPLE_MIN_SIZE   256    /* Wait for this many events before generating an event */
+#define INSTR_PTR_SAMPLE_MAX_SIZE   1024   /* Maximum number of samples, might discard if more are generated before flush */
 
 #ifdef THREADED_RTS
 #define THREAD __thread
@@ -110,8 +110,16 @@ static nat max_hardware_counters = 2;
 #define MY_CAP (&MainCapability)
 #endif // TREADED_RTS
 
-static THREAD void *instr_ptr_sample[INSTR_PTR_SAMPLE_SIZE];
-static THREAD nat instr_ptr_sample_pos = 0;
+// Map for the overflow handler, to quickly find the place to
+// aggregate instruction pointers. This works pretty well as
+// PAPI tends to use low values for map IDs. For larger IDs, we will
+// have to fall back to myTask() though.
+#define EVENTSET_TASK_MAP_SIZE 128
+static Task * eventset_task_map[EVENTSET_TASK_MAP_SIZE];
+
+static int ip_sample_event = 0;
+static int ip_sample_period = 0;
+
 #endif // TRACING
 
 /* If you want to add events to count, extend the
@@ -131,6 +139,17 @@ static void papi_add_event(const char *name, int code)
     papi_events[n_papi_events].event_name = name;
     n_papi_events++;
 }    
+
+#ifdef TRACING
+static StgBool papi_have_event(int code)
+{
+	nat i;
+	for(i = 0; i < n_papi_events; i++)
+		if(papi_events[i].event_code == code)
+			return 1;
+	return 0;
+}
+#endif
 
 static void
 init_countable_events(void) 
@@ -291,10 +310,27 @@ papi_init (void)
     }
 #endif
 
-	PAPI_multiplex_init();
-
     init_countable_events();
 
+#ifdef TRACING
+	// load sampling data
+	ip_sample_event = 0;
+	switch (RtsFlags.PapiFlags.sampleType) {
+	case PAPI_SAMPLE_BY_CYCLE:
+		ip_sample_event = PAPI_TOT_CYC; ip_sample_period = 10000; break;
+	case PAPI_SAMPLE_BY_L1_MISS:
+		ip_sample_event = PAPI_L1_TCM; ip_sample_period = 1000; break;
+	case PAPI_SAMPLE_BY_L2_MISS:
+		ip_sample_event = PAPI_L2_TCM; ip_sample_period = 100; break;
+	}
+	if(RtsFlags.PapiFlags.samplePeriod)
+		ip_sample_period = RtsFlags.PapiFlags.samplePeriod;
+
+	// Make sure we the counter is present in the event set
+	if(ip_sample_event)
+		if(!papi_have_event(ip_sample_event))
+			papi_add_event("Sampling Counter", ip_sample_event);
+#endif
 
 }
 
@@ -320,9 +356,13 @@ void papi_init_task(struct Task_ *task)
 	task->gc1_cycles = 0;
 
 #ifdef TRACING
-	if (RtsFlags.GcFlags.giveStats >= 1) {
-		PAPI_CHECK(PAPI_overflow(MutatorEvents, PAPI_TOT_CYC, 100000, 0,
-		                         &papi_overflow_handler));
+	if(ip_sample_event) {
+		task->instrPtrSamplePos = 0;
+		if(task->MutatorEvents < EVENTSET_TASK_MAP_SIZE)
+			eventset_task_map[task->MutatorEvents] = task;
+		PAPI_CHECK(PAPI_overflow(task->MutatorEvents, 
+								 ip_sample_event, ip_sample_period, 0,
+								 &papi_overflow_handler));
 	}
 #endif
 }
@@ -331,14 +371,18 @@ void papi_init_task(struct Task_ *task)
 
 /* Called by PAPI on each overflow */
 static void
-papi_overflow_handler(int EventSet, void *IP, long_long overflow, void *ctx)
+papi_overflow_handler(int event_set, void *ip, long_long overflow, void *ctx)
 {
+	// Find our task
+	Task * task;
+	if (event_set < EVENTSET_TASK_MAP_SIZE)
+		task = eventset_task_map[event_set];
+	else
+		task = myTask();
+	if (!task) return;
 	// Record
-	instr_ptr_sample[instr_ptr_sample_pos++] = IP;
-	// Overflow?
-	if(instr_ptr_sample_pos >= INSTR_PTR_SAMPLE_SIZE) {
-		traceInstrPtrSample(MY_CAP, INSTR_PTR_SAMPLE_SIZE, instr_ptr_sample);
-		instr_ptr_sample_pos = 0;
+	if(task->instrPtrSamplePos < INSTR_PTR_SAMPLE_MAX_SIZE) {
+		task->instrPtrSample[task->instrPtrSamplePos++] = ip;
 	}
 }
 
@@ -398,6 +442,15 @@ papi_stop_mutator_count(void)
 	task->start_mutator_cycles = 0;
     PAPI_CHECK( PAPI_accum(task->MutatorEvents,task->MutatorCounters));
     PAPI_CHECK( PAPI_stop(task->MutatorEvents,NULL));
+
+#ifdef TRACING
+	// As the counter is disabled, we can savely flush instruction pointer samples
+	if(task->instrPtrSamplePos >= INSTR_PTR_SAMPLE_MIN_SIZE) {
+		traceInstrPtrSample(MY_CAP, task->instrPtrSamplePos, task->instrPtrSample);
+		task->instrPtrSamplePos = 0;
+	}
+#endif
+
 }
 
 void

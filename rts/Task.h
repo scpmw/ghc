@@ -178,6 +178,9 @@ typedef struct Task_ {
 	long long start_gc_cycles;
 	long long gc0_cycles;
 	long long gc1_cycles;
+
+	nat instrPtrSamplePos;
+	void *instrPtrSample[1024]; // TODO: INSTR_PTR_SAMPLE_MAX_SIZE
 #endif
 
 } Task;
