@@ -317,11 +317,11 @@ papi_init (void)
 	ip_sample_event = 0;
 	switch (RtsFlags.PapiFlags.sampleType) {
 	case PAPI_SAMPLE_BY_CYCLE:
-		ip_sample_event = PAPI_TOT_CYC; ip_sample_period = 10000; break;
+		ip_sample_event = PAPI_TOT_CYC; ip_sample_period = 100000; break;
 	case PAPI_SAMPLE_BY_L1_MISS:
-		ip_sample_event = PAPI_L1_TCM; ip_sample_period = 1000; break;
+		ip_sample_event = PAPI_L1_TCM; ip_sample_period = 10000; break;
 	case PAPI_SAMPLE_BY_L2_MISS:
-		ip_sample_event = PAPI_L2_TCM; ip_sample_period = 100; break;
+		ip_sample_event = PAPI_L2_TCM; ip_sample_period = 1000; break;
 	}
 	if(RtsFlags.PapiFlags.samplePeriod)
 		ip_sample_period = RtsFlags.PapiFlags.samplePeriod;
