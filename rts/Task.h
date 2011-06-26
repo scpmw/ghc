@@ -183,6 +183,15 @@ typedef struct Task_ {
 	void *instrPtrSample[1024]; // TODO: INSTR_PTR_SAMPLE_MAX_SIZE
 #endif
 
+#ifdef USE_PERF_EVENT
+	int perf_event_fd;
+	union {
+		void *perf_event_mmap;
+		struct perf_event_mmap_page *perf_event_data;
+	};
+	StgWord64 perf_event_last_head;
+#endif
+
 } Task;
 
 INLINE_HEADER rtsBool

@@ -199,6 +199,18 @@ struct PAPI_FLAGS {
 
 #endif
 
+#ifdef USE_PERF_EVENT
+
+struct PERF_EVENT_FLAGS {
+#ifdef TRACING
+	/* Instruction pointer profiling */
+	nat     sampleType;
+	nat     samplePeriod;
+#endif
+};
+
+#endif
+
 /* Put them together: */
 
 typedef struct _RTS_FLAGS {
@@ -217,6 +229,9 @@ typedef struct _RTS_FLAGS {
 #endif
 #ifdef USE_PAPI
     struct PAPI_FLAGS   PapiFlags;
+#endif
+#ifdef USE_PERF_EVENT
+	struct PERF_EVENT_FLAGS PerfEventFlags;
 #endif
 } RTS_FLAGS;
 

@@ -389,6 +389,11 @@ usage_text[] = {
 "  -aP<n>    Sampling period to use for PAPI counters",
 #endif
 #endif
+#ifdef USE_PERF_EVENT
+#ifdef TRACING
+"  -E        CPU performance counter measurements using perf_events",
+#endif
+#endif
 "",
 "RTS options may also be specified using the GHCRTS environment variable.",
 "",
@@ -716,6 +721,14 @@ error = rtsTrue;
 		  bad_option( rts_argv[arg] );
 		}
 		break;
+#endif
+
+#ifdef USE_PERF_EVENT
+#ifdef TRACING
+			case 'E':
+				RtsFlags.PerfEventFlags.sampleType = 1;
+				break;
+#endif
 #endif
 
 	      case 'B':
