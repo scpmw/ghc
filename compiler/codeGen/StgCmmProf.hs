@@ -50,7 +50,6 @@ import Module
 import Constants        -- Lots of field offsets
 import Outputable
 
-import Data.Char
 import Control.Monad
 
 -----------------------------------------------------------------------------

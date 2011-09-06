@@ -44,7 +44,10 @@
 //         having this set too high will cause EPERMs with too many tasks!
 #define PERF_EVENT_MMAP_PAGES 32
 
+#ifdef TRACING
 static size_t get_page_size(void);
+static void perf_event_stream(Task *task);
+#endif
 
 static inline int
 sys_perf_event_open(struct perf_event_attr *attr,
@@ -57,6 +60,7 @@ sys_perf_event_open(struct perf_event_attr *attr,
 }
 
 
+#ifdef TRACING
 static size_t get_page_size(void)
 {
 	static size_t page_size = 0;
@@ -64,6 +68,7 @@ static size_t get_page_size(void)
 		return page_size = sysconf(_SC_PAGE_SIZE);
 	return page_size;
 }
+#endif
 
 void perf_event_init(Task *task)
 {
@@ -121,7 +126,6 @@ void perf_event_init(Task *task)
 }
 
 #ifdef TRACING
-
 void perf_event_stream(Task *task) {
 
 	// Read new head pointer

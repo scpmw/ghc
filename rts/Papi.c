@@ -373,6 +373,7 @@ void papi_init_task(struct Task_ *task)
 static void
 papi_overflow_handler(int event_set, void *ip, long_long overflow, void *ctx)
 {
+	(void) overflow; (void) ctx;
 	// Find our task
 	Task * task;
 	if (event_set < EVENTSET_TASK_MAP_SIZE)
