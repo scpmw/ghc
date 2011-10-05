@@ -29,6 +29,7 @@ import Maybes           ( maybeToBool )
 import Name             ( getOccName, isExternalName, nameOccName )
 import OccName          ( occNameString, occNameFS )
 import BasicTypes       ( Arity )
+import Literal
 import Module
 import Outputable
 import MonadUtils
@@ -139,7 +140,7 @@ for x, solely to put in the SRTs lower down.
 %************************************************************************
 
 \begin{code}
-coreToStg :: PackageId -> [CoreBind] -> IO [StgBinding]
+coreToStg :: PackageId -> CoreProgram -> IO [StgBinding]
 coreToStg this_pkg pgm
   = return pgm'
   where (_, _, pgm') = coreTopBindsToStg this_pkg emptyVarEnv pgm
@@ -152,7 +153,7 @@ coreExprToStg expr
 coreTopBindsToStg
     :: PackageId
     -> IdEnv HowBound           -- environment for the bindings
-    -> [CoreBind]
+    -> CoreProgram
     -> (IdEnv HowBound, FreeVarsInfo, [StgBinding])
 
 coreTopBindsToStg _        env [] = (env, emptyFVInfo, [])
@@ -312,6 +313,9 @@ on these components, but it in turn is not scrutinised as the basis for any
 decisions.  Hence no black holes.
 
 \begin{code}
+-- No LitInteger's should be left by the time this is called. CorePrep
+-- should have converted them all to a real core representation.
+coreToStgExpr (Lit (LitInteger {})) = panic "coreToStgExpr: LitInteger"
 coreToStgExpr (Lit l)      = return (StgLit l, emptyFVInfo, emptyVarSet)
 coreToStgExpr (Var v)      = coreToStgApp Nothing v               []
 coreToStgExpr (Coercion _) = coreToStgApp Nothing coercionTokenId []
@@ -435,7 +439,7 @@ mkStgAltType bndr alts
   = case tyConAppTyCon_maybe (repType (idType bndr)) of
         Just tc | isUnboxedTupleTyCon tc -> UbxTupAlt tc
                 | isUnLiftedTyCon tc     -> PrimAlt tc
-                | isHiBootTyCon tc       -> look_for_better_tycon
+                | isAbstractTyCon tc     -> look_for_better_tycon
                 | isAlgTyCon tc          -> AlgAlt tc
                 | otherwise              -> ASSERT2( _is_poly_alt_tycon tc, ppr tc )
                                             PolyAlt
@@ -449,8 +453,8 @@ mkStgAltType bndr alts
                             -- function application where argument has a
                             -- type-family type
 
-   -- Sometimes, the TyCon is a HiBootTyCon which may not have any
-   -- constructors inside it.  Then we can get a better TyCon by
+   -- Sometimes, the TyCon is a AbstractTyCon which may not have any
+   -- constructors inside it.  Then we may get a better TyCon by
    -- grabbing the one from a constructor alternative
    -- if one exists.
    look_for_better_tycon

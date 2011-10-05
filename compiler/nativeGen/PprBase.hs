@@ -18,11 +18,12 @@ module PprBase (
 where
 
 import qualified Outputable
+import Platform
 import CLabel
 import Pretty
 
 -- castSTUArray has moved to Data.Array.Unsafe
-#if __GLASGOW_HASKELL__ >= 701
+#if __GLASGOW_HASKELL__ >= 703
 import Data.Array.Unsafe( castSTUArray )
 import Data.Array.ST hiding( castSTUArray )
 #else
@@ -40,9 +41,9 @@ asmSDoc d
 	= Outputable.withPprStyleDoc (Outputable.mkCodeStyle Outputable.AsmStyle) d
 
 
-pprCLabel_asm :: CLabel -> Doc
-pprCLabel_asm l 
-	= asmSDoc (pprCLabel l)
+pprCLabel_asm :: Platform -> CLabel -> Doc
+pprCLabel_asm platform l
+    = asmSDoc (pprCLabel platform l)
 
 
 -- -----------------------------------------------------------------------------

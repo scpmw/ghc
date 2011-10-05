@@ -387,9 +387,8 @@ thunkWrapper closure_info thunk_code = do
         -- Stack and/or heap checks
   ; thunkEntryChecks closure_info $ do
       	{
-          dflags <- getDynFlags
           -- Overwrite with black hole if necessary
-	; whenC (blackHoleOnEntry dflags closure_info && node_points)
+        ; whenC (blackHoleOnEntry closure_info && node_points)
  	        (blackHoleIt closure_info)
 	; setupUpdate closure_info thunk_code }
 		-- setupUpdate *encloses* the thunk_code
@@ -442,38 +441,40 @@ blackHoleIt closure_info = emitBlackHoleCode (closureSingleEntry closure_info)
 
 emitBlackHoleCode :: Bool -> Code
 emitBlackHoleCode is_single_entry = do
-
   dflags <- getDynFlags
 
-	-- If we wanted to do eager blackholing with slop filling,
-	-- we'd need to do it at the *end* of a basic block, otherwise
-	-- we overwrite the free variables in the thunk that we still
-	-- need.  We have a patch for this from Andy Cheadle, but not
-	-- incorporated yet. --SDM [6/2004]
-	--
-	-- Profiling needs slop filling (to support LDV profiling), so
-	-- currently eager blackholing doesn't work with profiling.
-	--
-        -- Previously, eager blackholing was enabled when ticky-ticky
-        -- was on. But it didn't work, and it wasn't strictly necessary 
-        -- to bring back minimal ticky-ticky, so now EAGER_BLACKHOLING 
-        -- is unconditionally disabled. -- krc 1/2007
+  -- Eager blackholing is normally disabled, but can be turned on with
+  -- -feager-blackholing.  When it is on, we replace the info pointer
+  -- of the thunk with stg_EAGER_BLACKHOLE_info on entry.
+  
+  -- If we wanted to do eager blackholing with slop filling, we'd need
+  -- to do it at the *end* of a basic block, otherwise we overwrite
+  -- the free variables in the thunk that we still need.  We have a
+  -- patch for this from Andy Cheadle, but not incorporated yet. --SDM
+  -- [6/2004]
+  --
+  -- Previously, eager blackholing was enabled when ticky-ticky was
+  -- on. But it didn't work, and it wasn't strictly necessary to bring
+  -- back minimal ticky-ticky, so now EAGER_BLACKHOLING is
+  -- unconditionally disabled. -- krc 1/2007
+  
+  -- Note the eager-blackholing check is here rather than in blackHoleOnEntry,
+  -- because emitBlackHoleCode is called from CmmParse.
 
-  let eager_blackholing =  not opt_SccProfilingOn
-                        && dopt Opt_EagerBlackHoling dflags
+  let  eager_blackholing =  not opt_SccProfilingOn
+                         && dopt Opt_EagerBlackHoling dflags
+             -- Profiling needs slop filling (to support LDV
+             -- profiling), so currently eager blackholing doesn't
+             -- work with profiling.
 
-  if eager_blackholing
-     then do
-          tickyBlackHole (not is_single_entry)
-          let bh_info = CmmReg (CmmGlobal EagerBlackholeInfo)
-	  stmtsC [
-              CmmStore (cmmOffsetW (CmmReg nodeReg) fixedHdrSize)
-                       (CmmReg (CmmGlobal CurrentTSO)),
-              CmmCall (CmmPrim MO_WriteBarrier) [] [] CmmUnsafe CmmMayReturn,
-	      CmmStore (CmmReg nodeReg) bh_info
-            ]
-     else
-          nopC
+  whenC eager_blackholing $ do
+    tickyBlackHole (not is_single_entry)
+    stmtsC [
+       CmmStore (cmmOffsetW (CmmReg nodeReg) fixedHdrSize)
+                (CmmReg (CmmGlobal CurrentTSO)),
+       CmmCall (CmmPrim MO_WriteBarrier) [] [] CmmUnsafe CmmMayReturn,
+       CmmStore (CmmReg nodeReg) (CmmReg (CmmGlobal EagerBlackholeInfo))
+     ]
 \end{code}
 
 \begin{code}

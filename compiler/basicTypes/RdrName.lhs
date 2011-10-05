@@ -66,7 +66,9 @@ import Maybes
 import SrcLoc
 import FastString
 import Outputable
+import Unique
 import Util
+import StaticFlags( opt_PprStyle_Debug )
 
 import Data.Data
 \end{code}
@@ -246,7 +248,9 @@ instance Outputable RdrName where
     ppr (Exact name)   = ppr name
     ppr (Unqual occ)   = ppr occ
     ppr (Qual mod occ) = ppr mod <> dot <> ppr occ
-    ppr (Orig mod occ) = getPprStyle (\sty -> pprModulePrefix sty mod occ <> ppr occ)
+    ppr (Orig mod occ) = getPprStyle (\sty -> pprModulePrefix sty mod name <> ppr occ)
+       where name = mkExternalName (mkUniqueGrimily 0) mod occ noSrcSpan
+         -- Note [Outputable Orig RdrName] in HscTypes
 
 instance OutputableBndr RdrName where
     pprBndr _ n 
@@ -372,7 +376,7 @@ data Parent = NoParent | ParentIs Name
 
 {- Note [Parents]
 ~~~~~~~~~~~~~~~~~
-  What             Children
+  Parent           Children
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   data T           Data constructors
 		   Record-field ids
@@ -436,18 +440,15 @@ globalRdrEnvElts :: GlobalRdrEnv -> [GlobalRdrElt]
 globalRdrEnvElts env = foldOccEnv (++) [] env
 
 instance Outputable GlobalRdrElt where
-  ppr gre = hang (ppr name)
-               2 (parens (ppr (gre_par gre) <+> pprNameProvenance gre))
-	  where
-	    name = gre_name gre
+  ppr gre = hang (ppr (gre_name gre) <+> ppr (gre_par gre))
+               2 (pprNameProvenance gre)
 
 pprGlobalRdrEnv :: GlobalRdrEnv -> SDoc
 pprGlobalRdrEnv env
   = vcat (map pp (occEnvElts env))
   where
     pp gres = ppr (nameOccName (gre_name (head gres))) <> colon <+> 
-	      vcat [ ppr (gre_name gre) <+> pprNameProvenance gre
-		   | gre <- gres]
+	      vcat (map ppr gres)
 \end{code}
 
 \begin{code}
@@ -475,8 +476,9 @@ lookupGRE_Name env name
 getGRE_NameQualifier_maybes :: GlobalRdrEnv -> Name -> [Maybe [ModuleName]]
 -- Returns all the qualifiers by which 'x' is in scope
 -- Nothing means "the unqualified version is in scope"
+-- [] means the thing is not in scope at all
 getGRE_NameQualifier_maybes env
-  = map qualifier_maybe . map gre_prov . lookupGRE_Name env
+  = map (qualifier_maybe . gre_prov) . lookupGRE_Name env
   where
     qualifier_maybe LocalDef       = Nothing
     qualifier_maybe (Imported iss) = Just $ map (is_as . is_decl) iss
@@ -717,8 +719,11 @@ pprNameProvenance (GRE {gre_name = name, gre_prov = LocalDef})
   = ptext (sLit "defined at") <+> ppr (nameSrcLoc name)
 pprNameProvenance (GRE {gre_name = name, gre_prov = Imported whys})
   = case whys of
-	(why:_) -> sep [ppr why, ppr_defn_site why name]
+	(why:_) | opt_PprStyle_Debug -> vcat (map pp_why whys)
+                | otherwise          -> pp_why why
 	[] -> panic "pprNameProvenance"
+  where
+    pp_why why = sep [ppr why, ppr_defn_site why name]
 
 -- If we know the exact definition point (which we may do with GHCi)
 -- then show that too.  But not if it's just "imported from X".

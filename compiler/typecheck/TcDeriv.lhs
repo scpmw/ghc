@@ -15,6 +15,7 @@ import DynFlags
 
 import Generics
 import TcRnMonad
+import FamInst
 import TcEnv
 import TcClassDcl( tcAddDeclCtxt )	-- Small helper
 import TcGenDeriv			-- Deriv stuff
@@ -482,10 +483,9 @@ makeDerivSpecs is_boot tycl_decls inst_decls deriv_decls
           let allTyNames = [ tcdName d | L _ d <- tycl_decls, isDataDecl d ]
         -- Select only those types that derive Generic
         ; let sel_tydata = [ tcdName t | (L _ c, L _ t) <- all_tydata
-                                       , getClassName c == Just genClassName ]
+                                       , isGenClassName c ]
         ; let sel_deriv_decls = catMaybes [ getTypeName t
-                                  | L _ (DerivDecl (L _ t)) <- deriv_decls
-                                  , getClassName t == Just genClassName ] 
+                                  | L _ (DerivDecl (L _ t)) <- deriv_decls ] 
         ; derTyDecls <- mapM tcLookupTyCon $ 
                          filter (needsExtras xDerRep
                                   (sel_tydata ++ sel_deriv_decls)) allTyNames
@@ -504,25 +504,21 @@ makeDerivSpecs is_boot tycl_decls inst_decls deriv_decls
       -- deriving Generic
     needsExtras xDerRep tydata tc_name = xDerRep && tc_name `elem` tydata
 
-    -- Extracts the name of the class in the deriving
-    getClassName :: HsType Name -> Maybe Name
-    getClassName (HsForAllTy _ _ _ (L _ n)) = getClassName n
-    getClassName (HsPredTy (HsClassP n _))  = Just n
-    getClassName _                          = Nothing
+    -- Extracts the name of the class in the deriving and makes sure it is ours
+    isGenClassName :: HsType Name -> Bool
+    isGenClassName ty = case splitHsInstDeclTy_maybe ty of
+        Just (_, _, cls_name, _) -> cls_name == genClassName
+        _                        -> False
 
     -- Extracts the name of the type in the deriving
     -- This function (and also getClassName above) is not really nice, and I
     -- might not have covered all possible cases. I wonder if there is no easier
     -- way to extract class and type name from a LDerivDecl...
     getTypeName :: HsType Name -> Maybe Name
-    getTypeName (HsForAllTy _ _ _ (L _ n))      = getTypeName n
-    getTypeName (HsTyVar n)                     = Just n
-    getTypeName (HsOpTy _ (L _ n) _)            = Just n
-    getTypeName (HsPredTy (HsClassP _ [L _ n])) = getTypeName n
-    getTypeName (HsAppTy (L _ n) _)             = getTypeName n
-    getTypeName (HsParTy (L _ n))               = getTypeName n
-    getTypeName (HsKindSig (L _ n) _)           = getTypeName n
-    getTypeName _                               = Nothing
+    getTypeName ty = do
+        (_, _, cls_name, [ty]) <- splitHsInstDeclTy_maybe ty
+        guard (cls_name == genClassName)
+        fmap fst $ splitHsClassTy_maybe (unLoc ty)
 
     extractTyDataPreds decls
       = [(p, d) | d@(L _ (TyData {tcdDerivs = Just preds})) <- decls, p <- preds]
@@ -824,7 +820,7 @@ inferConstraints _ cls inst_tys rep_tc rep_tc_args
     		 	dataConInstOrigArgTys data_con all_rep_tc_args,
           not (isUnLiftedType arg_ty) ]
     		-- No constraints for unlifted types
-    		-- Where they are legal we generate specilised function calls
+    		-- See Note [Deriving and unboxed types]
 
     		-- For functor-like classes, two things are different
     		-- (a) We recurse over argument types to generate constraints
@@ -865,7 +861,24 @@ inferConstraints _ cls inst_tys rep_tc rep_tc_args
       = [mkClassPred cls [ty] | ty <- rep_tc_args]
       | otherwise 
       = []
+\end{code}
 
+Note [Deriving and unboxed types]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We have some special hacks to support things like
+   data T = MkT Int# deriving( Ord, Show )
+
+Specifically
+  * For Show we use TcGenDeriv.box_if_necy to box the Int# into an Int
+    (which we know how to show)
+
+  * For Eq, Ord, we ust TcGenDeriv.primOrdOps to give Ord operations
+    on some primitive types
+
+It's all a bit ad hoc.
+
+
+\begin{code}
 ------------------------------------------------------------------
 -- Check side conditions that dis-allow derivability for particular classes
 -- This is *apart* from the newtype-deriving mechanism
@@ -899,15 +912,15 @@ nonStdErr cls = quotes (ppr cls) <+> ptext (sLit "is not a derivable class")
 
 sideConditions :: DerivContext -> Class -> Maybe Condition
 sideConditions mtheta cls
-  | cls_key == eqClassKey      	   = Just cond_std
-  | cls_key == ordClassKey     	   = Just cond_std
-  | cls_key == showClassKey    	   = Just cond_std
-  | cls_key == readClassKey    	   = Just (cond_std `andCond` cond_noUnliftedArgs)
+  | cls_key == eqClassKey      	   = Just (cond_std `andCond` cond_args cls)
+  | cls_key == ordClassKey     	   = Just (cond_std `andCond` cond_args cls)
+  | cls_key == showClassKey    	   = Just (cond_std `andCond` cond_args cls)
+  | cls_key == readClassKey    	   = Just (cond_std `andCond` cond_args cls)
   | cls_key == enumClassKey    	   = Just (cond_std `andCond` cond_isEnumeration)
-  | cls_key == ixClassKey      	   = Just (cond_std `andCond` cond_enumOrProduct)
-  | cls_key == boundedClassKey 	   = Just (cond_std `andCond` cond_enumOrProduct)
+  | cls_key == ixClassKey      	   = Just (cond_std `andCond` cond_enumOrProduct cls)
+  | cls_key == boundedClassKey 	   = Just (cond_std `andCond` cond_enumOrProduct cls)
   | cls_key == dataClassKey    	   = Just (checkFlag Opt_DeriveDataTypeable `andCond` 
-                                           cond_std `andCond` cond_noUnliftedArgs)
+                                           cond_std `andCond` cond_args cls)
   | cls_key == functorClassKey 	   = Just (checkFlag Opt_DeriveFunctor `andCond`
     	                                   cond_functorOK True)	 -- NB: no cond_std!
   | cls_key == foldableClassKey	   = Just (checkFlag Opt_DeriveFoldable `andCond`
@@ -969,20 +982,34 @@ no_cons_why rep_tc = quotes (pprSourceTyCon rep_tc) <+>
 cond_RepresentableOk :: Condition
 cond_RepresentableOk (_,t) = canDoGenerics t
 
-cond_enumOrProduct :: Condition
-cond_enumOrProduct = cond_isEnumeration `orCond` 
-		       (cond_isProduct `andCond` cond_noUnliftedArgs)
+cond_enumOrProduct :: Class -> Condition
+cond_enumOrProduct cls = cond_isEnumeration `orCond` 
+		         (cond_isProduct `andCond` cond_args cls)
 
-cond_noUnliftedArgs :: Condition
+cond_args :: Class -> Condition
 -- For some classes (eg Eq, Ord) we allow unlifted arg types
 -- by generating specilaised code.  For others (eg Data) we don't.
-cond_noUnliftedArgs (_, tc)
-  | null bad_cons = Nothing
-  | otherwise     = Just why
+cond_args cls (_, tc)
+  = case bad_args of 
+      []      -> Nothing
+      (ty:_) -> Just (hang (ptext (sLit "Don't know how to derive") <+> quotes (ppr cls))
+                         2 (ptext (sLit "for type") <+> quotes (ppr ty)))
   where
-    bad_cons = [ con | con <- tyConDataCons tc
-		     , any isUnLiftedType (dataConOrigArgTys con) ]
-    why = badCon (head bad_cons) (ptext (sLit "must have only arguments of lifted type"))
+    bad_args = [ arg_ty | con <- tyConDataCons tc
+		        , arg_ty <- dataConOrigArgTys con
+			, isUnLiftedType arg_ty 
+                     	, not (ok_ty arg_ty) ]
+
+    cls_key = classKey cls
+    ok_ty arg_ty
+     | cls_key == eqClassKey   = check_in arg_ty ordOpTbl
+     | cls_key == ordClassKey  = check_in arg_ty ordOpTbl
+     | cls_key == showClassKey = check_in arg_ty boxConTbl
+     | otherwise               = False    -- Read, Ix etc
+
+    check_in :: Type -> [(Type,a)] -> Bool
+    check_in arg_ty tbl = any (eqType arg_ty . fst) tbl
+
 
 cond_isEnumeration :: Condition
 cond_isEnumeration (_, rep_tc)
@@ -1042,7 +1069,7 @@ cond_functorOK allowFunctions (_, rep_tc)
     tc_tvs            = tyConTyVars rep_tc
     Just (_, last_tv) = snocView tc_tvs
     bad_stupid_theta  = filter is_bad (tyConStupidTheta rep_tc)
-    is_bad pred       = last_tv `elemVarSet` tyVarsOfPred pred
+    is_bad pred       = last_tv `elemVarSet` tyVarsOfType pred
 
     data_cons = tyConDataCons rep_tc
     check_con con = msum (check_vanilla con : foldDataConArgs (ft_check con) con)
@@ -1360,7 +1387,10 @@ inferInstanceContexts oflag infer_specs
 	     		  extendLocalInstEnv inst_specs $
 	     		  mapM gen_soln infer_specs
 
-	   ; if (current_solns == new_solns) then
+           ; let eqList :: (a -> b -> Bool) -> [a] -> [b] -> Bool
+                 eqList f xs ys = length xs == length ys && and (zipWith f xs ys)
+
+	   ; if (eqList (eqList eqType) current_solns new_solns) then
 		return [ spec { ds_theta = soln } 
                        | (spec, soln) <- zip infer_specs current_solns ]
 	     else
@@ -1381,7 +1411,7 @@ inferInstanceContexts oflag infer_specs
 		-- Claim: the result instance declaration is guaranteed valid
 		-- Hence no need to call:
 		--   checkValidInstance tyvars theta clas inst_tys
-	   ; return (sortLe (<=) theta) }	-- Canonicalise before returning the solution
+	   ; return (sortLe (\p1 p2 -> cmpType p1 p2 /= GT) theta) }	-- Canonicalise before returning the solution
       where
         the_pred = mkClassPred clas inst_tys
 
@@ -1591,7 +1621,7 @@ genGenericRepExtras tc =
                         | (u,n) <- zip us [0..] ] | (us,m) <- zip uniqsS [0..] ]
         
         mkTyCon name = ASSERT( isExternalName name )
-                         buildAlgTyCon name [] [] mkAbstractTyConRhs
+                       buildAlgTyCon name [] [] distinctAbstractTyConRhs
                            NonRecursive False NoParentTyCon Nothing
 
       metaDTyCon  <- mkTyCon d_name

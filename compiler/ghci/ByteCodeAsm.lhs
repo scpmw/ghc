@@ -30,6 +30,7 @@ import PrimOp
 import Constants
 import FastString
 import SMRep
+import ClosureInfo -- CgRep stuff
 import DynFlags
 import Outputable
 import Platform
@@ -40,13 +41,7 @@ import Control.Monad.ST ( runST )
 import Data.Array.MArray
 import Data.Array.Unboxed ( listArray )
 import Data.Array.Base  ( UArray(..) )
-
--- castSTUArray has moved to Data.Array.Unsafe
-#if __GLASGOW_HASKELL__ >= 701
 import Data.Array.Unsafe( castSTUArray )
-#else
-import Data.Array.ST    ( castSTUArray )
-#endif
 
 import Foreign
 import Data.Char        ( ord )

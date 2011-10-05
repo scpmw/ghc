@@ -490,7 +490,7 @@ gen_wrappers (Info _ entries)
      ++ "module GHC.PrimopWrappers where\n" 
      ++ "import qualified GHC.Prim\n" 
      ++ "import GHC.Types (Bool)\n"
-     ++ "import GHC.Unit ()\n"
+     ++ "import GHC.Tuple ()\n"
      ++ "import GHC.Prim (" ++ types ++ ")\n"
      ++ unlines (concatMap f specs)
      where
@@ -665,7 +665,7 @@ ppType (TyApp "MVar#" [x,y])     = "mkMVarPrimTy " ++ ppType x
                                    ++ " " ++ ppType y
 ppType (TyApp "TVar#" [x,y])     = "mkTVarPrimTy " ++ ppType x 
                                    ++ " " ++ ppType y
-ppType (TyUTup ts)               = "(mkTupleTy Unboxed " 
+ppType (TyUTup ts)               = "(mkTupleTy UnboxedTuple " 
                                    ++ listify (map ppType ts) ++ ")"
 
 ppType (TyF s d) = "(mkFunTy (" ++ ppType s ++ ") (" ++ ppType d ++ "))"

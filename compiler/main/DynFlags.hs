@@ -276,13 +276,14 @@ data DynFlag
    | Opt_SharedImplib
    | Opt_BuildingCabalPackage
    | Opt_SSE2
+   | Opt_SSE4_2
    | Opt_GhciSandbox
+   | Opt_GhciHistory
    | Opt_HelpfulErrors
 
 	-- temporary flags
    | Opt_RunCPS
    | Opt_RunCPSZ
-   | Opt_ConvertToZipCfgAndBack
    | Opt_AutoLinkPackages
    | Opt_ImplicitImportQualified
    | Opt_TryNewCodeGen
@@ -382,7 +383,8 @@ data ExtensionFlag
    | Opt_NPlusKPatterns
    | Opt_DoAndIfThenElse
    | Opt_RebindableSyntax
-
+   | Opt_ConstraintKinds
+   
    | Opt_StandaloneDeriving
    | Opt_DeriveDataTypeable
    | Opt_DeriveFunctor
@@ -424,6 +426,7 @@ data ExtensionFlag
    | Opt_DatatypeContexts
    | Opt_NondecreasingIndentation
    | Opt_RelaxedLayout
+   | Opt_TraditionalRecordSyntax
    deriving (Eq, Show)
 
 -- | Contains not only a collection of 'DynFlag's but also a plethora of
@@ -442,6 +445,7 @@ data DynFlags = DynFlags {
   ruleCheck             :: Maybe String,
   strictnessBefore      :: [Int],       -- ^ Additional demand analysis
 
+  simplTickFactor       :: Int,		-- ^ Multiplier for simplifier ticks
   specConstrThreshold   :: Maybe Int,   -- ^ Threshold for SpecConstr
   specConstrCount       :: Maybe Int,   -- ^ Max number of specialisations for any one function
   liberateCaseThreshold :: Maybe Int,   -- ^ Threshold for LiberateCase
@@ -807,6 +811,7 @@ defaultDynFlags mySettings =
         maxSimplIterations      = 4,
         shouldDumpSimplPhase    = Nothing,
         ruleCheck               = Nothing,
+        simplTickFactor         = 100,  
         specConstrThreshold     = Just 2000,
         specConstrCount         = Just 3,
         liberateCaseThreshold   = Just 2000,
@@ -920,24 +925,21 @@ languageExtensions :: Maybe Language -> [ExtensionFlag]
 
 languageExtensions Nothing
     -- Nothing => the default case
-    = Opt_MonoPatBinds   -- Experimentally, I'm making this non-standard
-                         -- behaviour the default, to see if anyone notices
-                         -- SLPJ July 06
-      -- In due course I'd like Opt_MonoLocalBinds to be on by default
-      -- But NB it's implied by GADTs etc
-      -- SLPJ September 2010
-    : Opt_NondecreasingIndentation -- This has been on by default for some time
+    = Opt_NondecreasingIndentation -- This has been on by default for some time
     : delete Opt_DatatypeContexts  -- The Haskell' committee decided to
                                    -- remove datatype contexts from the
                                    -- language:
    -- http://www.haskell.org/pipermail/haskell-prime/2011-January/003335.html
       (languageExtensions (Just Haskell2010))
 
+   -- NB: MonoPatBinds is no longer the default
+
 languageExtensions (Just Haskell98)
     = [Opt_ImplicitPrelude,
        Opt_MonomorphismRestriction,
        Opt_NPlusKPatterns,
        Opt_DatatypeContexts,
+       Opt_TraditionalRecordSyntax,
        Opt_NondecreasingIndentation
            -- strictly speaking non-standard, but we always had this
            -- on implicitly before the option was added in 7.1, and
@@ -950,6 +952,7 @@ languageExtensions (Just Haskell2010)
     = [Opt_ImplicitPrelude,
        Opt_MonomorphismRestriction,
        Opt_DatatypeContexts,
+       Opt_TraditionalRecordSyntax,
        Opt_EmptyDataDecls,
        Opt_ForeignFunctionInterface,
        Opt_PatternGuards,
@@ -1533,6 +1536,7 @@ dynamic_flags = [
   , flagA "monly-3-regs" (NoArg (addWarn "The -monly-3-regs flag does nothing; it will be removed in a future GHC release"))
   , flagA "monly-4-regs" (NoArg (addWarn "The -monly-4-regs flag does nothing; it will be removed in a future GHC release"))
   , flagA "msse2"        (NoArg (setDynFlag Opt_SSE2))
+  , flagA "msse4.2"      (NoArg (setDynFlag Opt_SSE4_2))
 
      ------ Warning opts -------------------------------------------------
   , flagA "W"      (NoArg (mapM_ setWarningFlag minusWOpts))
@@ -1557,6 +1561,7 @@ dynamic_flags = [
 
   , flagA "fsimplifier-phases"          (intSuffix (\n d -> d{ simplPhases = n }))
   , flagA "fmax-simplifier-iterations"  (intSuffix (\n d -> d{ maxSimplIterations = n }))
+  , flagA "fsimpl-tick-factor"          (intSuffix (\n d -> d{ simplTickFactor = n }))
   , flagA "fspec-constr-threshold"      (intSuffix (\n d -> d{ specConstrThreshold = Just n }))
   , flagA "fno-spec-constr-threshold"   (noArg (\d -> d{ specConstrThreshold = Nothing }))
   , flagA "fspec-constr-count"          (intSuffix (\n d -> d{ specConstrCount = Just n }))
@@ -1750,7 +1755,6 @@ fFlags = [
   ( "run-cps",                          AlwaysAllowed, Opt_RunCPS, nop ),
   ( "run-cpsz",                         AlwaysAllowed, Opt_RunCPSZ, nop ),
   ( "new-codegen",                      AlwaysAllowed, Opt_TryNewCodeGen, nop ),
-  ( "convert-to-zipper-and-back",       AlwaysAllowed, Opt_ConvertToZipCfgAndBack, nop ),
   ( "vectorise",                        AlwaysAllowed, Opt_Vectorise, nop ),
   ( "regs-graph",                       AlwaysAllowed, Opt_RegsGraph, nop ),
   ( "regs-iterative",                   AlwaysAllowed, Opt_RegsIterative, nop ),
@@ -1759,6 +1763,7 @@ fFlags = [
   ( "ext-core",                         AlwaysAllowed, Opt_EmitExternalCore, nop ),
   ( "shared-implib",                    AlwaysAllowed, Opt_SharedImplib, nop ),
   ( "ghci-sandbox",                     AlwaysAllowed, Opt_GhciSandbox, nop ),
+  ( "ghci-history",                     AlwaysAllowed, Opt_GhciHistory, nop ),
   ( "helpful-errors",                   AlwaysAllowed, Opt_HelpfulErrors, nop ),
   ( "building-cabal-package",           AlwaysAllowed, Opt_BuildingCabalPackage, nop ),
   ( "implicit-import-qualified",        AlwaysAllowed, Opt_ImplicitImportQualified, nop ),
@@ -1878,7 +1883,9 @@ xFlags = [
   ( "NPlusKPatterns",                   AlwaysAllowed, Opt_NPlusKPatterns, nop ),
   ( "DoAndIfThenElse",                  AlwaysAllowed, Opt_DoAndIfThenElse, nop ),
   ( "RebindableSyntax",                 AlwaysAllowed, Opt_RebindableSyntax, nop ),
-  ( "MonoPatBinds",                     AlwaysAllowed, Opt_MonoPatBinds, nop ),
+  ( "ConstraintKinds",                  AlwaysAllowed, Opt_ConstraintKinds, nop ),
+  ( "MonoPatBinds",                     AlwaysAllowed, Opt_MonoPatBinds, 
+    \ turn_on -> when turn_on $ deprecate "Experimental feature now removed; has no effect" ),
   ( "ExplicitForAll",                   AlwaysAllowed, Opt_ExplicitForAll, nop ),
   ( "AlternativeLayoutRule",            AlwaysAllowed, Opt_AlternativeLayoutRule, nop ),
   ( "AlternativeLayoutRuleTransitional",AlwaysAllowed, Opt_AlternativeLayoutRuleTransitional, nop ),
@@ -1886,6 +1893,7 @@ xFlags = [
     \ turn_on -> when turn_on $ deprecate "It was widely considered a misfeature, and has been removed from the Haskell language." ),
   ( "NondecreasingIndentation",         AlwaysAllowed, Opt_NondecreasingIndentation, nop ),
   ( "RelaxedLayout",                    AlwaysAllowed, Opt_RelaxedLayout, nop ),
+  ( "TraditionalRecordSyntax",          AlwaysAllowed, Opt_TraditionalRecordSyntax, nop ),
   ( "MonoLocalBinds",                   AlwaysAllowed, Opt_MonoLocalBinds, nop ),
   ( "RelaxedPolyRec",                   AlwaysAllowed, Opt_RelaxedPolyRec, 
     \ turn_on -> if not turn_on 
@@ -1935,6 +1943,7 @@ defaultFlags
       Opt_PrintBindContents,
       Opt_GhciSandbox,
       Opt_HelpfulErrors,
+      Opt_GhciHistory,
       Opt_ProfCountEntries
     ]
 

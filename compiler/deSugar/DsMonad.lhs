@@ -22,7 +22,6 @@ module DsMonad (
         UniqSupply, newUniqueSupply,
         getDOptsDs, getGhcModeDs, doptDs, woptDs,
         dsLookupGlobal, dsLookupGlobalId, dsLookupDPHId, dsLookupTyCon, dsLookupDataCon,
-        dsLookupClass,
 
 	DsMetaEnv, DsMetaVal(..), dsLookupMetaEnv, dsExtendMetaEnv,
 
@@ -47,10 +46,8 @@ import HscTypes
 import Bag
 import DataCon
 import TyCon
-import Class
 import Id
 import Module
-import Var
 import Outputable
 import SrcLoc
 import Type
@@ -154,7 +151,7 @@ data DsMetaVal
    | Splice (HsExpr Id)	-- These bindings are introduced by
 			-- the PendingSplices on a HsBracketOut
 
-initDs  :: HscEnv
+initDs :: HscEnv
 	-> Module -> GlobalRdrEnv -> TypeEnv
 	-> DsM a
 	-> IO (Messages, Maybe a)
@@ -231,13 +228,7 @@ duplicateLocalDs old_local
 
 newPredVarDs :: PredType -> DsM Var
 newPredVarDs pred
- | isEqPred pred
- = do { uniq <- newUnique; 
-      ; let name = mkSystemName uniq (mkOccNameFS tcName (fsLit "co_pv"))
-	    kind = mkPredTy pred
-      ; return (mkCoVar name kind) }
- | otherwise
- = newSysLocalDs (mkPredTy pred)
+ = newSysLocalDs pred
  
 newSysLocalDs, newFailLocalDs :: Type -> DsM Id
 newSysLocalDs  = mkSysLocalM (fsLit "ds")
@@ -326,10 +317,6 @@ dsLookupTyCon name
 dsLookupDataCon :: Name -> DsM DataCon
 dsLookupDataCon name
   = tyThingDataCon <$> dsLookupGlobal name
-
-dsLookupClass :: Name -> DsM Class
-dsLookupClass name
-  = tyThingClass <$> dsLookupGlobal name
 \end{code}
 
 \begin{code}

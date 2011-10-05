@@ -39,6 +39,7 @@ import Unique
 import FastString
 import Panic
 import SMRep
+import ClosureInfo
 import Bitmap
 import OrdList
 import Constants
@@ -64,7 +65,7 @@ import qualified FiniteMap as Map
 
 byteCodeGen :: DynFlags
             -> Module
-            -> [CoreBind]
+            -> CoreProgram
             -> [TyCon]
             -> ModBreaks
             -> IO CompiledByteCode
@@ -1194,6 +1195,10 @@ pushAtom _ _ (AnnLit lit)
         MachChar _    -> code NonPtrArg
         MachNullAddr  -> code NonPtrArg
         MachStr s     -> pushStr s
+        -- No LitInteger's should be left by the time this is called.
+        -- CorePrep should have converted them all to a real core
+        -- representation.
+        LitInteger {} -> panic "pushAtom: LitInteger"
      where
         code rep
            = let size_host_words = fromIntegral (cgRepSizeW rep)

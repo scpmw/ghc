@@ -12,7 +12,7 @@ module GHC (
 	defaultCleanupHandler,
 
         -- * GHC Monad
-        Ghc, GhcT, GhcMonad(..),
+        Ghc, GhcT, GhcMonad(..), HscEnv,
         runGhc, runGhcT, initGhcMonad,
         gcatch, gbracket, gfinally,
         printException,
@@ -80,7 +80,7 @@ module GHC (
 	PrintUnqualified, alwaysQualify,
 
 	-- * Interactive evaluation
-	getBindings, getPrintUnqual,
+	getBindings, getInsts, getPrintUnqual,
         findModule,
         lookupModule,
 #ifdef GHCI
@@ -94,7 +94,7 @@ module GHC (
 	typeKind,
 	parseName,
 	RunResult(..),  
-	runStmt, runStmtWithLocation,
+	runStmt, runStmtWithLocation, runDecls, runDeclsWithLocation,
         parseImportDecl, SingleStep(..),
         resume,
         Resume(resumeStmt, resumeThreadId, resumeBreakInfo, resumeSpan,
@@ -145,7 +145,7 @@ module GHC (
 	TyCon, 
 	tyConTyVars, tyConDataCons, tyConArity,
 	isClassTyCon, isSynTyCon, isNewTyCon, isPrimTyCon, isFunTyCon,
-	isFamilyTyCon,
+	isFamilyTyCon, tyConClass_maybe,
 	synTyConDefn, synTyConType, synTyConResKind,
 
 	-- ** Type variables
@@ -161,19 +161,21 @@ module GHC (
 
 	-- ** Classes
 	Class, 
-	classMethods, classSCTheta, classTvsFds,
+	classMethods, classSCTheta, classTvsFds, classATs,
 	pprFundeps,
 
 	-- ** Instances
 	Instance, 
-	instanceDFunId, pprInstance, pprInstanceHdr,
+	instanceDFunId, 
+        pprInstance, pprInstanceHdr,
+        pprFamInst, pprFamInstHdr,
 
 	-- ** Types and Kinds
 	Type, splitForAllTys, funResultTy, 
 	pprParendType, pprTypeApp, 
 	Kind,
 	PredType,
-	ThetaType, pprForAll, pprThetaArrow, pprThetaArrowTy,
+	ThetaType, pprForAll, pprThetaArrowTy,
 
 	-- ** Entities
 	TyThing(..), 
@@ -188,7 +190,7 @@ module GHC (
 	compareFixity,
 
 	-- ** Source locations
-	SrcLoc(..), RealSrcLoc, pprDefnLoc,
+	SrcLoc(..), RealSrcLoc, 
         mkSrcLoc, noSrcLoc,
 	srcLocFile, srcLocLine, srcLocCol,
         SrcSpan(..), RealSrcSpan,
@@ -254,7 +256,7 @@ import NameSet
 import RdrName
 import qualified HsSyn -- hack as we want to reexport the whole module
 import HsSyn hiding ((<.>))
-import Type
+import Type     hiding( typeKind )
 import Coercion		( synTyConResKind )
 import TcType		hiding( typeKind )
 import Id
@@ -263,9 +265,11 @@ import TyCon
 import Class
 import DataCon
 import Name             hiding ( varName )
+import Avail
 import InstEnv
+import FamInstEnv
 import SrcLoc
-import CoreSyn          ( CoreBind )
+import CoreSyn
 import TidyPgm
 import DriverPhases     ( Phase(..), isHaskellSrcFilename )
 import Finder
@@ -273,8 +277,7 @@ import HscTypes
 import DynFlags
 import StaticFlagParser
 import qualified StaticFlags
-import SysTools     ( initSysTools, cleanTempFiles, 
-                      cleanTempDirs )
+import SysTools
 import Annotations
 import Module
 import UniqFM
@@ -766,7 +769,7 @@ data CoreModule
       -- | Type environment for types declared in this module
       cm_types    :: !TypeEnv,
       -- | Declarations
-      cm_binds    :: [CoreBind]
+      cm_binds    :: CoreProgram
     }
 
 instance Outputable CoreModule where
@@ -864,11 +867,15 @@ compileCore simplify fn = do
         -- we just have a ModGuts.
         gutsToCoreModule :: Either (CgGuts, ModDetails) ModGuts -> CoreModule
         gutsToCoreModule (Left (cg, md))  = CoreModule {
-          cm_module = cg_module cg,    cm_types = md_types md,
+          cm_module = cg_module cg,
+          cm_types = md_types md,
           cm_binds = cg_binds cg
         }
         gutsToCoreModule (Right mg) = CoreModule {
-          cm_module  = mg_module mg,                   cm_types   = mg_types mg,
+          cm_module  = mg_module mg,
+          cm_types   = typeEnvFromEntities (bindersOfBinds (mg_binds mg))
+                                           (mg_tcs mg) (mg_clss mg)
+                                           (mg_fam_insts mg),
           cm_binds   = mg_binds mg
          }
 
@@ -899,13 +906,12 @@ isLoaded m = withSession $ \hsc_env ->
 -- | Return the bindings for the current interactive session.
 getBindings :: GhcMonad m => m [TyThing]
 getBindings = withSession $ \hsc_env ->
-   -- we have to implement the shadowing behaviour of ic_tmp_ids here
-   -- (see InteractiveContext) and the quickest way is to use an OccEnv.
-   let 
-       occ_env = mkOccEnv [ (nameOccName (idName id), AnId id) 
-                          | id <- ic_tmp_ids (hsc_IC hsc_env) ]
-   in
-   return (occEnvElts occ_env)
+    return $ icInScopeTTs $ hsc_IC hsc_env
+
+-- | Return the instances for the current interactive session.
+getInsts :: GhcMonad m => m ([Instance], [FamInst])
+getInsts = withSession $ \hsc_env ->
+    return $ ic_instances (hsc_IC hsc_env)
 
 getPrintUnqual :: GhcMonad m => m PrintUnqualified
 getPrintUnqual = withSession $ \hsc_env ->

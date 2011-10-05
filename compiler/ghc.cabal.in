@@ -146,6 +146,7 @@ Library
         vectorise
 
     Exposed-Modules:
+        Avail
         BasicTypes
         DataCon
         Demand
@@ -187,7 +188,6 @@ Library
         CmmCommonBlockElim
         CmmContFlowOpt
         CmmCvt
-        CmmDecl
         CmmExpr
         CmmInfo
         CmmLex
@@ -414,6 +414,7 @@ Library
         TcCanonical
         TcSMonad
         Class
+        IParam
         Coercion
         FamInstEnv
         FunDeps
@@ -497,6 +498,7 @@ Library
             RegClass
             PIC
             Platform
+            CPrim
             X86.Regs
             X86.RegInfo
             X86.Instr

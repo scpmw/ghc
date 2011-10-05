@@ -11,15 +11,17 @@ module CorePrep (
 
 #include "HsVersions.h"
 
-import PrelNames	( lazyIdKey, hasKey )
+import PrelNames
 import CoreUtils
 import CoreArity
 import CoreFVs
 import CoreMonad	( endPass, CoreToDo(..) )
 import CoreSyn
 import CoreSubst
+import MkCore
 import OccurAnal        ( occurAnalyseExpr )
 import Type
+import Literal
 import Coercion
 import TyCon
 import Demand
@@ -28,6 +30,7 @@ import VarSet
 import VarEnv
 import Id
 import IdInfo
+import TysWiredIn
 import DataCon
 import PrimOp
 import BasicTypes
@@ -41,6 +44,8 @@ import Pair
 import Outputable
 import MonadUtils
 import FastString
+import Config
+import Data.Bits
 import Data.List	( mapAccumL )
 import Control.Monad
 \end{code}
@@ -83,7 +88,6 @@ The goal of this pass is to prepare for code generation.
     and doing so would be tiresome because then we'd need
     to substitute in types and coercions.
 
-
 7.  Give each dynamic CCall occurrence a fresh unique; this is
     rather like the cloning step above.
 
@@ -94,6 +98,12 @@ The goal of this pass is to prepare for code generation.
     aren't inlined by some caller.
 	
 9.  Replace (lazy e) by e.  See Note [lazyId magic] in MkId.lhs
+
+10. Convert (LitInteger i mkInteger) into the core representation
+    for the Integer i. Normally this uses the mkInteger Id, but if
+    we are using the integer-gmp implementation then there is a
+    special case where we use the S# constructor for Integers that
+    are in the range of Int.
 
 This is all done modulo type applications and abstractions, so that
 when type erasure is done for conversion to STG, we don't end up with
@@ -139,7 +149,7 @@ type CpeRhs  = CoreExpr	   -- Non-terminal 'rhs'
 %************************************************************************
 
 \begin{code}
-corePrepPgm :: DynFlags -> [CoreBind] -> [TyCon] -> IO [CoreBind]
+corePrepPgm :: DynFlags -> CoreProgram -> [TyCon] -> IO CoreProgram
 corePrepPgm dflags binds data_tycons = do
     showPass dflags "CorePrep"
     us <- mkSplitUniqSupply 's'
@@ -444,10 +454,12 @@ cpeRhsE :: CorePrepEnv -> CoreExpr -> UniqSM (Floats, CpeRhs)
 -- For example
 --	f (g x)	  ===>   ([v = g x], f v)
 
-cpeRhsE _env expr@(Type {})     = return (emptyFloats, expr)
-cpeRhsE _env expr@(Coercion {}) = return (emptyFloats, expr)
-cpeRhsE _env expr@(Lit {})      = return (emptyFloats, expr)
-cpeRhsE env expr@(Var {})       = cpeApp env expr
+cpeRhsE _env expr@(Type {})      = return (emptyFloats, expr)
+cpeRhsE _env expr@(Coercion {})  = return (emptyFloats, expr)
+cpeRhsE env (Lit (LitInteger i mk_integer))
+    = cpeRhsE env (cvtLitInteger i mk_integer)
+cpeRhsE _env expr@(Lit {})       = return (emptyFloats, expr)
+cpeRhsE env expr@(Var {})        = cpeApp env expr
 
 cpeRhsE env (Var f `App` _ `App` arg)
   | f `hasKey` lazyIdKey  	  -- Replace (lazy a) by a
@@ -494,6 +506,29 @@ cpeRhsE env (Case scrut bndr ty alts)
        = do { (env2, bs') <- cpCloneBndrs env bs
             ; rhs' <- cpeBodyNF env2 rhs
             ; return (con, bs', rhs') }
+
+cvtLitInteger :: Integer -> Id -> CoreExpr
+-- Here we convert a literal Integer to the low-level
+-- represenation. Exactly how we do this depends on the
+-- library that implements Integer.  If it's GMP we 
+-- use the S# data constructor for small literals.  
+-- See Note [Integer literals] in Literal
+cvtLitInteger i mk_integer
+  | cIntegerLibraryType == IntegerGMP
+  , inIntRange i       -- Special case for small integers in GMP
+    = mkConApp integerGmpSDataCon [Lit (mkMachInt i)]
+
+  | otherwise
+    = mkApps (Var mk_integer) [isNonNegative, ints]
+  where isNonNegative = if i < 0 then mkConApp falseDataCon []
+                                 else mkConApp trueDataCon  []
+        ints = mkListExpr intTy (f (abs i))
+        f 0 = []
+        f x = let low  = x .&. mask
+                  high = x `shiftR` bits
+              in mkConApp intDataCon [Lit (mkMachInt low)] : f high
+        bits = 31
+        mask = 2 ^ bits - 1
 
 -- ---------------------------------------------------------------------------
 --		CpeBody: produces a result satisfying CpeBody

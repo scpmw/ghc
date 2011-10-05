@@ -389,7 +389,7 @@ linkingNeeded dflags linkables pkg_deps = do
 -- previous binary was linked with "the same options".
 checkLinkInfo :: DynFlags -> [PackageId] -> FilePath -> IO Bool
 checkLinkInfo dflags pkg_deps exe_file
- | isWindowsTarget || isDarwinTarget
+ | not (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
  -- ToDo: Windows and OS X do not use the ELF binary format, so
  -- readelf does not work there.  We need to find another way to do
  -- this.
@@ -403,6 +403,11 @@ checkLinkInfo dflags pkg_deps exe_file
    m_exe_link_info <- readElfSection dflags ghcLinkInfoSectionName exe_file
    debugTraceMsg dflags 3 $ text ("Exe link info: " ++ show m_exe_link_info)
    return (Just link_info /= m_exe_link_info)
+
+platformSupportsSavingLinkOpts :: OS -> Bool
+platformSupportsSavingLinkOpts os
+  | os == OSSolaris2 = False -- see #5382
+  | otherwise        = osElfTarget os
 
 ghcLinkInfoSectionName :: String
 ghcLinkInfoSectionName = ".debug-ghc-link-info"
@@ -1328,7 +1333,8 @@ runPhase LlvmLlc input_fn dflags
                     SysTools.Option $ "-relocation-model=" ++ rmodel,
                     SysTools.FileOption "" input_fn,
                     SysTools.Option "-o", SysTools.FileOption "" output_fn]
-                ++ map SysTools.Option lc_opts)
+                ++ map SysTools.Option lc_opts
+                ++ map SysTools.Option fpOpts)
 
     return (LlvmMangle, output_fn)
   where
@@ -1336,6 +1342,17 @@ runPhase LlvmLlc input_fn dflags
         llvmOpts = if platformOS (targetPlatform dflags) == OSDarwin
                    then ["-O1", "-O2", "-O2"]
                    else ["-O1", "-O2", "-O3"]
+        -- On ARMv7 using LLVM, LLVM fails to allocate floating point registers
+        -- while compiling GHC source code. It's probably due to fact
+        -- that it does not enable VFP by default. Let's do this manually
+        -- here
+        fpOpts = case platformArch (targetPlatform dflags) of 
+                   ArchARM ARMv7 ext -> if (elem VFPv3 ext)
+                                      then ["-mattr=+v7,+vfp3"]
+                                      else if (elem VFPv3D16 ext)
+                                           then ["-mattr=+v7,+vfp3,+d16"]
+                                           else []
+                   _               -> []
 
 -----------------------------------------------------------------------------
 -- LlvmMangle phase
@@ -1441,9 +1458,9 @@ mkExtraObjToLinkIntoBinary dflags dep_packages = do
           Just opts -> text "char *ghc_rts_opts = " <> text (show opts) <> semi
 
     link_opts info
-      | isDarwinTarget  = empty
-      | isWindowsTarget = empty
-      | otherwise = hcat [
+     | not (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
+     = empty
+     | otherwise = hcat [
           text "__asm__(\"\\t.section ", text ghcLinkInfoSectionName,
                                     text ",\\\"\\\",",
                                     text elfSectionNote,
@@ -1460,8 +1477,8 @@ mkExtraObjToLinkIntoBinary dflags dep_packages = do
 
             elfSectionNote :: String
             elfSectionNote = case platformArch (targetPlatform dflags) of
-                               ArchARM    -> "%note"
-                               _          -> "@note"
+                               ArchARM _ _ -> "%note"
+                               _           -> "@note"
 
 -- The "link info" is a string representing the parameters of the
 -- link.  We save this information in the binary, and the next time we

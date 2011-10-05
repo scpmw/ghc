@@ -23,6 +23,7 @@ import VarSet
 import Data.List
 import FastString
 import HscTypes	
+import Platform
 import StaticFlags
 import TyCon
 import MonadUtils
@@ -213,7 +214,7 @@ addTickLHsBind (L pos bind@(AbsBinds { abs_binds   = binds,
    -- tick the right bindings.
    add_exports env =
      env{ exports = exports env `addListToNameSet`
-                      [ idName mid | (_, pid, mid, _) <- abs_exports
+                      [ idName mid | ABE pid mid _ _ <- abs_exports
                                    , idName pid `elemNameSet` (exports env) ] }
 
 addTickLHsBind (L pos (funBind@(FunBind { fun_id = (L _ id)  }))) = do
@@ -1058,9 +1059,9 @@ static void hpc_init_Main(void)
  hs_hpc_module("Main",8,1150288664,_hpc_tickboxes_Main_hpc);}
 
 \begin{code}
-hpcInitCode :: Module -> HpcInfo -> SDoc
-hpcInitCode _ (NoHpcInfo {}) = empty
-hpcInitCode this_mod (HpcInfo tickCount hashNo)
+hpcInitCode :: Platform -> Module -> HpcInfo -> SDoc
+hpcInitCode _ _ (NoHpcInfo {}) = empty
+hpcInitCode platform this_mod (HpcInfo tickCount hashNo)
  = vcat
     [ text "static void hpc_init_" <> ppr this_mod
          <> text "(void) __attribute__((constructor));"
@@ -1078,7 +1079,7 @@ hpcInitCode this_mod (HpcInfo tickCount hashNo)
        ])
     ]
   where
-    tickboxes = pprCLabel (mkHpcTicksLabel $ this_mod)
+    tickboxes = pprCLabel platform (mkHpcTicksLabel $ this_mod)
 
     module_name  = hcat (map (text.charToC) $
                          bytesFS (moduleNameFS (Module.moduleName this_mod)))

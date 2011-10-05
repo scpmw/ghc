@@ -37,9 +37,10 @@ module Name (
 	BuiltInSyntax(..),
 
 	-- ** Creating 'Name's
-	mkInternalName, mkSystemName, mkDerivedInternalName, 
+	mkSystemName, mkSystemNameAt,
+        mkInternalName, mkDerivedInternalName, 
 	mkSystemVarName, mkSysTvName, 
-	mkFCallName, mkIPName,
+	mkFCallName,
         mkExternalName, mkWiredInName,
 
 	-- ** Manipulating and deconstructing 'Name's
@@ -47,8 +48,9 @@ module Name (
 	nameOccName, nameModule, nameModule_maybe,
 	tidyNameOcc, 
 	hashName, localiseName,
+  mkLocalisedOccName,
 
-	nameSrcLoc, nameSrcSpan, pprNameLoc,
+	nameSrcLoc, nameSrcSpan, pprNameDefnLoc, pprDefinedAt,
 
 	-- ** Predicates on 'Name's
 	isSystemName, isInternalName, isExternalName,
@@ -84,9 +86,7 @@ import FastTypes
 import FastString
 import Outputable
 
-import Data.Array
 import Data.Data
-import Data.Word        ( Word32 )
 \end{code}
 
 %************************************************************************
@@ -276,8 +276,11 @@ mkWiredInName mod occ uniq thing built_in
 
 -- | Create a name brought into being by the compiler
 mkSystemName :: Unique -> OccName -> Name
-mkSystemName uniq occ = Name { n_uniq = getKeyFastInt uniq, n_sort = System, 
-			       n_occ = occ, n_loc = noSrcSpan }
+mkSystemName uniq occ = mkSystemNameAt uniq occ noSrcSpan
+
+mkSystemNameAt :: Unique -> OccName -> SrcSpan -> Name
+mkSystemNameAt uniq occ loc = Name { n_uniq = getKeyFastInt uniq, n_sort = System 
+			           , n_occ = occ, n_loc = loc }
 
 mkSystemVarName :: Unique -> FastString -> Name
 mkSystemVarName uniq fs = mkSystemName uniq (mkVarOccFS fs)
@@ -289,10 +292,6 @@ mkSysTvName uniq fs = mkSystemName uniq (mkOccNameFS tvName fs)
 mkFCallName :: Unique -> String -> Name
 mkFCallName uniq str = mkInternalName uniq (mkVarOcc str) noSrcSpan
    -- The encoded string completely describes the ccall
-
--- | Make the name of an implicit parameter
-mkIPName :: Unique -> OccName -> Name
-mkIPName uniq occ = mkInternalName uniq occ noSrcSpan
 \end{code}
 
 \begin{code}
@@ -312,6 +311,19 @@ tidyNameOcc name 			    occ = name { n_occ = occ }
 -- | Make the 'Name' into an internal name, regardless of what it was to begin with
 localiseName :: Name -> Name
 localiseName n = n { n_sort = Internal }
+\end{code}
+
+\begin{code}
+-- |Create a localised variant of a name.  
+--
+-- If the name is external, encode the original's module name to disambiguate.
+--
+mkLocalisedOccName :: Module -> (Maybe String -> OccName -> OccName) -> Name -> OccName
+mkLocalisedOccName this_mod mk_occ name = mk_occ origin (nameOccName name)
+  where
+    origin 
+      | nameIsLocalOrFrom this_mod name = Nothing
+      | otherwise                       = Just (moduleNameColons . moduleName . nameModule $ name)
 \end{code}
 
 %************************************************************************
@@ -394,9 +406,9 @@ instance Binary Name where
       case getUserData bh of 
         UserData{ ud_put_name = put_name } -> put_name bh name
 
-   get bh = do
-        i <- get bh
-        return $! (ud_symtab (getUserData bh) ! fromIntegral (i::Word32))
+   get bh =
+      case getUserData bh of
+        UserData { ud_get_name = get_name } -> get_name bh
 \end{code}
 
 %************************************************************************
@@ -413,27 +425,30 @@ instance OutputableBndr Name where
     pprBndr _ name = pprName name
 
 pprName :: Name -> SDoc
-pprName (Name {n_sort = sort, n_uniq = u, n_occ = occ})
+pprName n@(Name {n_sort = sort, n_uniq = u, n_occ = occ})
   = getPprStyle $ \ sty ->
     case sort of
-      WiredIn mod _ builtin   -> pprExternal sty uniq mod occ True  builtin
-      External mod  	      -> pprExternal sty uniq mod occ False UserSyntax
+      WiredIn mod _ builtin   -> pprExternal sty uniq mod occ n True  builtin
+      External mod            -> pprExternal sty uniq mod occ n False UserSyntax
       System   		      -> pprSystem sty uniq occ
       Internal    	      -> pprInternal sty uniq occ
   where uniq = mkUniqueGrimily (iBox u)
 
-pprExternal :: PprStyle -> Unique -> Module -> OccName -> Bool -> BuiltInSyntax -> SDoc
-pprExternal sty uniq mod occ is_wired is_builtin
+pprExternal :: PprStyle -> Unique -> Module -> OccName -> Name -> Bool -> BuiltInSyntax -> SDoc
+pprExternal sty uniq mod occ name is_wired is_builtin
   | codeStyle sty = ppr mod <> char '_' <> ppr_z_occ_name occ
 	-- In code style, always qualify
 	-- ToDo: maybe we could print all wired-in things unqualified
 	-- 	 in code style, to reduce symbol table bloat?
-  | debugStyle sty = ppr mod <> dot <> ppr_occ_name occ
+  | debugStyle sty = pp_mod <> ppr_occ_name occ
 		     <> braces (hsep [if is_wired then ptext (sLit "(w)") else empty,
 				      pprNameSpaceBrief (occNameSpace occ), 
 		 		      pprUnique uniq])
   | BuiltInSyntax <- is_builtin = ppr_occ_name occ  -- Never qualify builtin syntax
-  | otherwise		        = pprModulePrefix sty mod occ <> ppr_occ_name occ
+  | otherwise                   = pprModulePrefix sty mod name <> ppr_occ_name occ
+  where
+    pp_mod | opt_SuppressModulePrefixes = empty
+           | otherwise                  = ppr mod <> dot 
 
 pprInternal :: PprStyle -> Unique -> OccName -> SDoc
 pprInternal sty uniq occ
@@ -457,14 +472,14 @@ pprSystem sty uniq occ
 				-- so print the unique
 
 
-pprModulePrefix :: PprStyle -> Module -> OccName -> SDoc
+pprModulePrefix :: PprStyle -> Module -> Name -> SDoc
 -- Print the "M." part of a name, based on whether it's in scope or not
 -- See Note [Printing original names] in HscTypes
-pprModulePrefix sty mod occ
+pprModulePrefix sty mod name
   | opt_SuppressModulePrefixes = empty
   
   | otherwise
-  = case qualName sty mod occ of	           -- See Outputable.QualifyName:
+  = case qualName sty name of              -- See Outputable.QualifyName:
       NameQual modname -> ppr modname <> dot       -- Name is in scope       
       NameNotInScope1  -> ppr mod <> dot           -- Not in scope
       NameNotInScope2  -> ppr (modulePackageId mod) <> colon     -- Module not in
@@ -490,15 +505,23 @@ ppr_z_occ_name occ = ftext (zEncodeFS (occNameFS occ))
 
 -- Prints (if mod information is available) "Defined at <loc>" or 
 --  "Defined in <mod>" information for a Name.
-pprNameLoc :: Name -> SDoc
-pprNameLoc name = case nameSrcSpan name of
-                  RealSrcSpan s ->
-                      pprDefnLoc s
-                  UnhelpfulSpan _
-                   | isInternalName name || isSystemName name ->
-                      ptext (sLit "<no location info>")
-                   | otherwise ->
-                      ptext (sLit "Defined in ") <> ppr (nameModule name)
+pprDefinedAt :: Name -> SDoc
+pprDefinedAt name = ptext (sLit "Defined") <+> pprNameDefnLoc name
+
+pprNameDefnLoc :: Name -> SDoc
+-- Prints "at <loc>" or 
+--     or "in <mod>" depending on what info is available
+pprNameDefnLoc name 
+  = case nameSrcLoc name of
+         -- nameSrcLoc rather than nameSrcSpan
+	 -- It seems less cluttered to show a location
+	 -- rather than a span for the definition point
+       RealSrcLoc s -> ptext (sLit "at") <+> ppr s
+       UnhelpfulLoc s
+         | isInternalName name || isSystemName name
+         -> ptext (sLit "at") <+> ftext s
+         | otherwise 
+         -> ptext (sLit "in") <+> quotes (ppr (nameModule name))
 \end{code}
 
 %************************************************************************

@@ -57,7 +57,7 @@ module Id (
         hasNoBinding,
 
 	-- ** Evidence variables
-	DictId, isDictId, isCertainlyEvVar,
+	DictId, isDictId, isEvVar,
 
 	-- ** Inline pragma stuff
 	idInlinePragma, setInlinePragma, modifyInlinePragma,
@@ -432,8 +432,8 @@ isDeadBinder bndr | isId bndr = isDeadOcc (idOccInfo bndr)
 %************************************************************************
 
 \begin{code}
-isCertainlyEvVar :: Var -> Bool
-isCertainlyEvVar var = isCertainlyPredReprTy (varType var)
+isEvVar :: Var -> Bool
+isEvVar var = isPredTy (varType var)
 
 isDictId :: Id -> Bool
 isDictId id = isDictTy (idType id)

@@ -35,17 +35,19 @@ import HscTypes hiding ( MonadThings(..) )
 import DynFlags
 import MonadUtils (liftIO)
 import TyCon
-import Var
+import VarSet
 import VarEnv
+import Var
 import Id
 import DsMonad
+import ErrUtils
 import Outputable
 import FastString
 
 import Control.Monad
-import VarSet
+import System.IO
 
--- | Run a vectorisation computation.
+-- |Run a vectorisation computation.
 --
 initV :: HscEnv
       -> ModGuts
@@ -53,10 +55,24 @@ initV :: HscEnv
       -> VM a
       -> IO (Maybe (VectInfo, a))
 initV hsc_env guts info thing_inside
-  = do { (_, Just r) <- initDs hsc_env (mg_module guts) (mg_rdr_env guts) (mg_types guts) go
-       ; return r
+  = do {
+         let type_env = typeEnvFromEntities [] (mg_tcs guts) (mg_clss guts) (mg_fam_insts guts)
+                        -- XXX should we try to get the Ids here?
+       ; (_, Just res) <- initDs hsc_env (mg_module guts)
+                                         (mg_rdr_env guts) type_env go
+
+       ; dumpIfVtTrace "Incoming VectInfo" (ppr info)
+       ; case res of
+           Nothing
+             -> dumpIfVtTrace "Vectorisation FAILED!" empty
+           Just (info', _)
+             -> dumpIfVtTrace "Outgoing VectInfo" (ppr info')
+
+       ; return res
        }
   where
+    dumpIfVtTrace = dumpIfSet_dyn (hsc_dflags hsc_env) Opt_D_dump_vt_trace
+
     go 
       = do {   -- pick a DPH backend
            ; dflags <- getDOptsDs
@@ -69,7 +85,6 @@ initV hsc_env guts info thing_inside
            ; builtin_vars    <- initBuiltinVars builtins
            ; builtin_tycons  <- initBuiltinTyCons builtins
            ; let builtin_datacons = initBuiltinDataCons builtins
-           ; builtin_boxed   <- initBuiltinBoxedTyCons builtins
 
                -- set up class and type family envrionments
            ; eps <- liftIO $ hscEPS hsc_env
@@ -85,17 +100,21 @@ initV hsc_env guts info thing_inside
                         . extendDataConsEnv   builtin_datacons
                         . extendPAFunsEnv     builtin_pas
                         . setPRFunsEnv        builtin_prs
-                        . setBoxedTyConsEnv   builtin_boxed
                         $ initGlobalEnv info (mg_vect_decls guts) instEnvs famInstEnvs
  
                -- perform vectorisation
            ; r <- runVM thing_inside' builtins genv emptyLocalEnv
            ; case r of
                Yes genv _ x -> return $ Just (new_info genv, x)
-               No           -> return Nothing
+               No reason    -> do { unqual <- mkPrintUnqualifiedDs
+                                  ; liftIO $ 
+                                      printForUser stderr unqual $ 
+                                        mkDumpDoc "Warning: vectorisation failure:" reason
+                                  ; return Nothing
+                                  }
            } }
 
-    new_info genv = modVectInfo genv (mg_types guts) info
+    new_info genv = modVectInfo genv (mg_tcs guts) (mg_vect_decls guts) info
 
     selectBackendErr = sLit "To use -fvectorise select a DPH backend with -fdph-par or -fdph-seq"
 
@@ -116,9 +135,12 @@ builtins f = VM $ \bi genv lenv -> return (Yes genv lenv (`f` bi))
 
 
 -- Var ------------------------------------------------------------------------
--- | Lookup the vectorised and\/or lifted versions of this variable.
---  If it's in the global environment we get the vectorised version.
---      If it's in the local environment we get both the vectorised and lifted version.
+
+-- |Lookup the vectorised, and if local, also the lifted versions of a variable.
+--
+-- * If it's in the global environment we get the vectorised version.
+-- * If it's in the local environment we get both the vectorised and lifted version.
+--
 lookupVar :: Var -> VM (Scope Var (Var, Var))
 lookupVar v
  = do r <- readLEnv $ \env -> lookupVarEnv (local_vars env) v
@@ -146,13 +168,16 @@ dumpVar var
 
 -- Global scalars --------------------------------------------------------------
 
+-- |Mark the given variable as scalar — i.e., executing the associated code does not involve any
+-- parallel array computations.
+--
 addGlobalScalar :: Var -> VM ()
-addGlobalScalar var 
+addGlobalScalar var
   = do { traceVt "addGlobalScalar" (ppr var)
        ; updGEnv $ \env -> env{global_scalar_vars = extendVarSet (global_scalar_vars env) var}
        }
-     
-     
+
+
 -- Primitives -----------------------------------------------------------------
 
 lookupPrimPArray :: TyCon -> VM (Maybe TyCon)
