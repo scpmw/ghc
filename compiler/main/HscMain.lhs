@@ -1135,7 +1135,10 @@ hscInteractive :: (ModIface, ModDetails, CgGuts)
                -> Hsc (InteractiveStatus, ModIface, ModDetails)
 #ifdef GHCI
 hscInteractive (iface, details, cgguts) mod_summary
-    = do
+    = do 
+
+         let this_mod = undefined -- Temporary hack
+
          dflags <- getDynFlags
          let CgGuts{ -- This is the last use of the ModGuts in a compilation.
                      -- From now on, we just use the bits we need.
@@ -1316,6 +1319,8 @@ hscDeclsWithLocation hsc_env str source linenumber = runHsc hsc_env $ do
     L _ (HsModule{hsmodDecls=decls}) <-
         hscParseThingWithLocation source linenumber parseModule str
     
+    let this_mod = undefined -- Temporary Hack
+        
     -- Rename and typecheck it
     let icontext = hsc_IC hsc_env
     tc_gblenv <- ioMsgMaybe $ tcRnDeclsi hsc_env icontext decls

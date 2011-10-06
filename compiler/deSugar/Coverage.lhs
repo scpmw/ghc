@@ -170,7 +170,7 @@ data TickDensity
   | TickTopFunctions      -- for -prof-auto-top
   | TickExportedFunctions -- for -prof-auto-exported
   -- maybe also:
-  -- | TickCallSites        -- for stack tracing
+  -- -| TickCallSites        -- for stack tracing
   deriving Eq
 
 -- We never add breakpoints to simple pattern bindings (there's always
