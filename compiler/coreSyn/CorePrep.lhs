@@ -1048,8 +1048,8 @@ dropDeadCode (Case scrut bndr t alts)
 dropDeadCode (Cast e c)
   = (Cast e' c, fvs)
   where !(e', fvs) = dropDeadCode e
-dropDeadCode (Note n e)
-  = (Note n e', fvs)
+dropDeadCode (Tick t e)
+  = (Tick t e', fvs)
   where !(e', fvs) = dropDeadCode e
 dropDeadCode e = (e, emptyVarSet)  -- Lit, Type, Coercion
 
