@@ -138,7 +138,7 @@ data LlvmStatement
   -}
   | Nop
 
-  deriving (Show, Eq)
+  deriving (Eq)
 
 
 -- | Llvm Expressions
@@ -229,5 +229,5 @@ data LlvmExpression
   -}
   | Asm LMString LMString LlvmType [LlvmVar] Bool Bool
 
-  deriving (Show, Eq)
+  deriving (Eq)
 

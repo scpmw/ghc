@@ -46,10 +46,12 @@ llvmCodeGen dflags h us cmms
             in (d,env')
     in do
         bufh <- newBufHandle h
-        Prt.bufLeftRender bufh $ pprLlvmHeader
+        let render = Prt.bufLeftRender bufh . withPprStyleDoc (mkCodeStyle CStyle)
+
+        render pprLlvmHeader
         ver  <- (fromMaybe defaultLlvmVersion) `fmap` figureLlvmVersion dflags
-        env' <- cmmDataLlvmGens dflags bufh (setLlvmVer ver env) cdata []
-        cmmProcLlvmGens dflags bufh us env' cmm 1 []
+        env' <- cmmDataLlvmGens dflags render (setLlvmVer ver env) cdata []
+        cmmProcLlvmGens dflags render us env' cmm 1 []
         bFlush bufh
         return  ()
 
@@ -57,27 +59,27 @@ llvmCodeGen dflags h us cmms
 -- -----------------------------------------------------------------------------
 -- | Do LLVM code generation on all these Cmms data sections.
 --
-cmmDataLlvmGens :: DynFlags -> BufHandle -> LlvmEnv -> [(Section,CmmStatics)]
+cmmDataLlvmGens :: DynFlags -> (SDoc -> IO ()) -> LlvmEnv -> [(Section,CmmStatics)]
                 -> [LlvmUnresData] -> IO ( LlvmEnv )
 
-cmmDataLlvmGens dflags h env [] lmdata
+cmmDataLlvmGens dflags render env [] lmdata
   = let (env', lmdata') = resolveLlvmDatas env lmdata []
-        lmdoc = Prt.vcat $ map pprLlvmData lmdata'
+        lmdoc = vcat $ map pprLlvmData lmdata'
     in do
-        dumpIfSet_dyn dflags Opt_D_dump_llvm "LLVM Code" $ docToSDoc lmdoc
-        Prt.bufLeftRender h lmdoc
+        dumpIfSet_dyn dflags Opt_D_dump_llvm "LLVM Code" lmdoc
+        render lmdoc
         return env'
 
-cmmDataLlvmGens dflags h env (cmm:cmms) lmdata
+cmmDataLlvmGens dflags render env (cmm:cmms) lmdata
   = let lmdata'@(l, _, ty, _) = genLlvmData env cmm
         env' = funInsert (strCLabel_llvm env l) ty env
-    in cmmDataLlvmGens dflags h env' cmms (lmdata ++ [lmdata'])
+    in cmmDataLlvmGens dflags render env' cmms (lmdata ++ [lmdata'])
 
 
 -- -----------------------------------------------------------------------------
 -- | Do LLVM code generation on all these Cmms procs.
 --
-cmmProcLlvmGens :: DynFlags -> BufHandle -> UniqSupply -> LlvmEnv -> [RawCmmDecl]
+cmmProcLlvmGens :: DynFlags -> (SDoc -> IO ()) -> UniqSupply -> LlvmEnv -> [RawCmmDecl]
       -> Int         -- ^ count, used for generating unique subsections
       -> [[LlvmVar]] -- ^ info tables that need to be marked as 'used'
       -> IO ()
@@ -85,26 +87,27 @@ cmmProcLlvmGens :: DynFlags -> BufHandle -> UniqSupply -> LlvmEnv -> [RawCmmDecl
 cmmProcLlvmGens _ _ _ _ [] _ []
   = return ()
 
-cmmProcLlvmGens _ h _ _ [] _ ivars
+cmmProcLlvmGens _ render _ _ [] _ ivars
   = let ivars' = concat ivars
         cast x = LMBitc (LMStaticPointer (pVarLift x)) i8Ptr
         ty     = (LMArray (length ivars') i8Ptr)
         usedArray = LMStaticArray (map cast ivars') ty
-        lmUsed = (LMGlobalVar (fsLit "llvm.used") ty Appending
-                  (Just $ fsLit "llvm.metadata") Nothing False, Just usedArray)
-    in Prt.bufLeftRender h $ pprLlvmData ([lmUsed], [])
+        sectName  = Just $ fsLit "llvm.metadata"
+        lmUsedVar = LMGlobalVar (fsLit "llvm.used") ty Appending sectName Nothing False
+        lmUsed    = LMGlobal lmUsedVar (Just usedArray)
+    in render $ pprLlvmData ([lmUsed], [])
 
-cmmProcLlvmGens dflags h us env ((CmmData _ _) : cmms) count ivars
- = cmmProcLlvmGens dflags h us env cmms count ivars
+cmmProcLlvmGens dflags render us env ((CmmData _ _) : cmms) count ivars
+ = cmmProcLlvmGens dflags render us env cmms count ivars
 
-cmmProcLlvmGens dflags h us env ((CmmProc _ _ (ListGraph [])) : cmms) count ivars
- = cmmProcLlvmGens dflags h us env cmms count ivars
+cmmProcLlvmGens dflags render us env ((CmmProc _ _ (ListGraph [])) : cmms) count ivars
+ = cmmProcLlvmGens dflags render us env cmms count ivars
 
-cmmProcLlvmGens dflags h us env (cmm : cmms) count ivars = do
+cmmProcLlvmGens dflags render us env (cmm : cmms) count ivars = do
     (us', env', llvm) <- cmmLlvmGen dflags us (clearVars env) cmm
     let (docs, ivar) = mapAndUnzip (pprLlvmCmmDecl env' count) llvm
-    Prt.bufLeftRender h $ Prt.vcat docs
-    cmmProcLlvmGens dflags h us' env' cmms (count + 2) (ivar ++ ivars)
+    render $ vcat docs
+    cmmProcLlvmGens dflags render us' env' cmms (count + 2) (ivar ++ ivars)
 
 
 -- | Complete LLVM code generation phase for a single top-level chunk of Cmm.
@@ -121,7 +124,7 @@ cmmLlvmGen dflags us env cmm = do
     let ((env', llvmBC), usGen) = initUs us $ genLlvmProc env fixed_cmm
 
     dumpIfSet_dyn dflags Opt_D_dump_llvm "LLVM Code"
-        (vcat $ map (docToSDoc . fst . pprLlvmCmmDecl env' 0) llvmBC)
+        (vcat $ map (fst . pprLlvmCmmDecl env' 0) llvmBC)
 
     return (usGen, env', llvmBC)
 

@@ -105,7 +105,7 @@ mkLlvmFunc :: LlvmEnv -> CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
            -> LlvmFunction
 mkLlvmFunc env lbl link sec blks
   = let funDec = llvmFunSig env lbl link
-        funArgs = map (fsLit . getPlainName) llvmFunArgs
+        funArgs = map (fsLit . Outp.showSDoc . ppPlainName) llvmFunArgs
     in LlvmFunction funDec funArgs llvmStdFunAttrs sec blks
 
 -- | Alignment to use for functions
@@ -188,8 +188,8 @@ getLlvmPlatform (LlvmEnv (_, _, _, p)) = p
 
 -- | Pretty print a 'CLabel'.
 strCLabel_llvm :: LlvmEnv -> CLabel -> LMString
-strCLabel_llvm env l
-    = (fsLit . show . llvmSDoc . pprCLabel (getLlvmPlatform env)) l
+strCLabel_llvm env
+    = fsLit . flip Outp.renderWithStyle (Outp.mkCodeStyle Outp.CStyle) . pprCLabel (getLlvmPlatform env)
 
 -- | Create an external definition for a 'CLabel' defined in another module.
 genCmmLabelRef :: LlvmEnv -> CLabel -> LMGlobal
@@ -199,7 +199,7 @@ genCmmLabelRef env = genStringLabelRef . strCLabel_llvm env
 genStringLabelRef :: LMString -> LMGlobal
 genStringLabelRef cl
   = let ty = LMPointer $ LMArray 0 llvmWord
-    in (LMGlobalVar cl ty External Nothing Nothing False, Nothing)
+    in LMGlobal (LMGlobalVar cl ty External Nothing Nothing False) Nothing
 
 
 -- ----------------------------------------------------------------------------

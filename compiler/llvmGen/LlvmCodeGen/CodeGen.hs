@@ -323,7 +323,7 @@ getFunPtr env funTy targ = case targ of
                 ty | isInt ty     -> LM_Inttoptr
 
                 ty -> panic $ "genCall: Expr is of bad type for function"
-                              ++ " call! (" ++ show (ty) ++ ")"
+                              ++ " call! (" ++ showSDoc (ppr ty) ++ ")"
 
         (v2,s1) <- doExpr (pLift fty) $ Cast cast v1 (pLift fty)
         return (env', v2, stmts `snocOL` s1, top)
@@ -374,7 +374,7 @@ arg_vars env (CmmHinted e AddrHint:rest) (vars, stmts, tops)
                ty | isInt ty     -> LM_Inttoptr
 
                a  -> panic $ "genCall: Can't cast llvmType to i8*! ("
-                           ++ show a ++ ")"
+                           ++ showSDoc (ppr a) ++ ")"
 
        (v2, s1) <- doExpr i8Ptr $ Cast op v1 i8Ptr
        arg_vars env' rest (vars ++ [v2], stmts `appOL` stmts' `snocOL` s1,
@@ -412,7 +412,7 @@ castVar v t | getVarType v == t
                       (vt, _) | isPointer vt && isPointer t -> LM_Bitcast
 
                       (vt, _) -> panic $ "castVars: Can't cast this type ("
-                                  ++ show vt ++ ") to (" ++ show t ++ ")"
+                                  ++ showSDoc (ppr vt) ++ ") to (" ++ showSDoc (ppr t) ++ ")"
               in doExpr t $ Cast op v t
 
 
@@ -458,15 +458,15 @@ cmmPrimOpFunctions env mop
     MO_Memmove    -> fsLit $ "llvm.memmove." ++ intrinTy1
     MO_Memset     -> fsLit $ "llvm.memset."  ++ intrinTy2
 
-    (MO_PopCnt w) -> fsLit $ "llvm.ctpop."  ++ show (widthToLlvmInt w)
+    (MO_PopCnt w) -> fsLit $ "llvm.ctpop."  ++ showSDoc (ppr $ widthToLlvmInt w)
 
     a -> panic $ "cmmPrimOpFunctions: Unknown callish op! (" ++ show a ++ ")"
 
     where
         intrinTy1 = (if getLlvmVer env >= 28
-                       then "p0i8.p0i8." else "") ++ show llvmWord
+                       then "p0i8.p0i8." else "") ++ showSDoc (ppr llvmWord)
         intrinTy2 = (if getLlvmVer env >= 28
-                       then "p0i8." else "") ++ show llvmWord
+                       then "p0i8." else "") ++ showSDoc (ppr llvmWord)
     
 
 -- | Tail function calls
@@ -491,7 +491,7 @@ genJump env expr = do
          ty | isInt ty     -> LM_Inttoptr
 
          ty -> panic $ "genJump: Expr is of bad type for function call! ("
-                     ++ show (ty) ++ ")"
+                     ++ showSDoc (ppr ty) ++ ")"
 
     (v1, s1) <- doExpr (pLift fty) $ Cast cast vf (pLift fty)
     (stgRegs, stgStmts) <- funEpilogue
@@ -617,7 +617,7 @@ genStore_slow env addr val = do
                     (PprCmm.pprExpr (getLlvmPlatform env) addr <+> text (
                         "Size of Ptr: " ++ show llvmPtrBits ++
                         ", Size of var: " ++ show (llvmWidthInBits other) ++
-                        ", Var: " ++ show vaddr))
+                        ", Var: " ++ showSDoc (ppr vaddr)))
 
 
 -- | Unconditional branch
@@ -640,7 +640,7 @@ genCondBranch env cond idT = do
             let s2 = MkLabel idF
             return $ (env', stmts `snocOL` s1 `snocOL` s2, top)
         else
-            panic $ "genCondBranch: Cond expr not bool! (" ++ show vc ++ ")"
+            panic $ "genCondBranch: Cond expr not bool! (" ++ showSDoc (ppr vc) ++ ")"
 
 
 -- | Switch branch
@@ -880,7 +880,7 @@ genMachOp_slow env opt op [x, y] = case op of
                 else do
                     -- XXX: Error. Continue anyway so we can debug the generated
                     -- ll file.
-                    let cmmToStr = (lines . show . llvmSDoc . PprCmm.pprExpr (getLlvmPlatform env))
+                    let cmmToStr = lines . showSDoc . PprCmm.pprExpr (getLlvmPlatform env)
                     let dx = Comment $ map fsLit $ cmmToStr x
                     let dy = Comment $ map fsLit $ cmmToStr y
                     (v1, s1) <- doExpr (ty vx) $ binOp vx vy
@@ -918,10 +918,10 @@ genMachOp_slow env opt op [x, y] = case op of
 
                                 | otherwise ->
                                     panic $ "genBinComp: Can't case i1 compare"
-                                        ++ "res to non int type " ++ show (t)
+                                        ++ "res to non int type " ++ showSDoc (ppr t)
                 else
                     panic $ "genBinComp: Compare returned type other then i1! "
-                        ++ (show $ getVarType v1)
+                        ++ (showSDoc $ ppr $ getVarType v1)
 
         genBinMach op = binLlvmOp getVarType (LlvmOp op)
 
@@ -956,7 +956,7 @@ genMachOp_slow env opt op [x, y] = case op of
                         top1 ++ top2)
 
                 else
-                    panic $ "isSMulOK: Not bit type! (" ++ show word ++ ")"
+                    panic $ "isSMulOK: Not bit type! (" ++ showSDoc (ppr word) ++ ")"
 
 -- More then two expression, invalid!
 genMachOp_slow _ _ _ _ = panic "genMachOp: More then 2 expressions in MachOp!"
@@ -1045,7 +1045,7 @@ genLoad_slow env e ty = do
                         (PprCmm.pprExpr (getLlvmPlatform env) e <+> text (
                             "Size of Ptr: " ++ show llvmPtrBits ++
                             ", Size of var: " ++ show (llvmWidthInBits other) ++
-                            ", Var: " ++ show iptr))
+                            ", Var: " ++ showSDoc (ppr iptr)))
 
 
 -- | Handle CmmReg expression
@@ -1094,7 +1094,7 @@ genLit env cmm@(CmmLabel l)
     in case ty of
             -- Make generic external label definition and then pointer to it
             Nothing -> do
-                let glob@(var, _) = genStringLabelRef label
+                let glob@(LMGlobal var _) = genStringLabelRef label
                 let ldata = [CmmData Data [([glob], [])]]
                 let env' = funInsert label (pLower $ getVarType var) env
                 (v1, s1) <- doExpr lmty $ Cast LM_Ptrtoint var llvmWord
