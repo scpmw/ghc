@@ -660,6 +660,7 @@ pprCallishMachOp_for_C mop
         MO_Memcpy   -> ptext (sLit "memcpy")
         MO_Memset   -> ptext (sLit "memset")
         MO_Memmove  -> ptext (sLit "memmove")
+        MO_CycleCount -> ptext (sLit "cycle_count")
         a -> panic $ "pprCallishMachOp_for_C: Unknown callish op! ("
                       ++ show a ++ ")"
 

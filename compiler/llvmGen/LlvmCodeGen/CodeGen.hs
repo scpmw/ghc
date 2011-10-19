@@ -453,6 +453,8 @@ cmmPrimOpFunctions env mop
     MO_F64_Sinh   -> fsLit "sinh"
     MO_F64_Cosh   -> fsLit "cosh"
     MO_F64_Tanh   -> fsLit "tanh"
+    
+    MO_CycleCount -> fsLit "llvm.readcyclecounter"
 
     MO_Memcpy     -> fsLit $ "llvm.memcpy."  ++ intrinTy1
     MO_Memmove    -> fsLit $ "llvm.memmove." ++ intrinTy1
