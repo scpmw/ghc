@@ -546,7 +546,6 @@ coreToStgApp _ f args = do
                 FCallId call     -> ASSERT( saturated )
                                     StgOpApp (StgFCallOp call (idUnique f)) args' res_ty
 
-                TickBoxOpId {}   -> pprPanic "coreToStg TickBox" $ ppr (f,args')
                 _other           -> StgApp f args'
         fvs = fun_fvs  `unionFVInfo` args_fvs
         vars = fun_escs `unionVarSet` (getFVSet args_fvs)
