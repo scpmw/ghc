@@ -46,14 +46,14 @@ module StgSyn (
 
 #include "HsVersions.h"
 
-import CostCentre	( CostCentreStack, CostCentre )
+import CostCentre	( CostCentreStack )
 import VarSet		( IdSet, isEmptyVarSet )
 import Id		
 import DataCon
 import IdInfo		( mayHaveCafRefs )
 import Literal		( Literal, literalType )
 import ForeignCall	( ForeignCall )
-import CoreSyn		( AltCon )
+import CoreSyn		( AltCon, Tickish(..) )
 import PprCore		( {- instances -} )
 import PrimOp		( PrimOp, PrimCall )
 import Outputable
@@ -368,32 +368,13 @@ And so the code for let(rec)-things:
 
 %************************************************************************
 %*									*
-\subsubsection{@GenStgExpr@: @scc@ expressions}
+\subsubsection{@GenStgExpr@: @hpc@, @scc@ and other debug annotations}
 %*									*
 %************************************************************************
-
-Finally for @scc@ expressions we introduce a new STG construct.
-
-\begin{code}
-  | StgSCC
-	CostCentre		-- label of SCC expression
-        !Bool                   -- bump the entry count?
-        !Bool                   -- push the cost centre?
-        (GenStgExpr bndr occ)   -- scc expression
-\end{code}
-
-%************************************************************************
-%*									*
-\subsubsection{@GenStgExpr@: @hpc@ expressions}
-%*									*
-%************************************************************************
-
-Finally for @scc@ expressions we introduce a new STG construct.
 
 \begin{code}
   | StgTick
-    Module			-- the module of the source of this tick
-    Int				-- tick number
+    (Tickish bndr)
     (GenStgExpr bndr occ)	-- sub expression
   -- end of GenStgExpr
 \end{code}
@@ -766,16 +747,8 @@ pprStgExpr (StgLetNoEscape lvs_whole lvs_rhss bind expr)
 			     char ']']))))
 		2 (ppr expr)]
 
-pprStgExpr (StgSCC cc tick push expr)
-  = sep [ hsep [scc, ppr cc], pprStgExpr expr ]
-  where
-    scc | tick && push = ptext (sLit "_scc_")
-        | tick         = ptext (sLit "_tick_")
-        | otherwise    = ptext (sLit "_push_")
-
-pprStgExpr (StgTick m n expr)
-  = sep [ hsep [ptext (sLit "_tick_"),  pprModule m,text (show n)],
-	  pprStgExpr expr ]
+pprStgExpr (StgTick tickish expr)
+  = sep [ ppr tickish, pprStgExpr expr ]
 
 pprStgExpr (StgCase expr lvs_whole lvs_rhss bndr srt alt_type alts)
   = sep [sep [ptext (sLit "case"),

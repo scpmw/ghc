@@ -970,6 +970,7 @@ tcIfaceExpr (IfaceTick tickish expr) = do
 tcIfaceTickish :: IfaceTickish -> IfM lcl (Tickish Id)
 tcIfaceTickish (IfaceHpcTick modl ix)   = return (HpcTick modl ix)
 tcIfaceTickish (IfaceSCC  cc tick push) = return (ProfNote cc tick push)
+tcIfaceTickish (IfaceSource  src)       = return (SourceNote src)
 
 -------------------------
 tcIfaceLit :: Literal -> IfL Literal

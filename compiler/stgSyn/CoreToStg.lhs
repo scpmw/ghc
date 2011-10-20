@@ -340,16 +340,14 @@ coreToStgExpr expr@(Lam _ _)
 
     return (result_expr, fvs, escs)
 
-coreToStgExpr (Tick (HpcTick m n) expr)
-  = do (expr2, fvs, escs) <- coreToStgExpr expr
-       return (StgTick m n expr2, fvs, escs)
-
-coreToStgExpr (Tick (ProfNote cc tick push) expr)
-  = do (expr2, fvs, escs) <- coreToStgExpr expr
-       return (StgSCC cc tick push expr2, fvs, escs)
-
-coreToStgExpr (Tick Breakpoint{} _expr)
-  = panic "coreToStgExpr: breakpoint should not happen"
+coreToStgExpr (Tick tick expr)
+  = do case tick of
+         HpcTick{}    -> return ()
+         ProfNote{}   -> return ()
+         Breakpoint{} -> panic "coreToStgExpr: breakpoint should not happen"
+         _otherwise   -> panic "coreToStgExpr: Tick"
+       (expr2, fvs, escs) <- coreToStgExpr expr
+       return (StgTick tick expr2, fvs, escs)
 
 coreToStgExpr (Cast expr _)
   = coreToStgExpr expr

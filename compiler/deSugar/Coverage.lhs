@@ -87,6 +87,11 @@ addTicksToBinds dflags mod mod_loc exports tyCons binds =
                                           | tyCon <- tyCons ]
                       , density      = mkDensity dflags
                       , this_mod     = mod
+                      , tickishType  = case hscTarget dflags of
+                          HscInterpreted          -> Breakpoints
+                          _ | opt_Hpc             -> HpcTicks
+                            | opt_SccProfilingOn  -> ProfNotes
+                            | otherwise           -> SourceNotes
                        })
 		   (TT 
 		      { tickBoxCount = 0
@@ -191,6 +196,7 @@ mkDensity dflags
   | ProfAutoAll     <- profAuto dflags   = TickAllFunctions
   | ProfAutoTop     <- profAuto dflags   = TickTopFunctions
   | ProfAutoExports <- profAuto dflags   = TickExportedFunctions
+  | any ((WayEventLog ==) . wayName) (ways dflags) = TickForCoverage
   | otherwise = panic "desnity"
 
 
@@ -814,9 +820,11 @@ data TickTransEnv = TTE { fileName     :: FastString
                         , inScope      :: VarSet
                         , blackList    :: Map SrcSpan ()
                         , this_mod     :: Module
+                        , tickishType  :: TickishType
                         }
-
 --	deriving Show
+
+data TickishType = ProfNotes | HpcTicks | Breakpoints | SourceNotes
 
 type FreeVars = OccEnv Id
 noFVs :: FreeVars
@@ -961,10 +969,13 @@ mkTickish boxLabel countEntries topOnly pos fvs decl_path =
 
         count = countEntries && dopt Opt_ProfCountEntries (dflags env)
 
-        tickish
-          | opt_Hpc            = HpcTick (this_mod env) c
-          | opt_SccProfilingOn = ProfNote cc count True{-scopes-}
-          | otherwise          = Breakpoint c ids
+        tickish = case tickishType env of
+          HpcTicks    -> HpcTick (this_mod env) c
+          ProfNotes   -> ProfNote cc count True{-scopes-}
+          Breakpoints -> Breakpoint c ids
+          SourceNotes | RealSrcSpan pos' <- pos
+                      -> SourceNote pos'
+          _otherwise  -> panic "mkTickish: bad source span!"
     in
     ( tickish
     , fvs
@@ -974,11 +985,14 @@ mkTickish boxLabel countEntries topOnly pos fvs decl_path =
 
 allocBinTickBox :: (Bool -> BoxLabel) -> SrcSpan -> TM (HsExpr Id)
                 -> TM (LHsExpr Id)
-allocBinTickBox boxLabel pos m
- | not opt_Hpc = allocTickBox (ExpBox False) False False pos m
- | isGoodSrcSpan' pos =
- do
- e <- m
+allocBinTickBox boxLabel pos m = do {
+ ; env <- getEnv
+ ; case tickishType env of
+   HpcTicks -> do {
+ ; e <- m
+ ; if not (isGoodSrcSpan' pos)
+   then return (L pos e)
+   else
  TM $ \ env st ->
   let meT = (pos,declPath env, [],boxLabel True)
       meF = (pos,declPath env, [],boxLabel False)
@@ -993,7 +1007,9 @@ allocBinTickBox boxLabel pos m
              , noFVs
              , st {tickBoxCount=c+3 , mixEntries=meF:meT:meE:mes}
              )
-allocBinTickBox _boxLabel pos m = do e <- m; return (L pos e)
+  }
+   _other -> allocTickBox (ExpBox False) False False pos m
+  }
 
 isGoodSrcSpan' :: SrcSpan -> Bool
 isGoodSrcSpan' pos@(RealSrcSpan _) = srcSpanStart pos /= srcSpanEnd pos

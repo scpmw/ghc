@@ -484,6 +484,8 @@ instance Outputable id => Outputable (Tickish id) where
          (True,True)  -> hcat [ptext (sLit "scctick<"), ppr cc, char '>']
          (True,False) -> hcat [ptext (sLit "tick<"),    ppr cc, char '>']
          _            -> hcat [ptext (sLit "scc<"),     ppr cc, char '>']
+  ppr (SourceNote span) = hcat [ptext (sLit "src<"), ppr span, char '>']
+  ppr (CoreNote {})     = ptext (sLit "core<...>")
 \end{code}
 
 -----------------------------------------------------

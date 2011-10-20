@@ -257,7 +257,8 @@ SCC expressions are treated specially. They set the current cost
 centre.
 
 \begin{code}
-cgExpr (StgSCC cc tick push expr) = do emitSetCCC cc tick push; cgExpr expr
+cgExpr (StgTick (ProfNote cc tick push) expr) = do
+  emitSetCCC cc tick push; cgExpr expr
 \end{code}
 
 %********************************************************
@@ -267,9 +268,25 @@ cgExpr (StgSCC cc tick push expr) = do emitSetCCC cc tick push; cgExpr expr
 %********************************************************
 
 \begin{code}
-cgExpr (StgTick m n expr) = do cgTickBox m n; cgExpr expr
+cgExpr (StgTick (HpcTick m n) expr) = do
+  cgTickBox m n; cgExpr expr
 \end{code}
 
+%********************************************************
+%*                                                     *
+%*             Debug Annotations                       *
+%*                                                     *
+%********************************************************
+
+\begin{code}
+
+cgExpr (StgTick (SourceNote src) expr) = do
+  cgExpr expr
+
+cgExpr (StgTick (CoreNote bnd core) expr) = do
+  cgExpr expr
+
+\end{code}
 %********************************************************
 %*                                                     *
 %*             Anything else                           *

@@ -9,7 +9,7 @@
 -- | CoreSyn holds all the main data types for use by for the Glasgow Haskell Compiler midsection
 module CoreSyn (
 	-- * Main data types
-	Expr(..), Alt, Bind(..), AltCon(..), Arg, Tickish(..),
+	Expr(..), Alt, Bind(..), AltCon(..), Arg, Tickish(..), ExprPtr(..),
 	CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
 	TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..),
 
@@ -94,6 +94,7 @@ import BasicTypes
 import FastString
 import Outputable
 import Util
+import SrcLoc     ( RealSrcSpan )
 
 import Data.Data hiding (TyCon)
 import Data.Word
@@ -349,8 +350,25 @@ data Tickish id =
                                 -- Note [substTickish] in CoreSubst.
     }
 
+  | SourceNote
+    { sourceSpan :: RealSrcSpan -- ^ Source covered
+    }
+
+  -- | A core note. These types of ticks only live after Core2Stg and
+  -- carry the core that a piece of Stg was generated from.
+  | CoreNote
+    { coreBind :: Var          -- ^ Name the core fragment is bound to
+    , coreNote :: ExprPtr Var  -- ^ Source covered
+    }
+
   deriving (Eq, Ord, Data, Typeable)
 
+-- | A hackish newtype wrapper making the expression ignored by all
+-- equality checks
+newtype ExprPtr id = ExprPtr (Expr id)
+                   deriving (Data, Typeable)
+instance Eq (ExprPtr id)  where _ == _       = True
+instance Ord (ExprPtr id) where compare _ _  = EQ
 
 -- | A "tick" note is one that counts evaluations in some way.  We
 -- cannot discard a tick, and the compiler should preserve the number
@@ -364,6 +382,8 @@ tickishCounts :: Tickish id -> Bool
 tickishCounts n@ProfNote{} = profNoteCount n
 tickishCounts HpcTick{}    = True
 tickishCounts Breakpoint{} = True
+tickishCounts SourceNote{} = False
+tickishCounts CoreNote{}   = False
 
 tickishScoped :: Tickish id -> Bool
 tickishScoped n@ProfNote{} = profNoteScope n
@@ -372,6 +392,8 @@ tickishScoped Breakpoint{} = True
    -- Breakpoints are scoped: eventually we're going to do call
    -- stacks, but also this helps prevent the simplifier from moving
    -- breakpoints around and changing their result type (see #1531).
+tickishScoped SourceNote{} = True
+tickishScoped CoreNote{}   = True
 
 mkNoTick :: Tickish id -> Tickish id
 mkNoTick n@ProfNote{} = n {profNoteCount = False}
@@ -384,7 +406,9 @@ mkNoScope t = t
 -- | Return True if this source annotation compiles to some code, or will
 -- disappear before the backend.
 tickishIsCode :: Tickish id -> Bool
-tickishIsCode _tickish = True  -- all of them for now
+tickishIsCode SourceNote{} = False
+tickishIsCode CoreNote{}   = False
+tickishIsCode _tickish     = True  -- all the rest for now
 \end{code}
 
 
@@ -1229,6 +1253,8 @@ seqTickish :: Tickish Id -> ()
 seqTickish ProfNote{ profNoteCC = cc } = cc `seq` ()
 seqTickish HpcTick{} = ()
 seqTickish Breakpoint{ breakpointFVs = ids } = seqBndrs ids
+seqTickish SourceNote{} = ()
+seqTickish CoreNote{} = ()
 
 seqBndr :: CoreBndr -> ()
 seqBndr b = b `seq` ()
