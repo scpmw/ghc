@@ -19,6 +19,7 @@ import FastString
 import Outputable
 import Unique
 
+import qualified Data.Map as Map ( lookup )
 
 -- ----------------------------------------------------------------------------
 -- * Top level
@@ -81,11 +82,11 @@ pprLlvmData (globals, types) =
 
 
 -- | Pretty print LLVM code
-pprLlvmCmmDecl :: LlvmEnv -> Int -> LlvmCmmDecl -> (SDoc, [LlvmVar])
-pprLlvmCmmDecl _ _ (CmmData _ lmdata)
+pprLlvmCmmDecl :: LlvmEnv -> TickMap -> Int -> LlvmCmmDecl -> (SDoc, [LlvmVar])
+pprLlvmCmmDecl _ _ _ (CmmData _ lmdata)
   = (vcat $ map pprLlvmData lmdata, [])
 
-pprLlvmCmmDecl env count (CmmProc mb_info entry_lbl (ListGraph blks))
+pprLlvmCmmDecl env tick_map count (CmmProc mb_info entry_lbl (ListGraph blks))
   = let (idoc, ivar) = case mb_info of
                         Nothing -> (empty, [])
                         Just (Statics info_lbl dat)
@@ -100,7 +101,8 @@ pprLlvmCmmDecl env count (CmmProc mb_info entry_lbl (ListGraph blks))
                       else Internal
             lmblocks = map (\(BasicBlock id stmts) ->
                                 LlvmBlock (getUnique id) stmts) blks
-            fun = mkLlvmFunc env lbl' link  sec' lmblocks
+            instr = Map.lookup entry_lbl tick_map >>= timInstr
+            fun = mkLlvmFunc env lbl' link  sec' lmblocks instr
         in ppLlvmFunction fun
     ), ivar)
 

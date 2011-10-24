@@ -101,12 +101,12 @@ llvmFunSig' lbl link
                         (map (toParams . getVarType) llvmFunArgs) llvmFunAlign
 
 -- | Create a Haskell function in LLVM.
-mkLlvmFunc :: LlvmEnv -> CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
+mkLlvmFunc :: LlvmEnv -> CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks -> Maybe Int
            -> LlvmFunction
-mkLlvmFunc env lbl link sec blks
+mkLlvmFunc env lbl link sec blks instr
   = let funDec = llvmFunSig env lbl link
         funArgs = map (fsLit . Outp.showSDoc . ppPlainName) llvmFunArgs
-    in LlvmFunction funDec funArgs llvmStdFunAttrs sec blks
+    in LlvmFunction funDec funArgs llvmStdFunAttrs sec blks instr
 
 -- | Alignment to use for functions
 llvmFunAlign :: LMAlign
