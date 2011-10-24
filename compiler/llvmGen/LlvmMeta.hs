@@ -4,7 +4,7 @@
 -- | Generates meta information about the program useful for debugging and profiling
 --
 
-module LlvmMeta ( cmmMetaLlvmGens ) where
+module LlvmMeta ( cmmMetaLlvmGens, cmmDebugLlvmGens ) where
 
 import Llvm
 
@@ -16,9 +16,14 @@ import Module
 import DynFlags
 import FastString
 
+import Name            ( Name, nameOccName )
+import Literal         ( Literal(..) )
+import OccName         ( occNameFS )
+import Var             ( Var, varName )
 import OldCmm
 import Outputable
 import CoreSyn
+import Platform
 import SrcLoc          (srcSpanFile,
                         srcSpanStartLine, srcSpanStartCol,
                         srcSpanEndLine, srcSpanEndCol)
@@ -28,8 +33,11 @@ import Control.Monad   (forM, forM_)
 import Data.List       (nubBy, find, maximumBy)
 import Data.Maybe      (fromMaybe, mapMaybe)
 import Data.Map as Map (Map, fromList, assocs, lookup, elems)
+import Data.Set as Set (Set, fromList, member)
 import Data.Function   (on)
 import Data.IORef
+import Data.Char       (ord, isAscii, isPrint, intToDigit)
+import Data.Word       (Word16)
 
 #define EVENTLOG_CONSTANTS_ONLY
 #include "../../includes/rts/EventLogFormat.h"
@@ -238,8 +246,156 @@ isSourceTick :: Tickish () -> Bool
 isSourceTick SourceNote {} = True
 isSourceTick _             = False
 
-mkI32, mkI64 :: Integer -> LlvmLit
+-- | Intelligent constructor, deriving the type of the structure
+-- automatically.
+mkStaticStruct :: [LlvmStatic] -> LlvmStatic
+mkStaticStruct elems = LMStaticStruc elems typ
+  where typ = LMStruct $ map getStatType elems
+
+-- | Automatically calculates the correct size of the string
+mkStaticString :: String -> LlvmStatic
+-- It seems strings aren't really supported in the LLVM back-end right
+-- now - probably mainly because LLVM outputs Haskell strings as
+-- arrays. So this is a bit bizarre: We need to escape the string
+-- first, as well as account for the fact that the backend adds a
+-- "\\00" that we actually neither want nor need. I am a bit unsure
+-- though what the "right thing to do" is here, therefore I'll just
+-- hack around it for the moment. Also: This is inefficient. -- PMW
+mkStaticString str = LMStaticStr (mkFastString (concatMap esc str)) typ
+  where typ = LMArray (length str + 1) i8
+        esc '\\'   = "\\\\"
+        esc '\"'   = "\\22"
+        esc '\n'   = "\\0a"
+        esc c | isAscii c && isPrint c = [c]
+        esc c      = ['\\', intToDigit (ord c `div` 16), intToDigit (ord c `mod` 16)]
+
+-- | Collapses a tree of structures into a single structure, which has the same
+-- data layout, but is quicker to produce
+flattenStruct :: LlvmStatic -> LlvmStatic
+flattenStruct start = mkStaticStruct $ go start []
+  where go (LMStaticStruc elems _) xs = foldr go xs elems
+        go other                   xs = other:xs
+
+-- | Outputs a 16 bit word in big endian. This is required for all
+-- values that the RTS will just copy into the event log later
+mkLit16BE :: Int -> LlvmStatic
+ -- This is obviously not portable. I suppose you'd have to either
+ -- generate a structure or detect our current alignment.
+mkLit16BE n = LMStaticLit $ mkI16 $ fromIntegral $ (b1 + 256 * b2)
+  where (b1, b2) = (fromIntegral n :: Word16) `divMod` 256
+
+-- | Packs the given static value into a (variable-length) event-log
+-- packet.
+mkEvent :: Int -> LlvmStatic -> LlvmStatic
+mkEvent id cts
+  = mkStaticStruct [ LMStaticLit $ mkI8 $ fromIntegral id
+                   , LMStaticLit $ mkI16 $ fromIntegral size
+                   , cts]
+  where size = (llvmWidthInBits (getStatType cts) + 7) `div` 8
+
+mkModuleEvent :: Module -> ModLocation -> LlvmStatic
+mkModuleEvent _mod loc
+  = mkEvent EVENT_DEBUG_MODULE $ mkStaticStruct
+      [ mkStaticString $ case ml_hs_file loc of
+           Just file -> file
+           _         -> "??"
+      ]
+
+mkProcedureEvent :: Platform -> TickMapEntry -> CLabel -> LlvmStatic
+mkProcedureEvent platform tim lbl
+  = mkEvent EVENT_DEBUG_PROCEDURE $ mkStaticStruct
+      [ mkLit16BE $ fromMaybe none $ timInstr tim
+      , mkLit16BE $ fromMaybe none $ timParent tim
+      , mkStaticString $ showSDoc $ pprCLabel platform lbl
+        -- TODO: Hack!
+      ]
+  where none = 0xffff
+
+mkAnnotEvent :: Set Name -> Tickish () -> [LlvmStatic]
+mkAnnotEvent _ (SourceNote ss)
+  = [src_ev]
+    --if null names then [src_ev] else [name_ev, src_ev]
+  where
+    src_ev = mkEvent EVENT_DEBUG_SOURCE $ mkStaticStruct
+             [ mkLit16BE $ srcSpanStartLine ss
+             , mkLit16BE $ srcSpanStartCol ss
+             , mkLit16BE $ srcSpanEndLine ss
+             , mkLit16BE $ srcSpanEndCol ss
+               -- TODO: File!
+             ]
+{-
+    name_ev = mkEvent EVENT_DEBUG_NAME $ mkStaticStruct
+              [mkStaticString $ intercalate "/" names]
+-}
+mkAnnotEvent bnds (CoreNote lbl (ExprPtr core))
+  = [mkEvent EVENT_DEBUG_CORE $ mkStaticStruct
+      [ mkStaticString $ showSDoc $ ppr lbl
+      , mkStaticString $ showSDoc $ ppr $ stripCore bnds core
+      ]]
+mkAnnotEvent _ _ = []
+
+mkEvents :: Platform -> Set Name -> Module -> ModLocation -> TickMap -> LlvmStatic
+mkEvents platform bnds mod loc tick_map
+  = mkStaticStruct $
+      [ mkModuleEvent mod loc ] ++
+      concat [ mkProcedureEvent platform tim lbl
+               : concatMap (mkAnnotEvent bnds) (timTicks tim)
+             | (lbl, tim) <- assocs tick_map] ++
+      [ LMStaticLit $ mkI8 0 ]
+
+collectBinds :: Tickish () -> [Name]
+--collectBinds (CoreTick bnd _) = [bnd]
+collectBinds _                = []
+
+cmmDebugLlvmGens :: DynFlags -> Module -> ModLocation ->
+                    (SDoc -> IO ()) -> TickMap -> LlvmEnv -> IO ()
+cmmDebugLlvmGens dflags mod loc render tick_map _env = do
+
+  let collect tim = concatMap collectBinds $ timTicks tim
+      binds =  Set.fromList $ concatMap collect $ elems tick_map
+
+  let platform = targetPlatform dflags
+
+  let events     = flattenStruct $ mkEvents platform binds mod loc tick_map
+      ty         = getStatType events
+      debug_sym  = fsLit $ renderWithStyle (pprCLabel platform (mkHpcDebugData mod)) (mkCodeStyle CStyle)
+      sectName   = Just $ fsLit ".__ghc_debug"
+      lmDebugVar = LMGlobalVar debug_sym ty ExternallyVisible sectName Nothing False
+      lmDebug    = LMGlobal lmDebugVar (Just events)
+
+  render $ pprLlvmData ([lmDebug], [])
+
+mkI8, mkI16, mkI32, mkI64 :: Integer -> LlvmLit
+mkI8 n = LMIntLit n (LMInt 8)
+mkI16 n = LMIntLit n (LMInt 16)
 mkI32 n = LMIntLit n (LMInt 32)
 mkI64 n = LMIntLit n (LMInt 64)
 mkI1 :: Bool -> LlvmLit
 mkI1 f = LMIntLit (if f then 1 else 0) (LMInt 1)
+
+placeholder :: Var -> CoreExpr
+placeholder = Lit . MachStr . occNameFS . nameOccName . varName -- for now
+
+stripCore :: Set Name -> CoreExpr -> CoreExpr
+stripCore bs (App e1 e2) = App (stripCore bs e1) (stripCore bs e2)
+stripCore bs (Lam b e)
+  | varName b `member` bs= Lam b (placeholder b)
+  | otherwise            = Lam b (stripCore bs e)
+stripCore bs (Let es e)  = Let (stripLet bs es) (stripCore bs e)
+stripCore bs (Tick _ e)  = stripCore bs e -- strip out
+stripCore bs (Case e b t as)
+  | varName b `member` bs= Case (stripCore bs e) b t [(DEFAULT,[],placeholder b)]
+  | otherwise            = Case (stripCore bs e) b t (map stripAlt as)
+  where stripAlt (a, bn, e) = (a, bn, stripCore bs e)
+stripCore bs (CoreSyn.Cast e _)  = stripCore bs e -- strip out
+stripCore _  other       = other
+
+stripLet :: Set Name -> CoreBind -> CoreBind
+stripLet bs (NonRec b e)
+  | varName b `member` bs= NonRec b (placeholder b)
+  | otherwise            = NonRec b (stripCore bs e)
+stripLet bs (Rec ps)     = Rec (map f ps)
+  where
+    f (b, e)
+      | varName b `member` bs = (b, placeholder b)
+      | otherwise        = (b, stripCore bs e)

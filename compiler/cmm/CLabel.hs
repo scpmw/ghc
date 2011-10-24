@@ -91,6 +91,7 @@ module CLabel (
         mkDeadStripPreventer,
 
         mkHpcTicksLabel,
+        mkHpcDebugData,
 
         hasCAF,
         needsCDecl, isAsmTemp, maybeAsmTemp, externallyVisibleCLabel,
@@ -220,6 +221,9 @@ data CLabel
 
   -- | Per-module table of tick locations
   | HpcTicksLabel Module
+
+  -- | Per-module debug data
+  | HpcDebugData Module
 
   -- | Label of an StgLargeSRT
   | LargeSRTLabel
@@ -508,8 +512,9 @@ mkRtsSlowTickyCtrLabel pat = RtsLabel (RtsSlowTickyCtr pat)
 
 
 -- Constructing Code Coverage Labels
-mkHpcTicksLabel :: Module -> CLabel
+mkHpcTicksLabel, mkHpcDebugData :: Module -> CLabel
 mkHpcTicksLabel                = HpcTicksLabel
+mkHpcDebugData                 = HpcDebugData
 
 
 -- Constructing labels used for dynamic linking
@@ -612,6 +617,7 @@ needsCDecl l@(ForeignLabel{})           = not (isMathFun l)
 needsCDecl (CC_Label _)                 = True
 needsCDecl (CCS_Label _)                = True
 needsCDecl (HpcTicksLabel _)            = True
+needsCDecl (HpcDebugData _)             = True
 needsCDecl (DynamicLinkerLabel {})      = panic "needsCDecl DynamicLinkerLabel"
 needsCDecl PicBaseLabel                 = panic "needsCDecl PicBaseLabel"
 needsCDecl (DeadStripPreventer {})      = panic "needsCDecl DeadStripPreventer"
@@ -735,7 +741,8 @@ externallyVisibleCLabel (IdLabel name _ info)   = isExternalName name && externa
 externallyVisibleCLabel (CC_Label _)            = True
 externallyVisibleCLabel (CCS_Label _)           = True
 externallyVisibleCLabel (DynamicLinkerLabel _ _)  = False
-externallyVisibleCLabel (HpcTicksLabel _)       = True
+externallyVisibleCLabel (HpcTicksLabel _)	    = True
+externallyVisibleCLabel (HpcDebugData _)	    = True
 externallyVisibleCLabel (LargeBitmapLabel _)    = False
 externallyVisibleCLabel (LargeSRTLabel _)       = False
 externallyVisibleCLabel (PicBaseLabel {}) = panic "externallyVisibleCLabel PicBaseLabel"
@@ -1059,6 +1066,9 @@ pprCLbl (PlainModuleInitLabel mod)
 
 pprCLbl (HpcTicksLabel mod)
   = ptext (sLit "_hpc_tickboxes_")  <> ppr mod <> ptext (sLit "_hpc")
+
+pprCLbl (HpcDebugData mod)
+  = ptext (sLit "_hpc_debug_data_")  <> ppr mod <> ptext (sLit "_hpc")
 
 pprCLbl (AsmTempLabel {})       = panic "pprCLbl AsmTempLabel"
 pprCLbl (DynamicLinkerLabel {}) = panic "pprCLbl DynamicLinkerLabel"

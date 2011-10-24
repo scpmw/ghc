@@ -57,6 +57,7 @@ llvmCodeGen dflags mod location h us cmms tick_map
         env' <- cmmDataLlvmGens dflags render (setLlvmVer ver env) cdata []
         env'' <- cmmProcLlvmGens dflags render us env' cmm tick_map 1 []
         cmmMetaLlvmGens dflags mod location render tick_map env'' cmm
+        cmmDebugLlvmGens dflags mod location render tick_map env''
 
         bFlush bufh
         return  ()
