@@ -148,6 +148,7 @@ import Exception
 import Control.Monad
 import Data.Maybe
 import Data.IORef
+import Data.Map as Map  ( empty )
 \end{code}
 #include "HsVersions.h"
 
@@ -1113,10 +1114,12 @@ hscGenHardCode cgguts mod_summary
 
          ------------------  Code generation ------------------
          
-         cmms <- if dopt Opt_TryNewCodeGen dflags
-                 then tryNewCodeGen hsc_env this_mod data_tycons
+         (cmms, tick_map)
+              <- if dopt Opt_TryNewCodeGen dflags
+                 then do cmms <- tryNewCodeGen hsc_env this_mod data_tycons
                                  cost_centre_info
                                  stg_binds hpc_info
+                         return (cmms, Map.empty)
                  else {-# SCC "CodeGen" #-}
                        codeGen dflags this_mod data_tycons
                                cost_centre_info
@@ -1128,7 +1131,7 @@ hscGenHardCode cgguts mod_summary
          dumpIfSet_dyn dflags Opt_D_dump_raw_cmm "Raw Cmm" (pprPlatform platform rawcmms)
          (_stub_h_exists, stub_c_exists)
              <- codeOutput dflags this_mod location foreign_stubs 
-                dependencies rawcmms
+                dependencies rawcmms tick_map
          return stub_c_exists
 
 hscInteractive :: (ModIface, ModDetails, CgGuts)
@@ -1137,8 +1140,6 @@ hscInteractive :: (ModIface, ModDetails, CgGuts)
 #ifdef GHCI
 hscInteractive (iface, details, cgguts) mod_summary
     = do 
-
-         let this_mod = undefined -- Temporary hack
 
          dflags <- getDynFlags
          let CgGuts{ -- This is the last use of the ModGuts in a compilation.
@@ -1181,7 +1182,7 @@ hscCompileCmmFile hsc_env filename
       cmm <- ioMsgMaybe $ parseCmmFile dflags filename
       liftIO $ do
         rawCmms <- cmmToRawCmm (targetPlatform dflags) [cmm]
-        _ <- codeOutput dflags no_mod no_loc NoStubs [] rawCmms
+        _ <- codeOutput dflags no_mod no_loc NoStubs [] rawCmms Map.empty
         return ()
   where
 	no_mod = panic "hscCmmFile: no_mod"

@@ -258,6 +258,7 @@ centre.
 
 \begin{code}
 cgExpr (StgTick (ProfNote cc tick push) expr) = do
+  addTick (ProfNote cc tick push)
   emitSetCCC cc tick push; cgExpr expr
 \end{code}
 
@@ -269,6 +270,7 @@ cgExpr (StgTick (ProfNote cc tick push) expr) = do
 
 \begin{code}
 cgExpr (StgTick (HpcTick m n) expr) = do
+  addTick (HpcTick m n)
   cgTickBox m n; cgExpr expr
 \end{code}
 
@@ -281,9 +283,11 @@ cgExpr (StgTick (HpcTick m n) expr) = do
 \begin{code}
 
 cgExpr (StgTick (SourceNote src) expr) = do
+  addTick (SourceNote src)
   cgExpr expr
 
 cgExpr (StgTick (CoreNote bnd core) expr) = do
+  addTick (CoreNote bnd core)
   cgExpr expr
 
 \end{code}

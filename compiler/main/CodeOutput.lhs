@@ -23,6 +23,7 @@ import HscTypes
 import DynFlags
 import Config
 import SysTools
+import CLabel           ( TickMap )
 
 import ErrUtils		( dumpIfSet_dyn, showPass, ghcExit )
 import Outputable
@@ -49,9 +50,10 @@ codeOutput :: DynFlags
 	   -> ForeignStubs
 	   -> [PackageId]
            -> [RawCmmGroup]                       -- Compiled C--
+           -> TickMap
            -> IO (Bool{-stub_h_exists-}, Maybe FilePath{-stub_c_exists-})
 
-codeOutput dflags this_mod location foreign_stubs pkg_deps flat_abstractC
+codeOutput dflags this_mod location foreign_stubs pkg_deps flat_abstractC tick_map
   = 
     -- You can have C (c_output) or assembly-language (ncg_output),
     -- but not both.  [Allowing for both gives a space leak on

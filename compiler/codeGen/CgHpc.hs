@@ -6,7 +6,7 @@
 --
 -----------------------------------------------------------------------------
 
-module CgHpc (cgTickBox, hpcTable) where
+module CgHpc (cgTickBox, cgInstrument, hpcTable) where
 
 import OldCmm
 import CLabel
@@ -28,6 +28,15 @@ cgTickBox mod n = do
                                                , CmmLit (CmmInt 1 W64)
                                                ])
               ] 
+
+
+-- | Adds instrumentation to the given code-gen output. Returns the ID
+-- associated with the code.
+cgInstrument :: Int -> Code -> Code
+cgInstrument instr code = do
+
+      -- Generate rest of code, publish instrumentation ID in monad
+      withInstr instr code
 
 hpcTable :: Module -> HpcInfo -> Code
 hpcTable this_mod (HpcInfo hpc_tickCount _) = do

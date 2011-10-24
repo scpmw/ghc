@@ -210,13 +210,14 @@ stmtsEC stmts = code (stmtsC stmts)
 
 -- | Get the generated statements out of the monad state.
 getCgStmtsEC :: ExtFCode a -> ExtFCode CgStmts
-getCgStmtsEC = code2 getCgStmts'
+getCgStmtsEC = code2 (\m -> getCgStmts' m >>= f)
+  where f ((decl, b), (c, _)) = return ((decl, b), c)
 
 
 -- | Get the generated statements, and the return value out of the monad state.
 getCgStmtsEC' :: ExtFCode a -> ExtFCode (a, CgStmts)
 getCgStmtsEC' = code2 (\m -> getCgStmts' m >>= f)
-  where f ((decl, b), c) = return ((decl, b), (b, c))
+  where f ((decl, b), (c, _)) = return ((decl, b), (b, c))
 
 
 -- | Emit a chunk of code outside the instruction stream, 

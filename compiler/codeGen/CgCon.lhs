@@ -30,6 +30,7 @@ import CgTailCall
 import CgProf
 import CgTicky
 import CgInfoTbls
+import CgHpc (cgInstrument)
 import CLabel
 import ClosureInfo
 import OldCmmUtils
@@ -449,8 +450,9 @@ cgDataCon data_con
 		layOutDynConstr    data_con arg_reps
 
 	    emit_info cl_info ticky_code
-		= do { code_blks <- getCgStmts the_code
-		     ; emitClosureCodeAndInfoTable cl_info [] code_blks }
+		= do { instr <- freshInstr
+		     ; (code_blks, ticks) <- getCgStmts (cgInstrument instr the_code)
+		     ; emitClosureCodeAndInfoTable cl_info [] code_blks instr ticks }
 		where
 		  the_code = do	{ _ <- ticky_code
 				; ldvEnter (CmmReg nodeReg)
