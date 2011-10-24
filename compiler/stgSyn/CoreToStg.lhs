@@ -240,7 +240,7 @@ coreToTopStgRhs this_pkg scope_fv_info (bndr, rhs)
   = do { (new_rhs, rhs_fvs, _) <- coreToStgExpr rhs
        ; lv_info <- freeVarsToLiveVars rhs_fvs
 
-       ; let stg_rhs   = mkTopStgRhs this_pkg rhs_fvs (mkSRT lv_info) bndr_info new_rhs
+       ; let stg_rhs   = mkTopStgRhs this_pkg rhs_fvs (mkSRT lv_info) bndr_info (annotateCore (bndr, rhs)) new_rhs
              stg_arity = stgRhsArity stg_rhs
        ; return (ASSERT2( arity_ok stg_arity, mk_arity_msg stg_arity) stg_rhs,
                  rhs_fvs) }
@@ -267,26 +267,27 @@ coreToTopStgRhs this_pkg scope_fv_info (bndr, rhs)
                 ptext (sLit "STG arity:") <+> ppr stg_arity]
 
 mkTopStgRhs :: PackageId -> FreeVarsInfo
-            -> SRT -> StgBinderInfo -> StgExpr
+            -> SRT -> StgBinderInfo -> (StgExpr -> StgExpr)
+            -> StgExpr
             -> StgRhs
 
-mkTopStgRhs _ rhs_fvs srt binder_info (StgLam _ bndrs body)
+mkTopStgRhs _ rhs_fvs srt binder_info annot (StgLam _ bndrs body)
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   ReEntrant
                   srt
-                  bndrs body
+                  bndrs (annot body)
 
-mkTopStgRhs this_pkg _ _ _ (StgConApp con args)
+mkTopStgRhs this_pkg _ _ _ _ (StgConApp con args)
   | not (isDllConApp this_pkg con args)  -- Dynamic StgConApps are updatable
   = StgRhsCon noCCS con args
 
-mkTopStgRhs _ rhs_fvs srt binder_info rhs
+mkTopStgRhs _ rhs_fvs srt binder_info annot rhs
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   Updatable
                   srt
-                  [] rhs
+                  [] (annot rhs)
 \end{code}
 
 
@@ -752,25 +753,25 @@ coreToStgRhs :: FreeVarsInfo            -- Free var info for the scope of the bi
 coreToStgRhs scope_fv_info binders (bndr, rhs) = do
     (new_rhs, rhs_fvs, rhs_escs) <- coreToStgExpr rhs
     lv_info <- freeVarsToLiveVars (binders `minusFVBinders` rhs_fvs)
-    return (mkStgRhs rhs_fvs (mkSRT lv_info) bndr_info new_rhs,
+    return (mkStgRhs rhs_fvs (mkSRT lv_info) bndr_info (annotateCore (bndr, rhs)) new_rhs,
             rhs_fvs, lv_info, rhs_escs)
   where
     bndr_info = lookupFVInfo scope_fv_info bndr
 
-mkStgRhs :: FreeVarsInfo -> SRT -> StgBinderInfo -> StgExpr -> StgRhs
+mkStgRhs :: FreeVarsInfo -> SRT -> StgBinderInfo -> (StgExpr -> StgExpr) -> StgExpr -> StgRhs
 
-mkStgRhs _ _ _ (StgConApp con args) = StgRhsCon noCCS con args
+mkStgRhs _ _ _ _ (StgConApp con args) = StgRhsCon noCCS con args
 
-mkStgRhs rhs_fvs srt binder_info (StgLam _ bndrs body)
+mkStgRhs rhs_fvs srt binder_info annot (StgLam _ bndrs body)
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   ReEntrant
-                  srt bndrs body
+                  srt bndrs (annot body)
 
-mkStgRhs rhs_fvs srt binder_info rhs
+mkStgRhs rhs_fvs srt binder_info annot rhs
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
-                  upd_flag srt [] rhs
+                  upd_flag srt [] (annot rhs)
   where
    upd_flag = Updatable
   {-
@@ -800,6 +801,19 @@ mkStgRhs rhs_fvs srt binder_info rhs
         -- specifically Main.lvl6 in spectral/cryptarithm2.
         -- So no great loss.  KSW 2000-07.
 -}
+
+-- | Adds a "core" annotation to the Rhs
+annotateCore :: (Id, CoreExpr) -> StgExpr -> StgExpr
+  -- TODO: Not having this special case makes GHC generate duplicated labels
+  -- in the back-end for some reason. Figure out exactly why. -- PMW
+annotateCore _ rhs@(StgApp _ []) = rhs
+annotateCore (bnd, expr) rhs = StgTick note rhs
+ where
+   note = CoreNote {
+     coreBind = bnd,
+     coreNote = ExprPtr expr
+     }
+
 \end{code}
 
 Detect thunks which will reduce immediately to PAPs, and make them
