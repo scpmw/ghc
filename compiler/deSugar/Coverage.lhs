@@ -196,8 +196,8 @@ mkDensity dflags
   | ProfAutoAll     <- profAuto dflags   = TickAllFunctions
   | ProfAutoTop     <- profAuto dflags   = TickTopFunctions
   | ProfAutoExports <- profAuto dflags   = TickExportedFunctions
-  | any ((WayEventLog ==) . wayName) (ways dflags) = TickForCoverage
-  | otherwise = panic "desnity"
+  | HscLlvm         <- hscTarget dflags  = TickForCoverage
+  | otherwise = panic "density"
 
 
 -- -----------------------------------------------------------------------------

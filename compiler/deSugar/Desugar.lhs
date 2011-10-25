@@ -98,6 +98,7 @@ deSugar hsc_env
                      (binds_cvr,ds_hpc_info, modBreaks)
 			 <- if (opt_Hpc
 				  || target == HscInterpreted
+				  || hscTarget dflags == HscLlvm
 				  || case profAuto dflags of NoProfAuto -> False
 				                             _ -> True)
 			       && (not (isHsBoot hsc_src))
