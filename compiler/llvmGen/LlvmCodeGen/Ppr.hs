@@ -16,8 +16,7 @@ import CLabel
 import OldCmm
 
 import FastString
-import qualified Outputable
-import Pretty
+import Outputable
 import Unique
 
 
@@ -26,7 +25,7 @@ import Unique
 --
 
 -- | LLVM module layout description for the host target
-moduleLayout :: Doc
+moduleLayout :: SDoc
 moduleLayout =
 #if i386_TARGET_ARCH
 
@@ -65,27 +64,24 @@ moduleLayout =
 
 
 -- | Header code for LLVM modules
-pprLlvmHeader :: Doc
+pprLlvmHeader :: SDoc
 pprLlvmHeader = moduleLayout
 
 
 -- | Pretty print LLVM data code
-pprLlvmData :: LlvmData -> Doc
+pprLlvmData :: LlvmData -> SDoc
 pprLlvmData (globals, types) =
-    let tryConst (v, Just s )   = ppLlvmGlobal (v, Just s)
-        tryConst g@(_, Nothing) = ppLlvmGlobal g
-
-        ppLlvmTys (LMAlias    a) = ppLlvmAlias a
+    let ppLlvmTys (LMAlias    a) = ppLlvmAlias a
         ppLlvmTys (LMFunction f) = ppLlvmFunctionDecl f
         ppLlvmTys _other         = empty
 
         types'   = vcat $ map ppLlvmTys types
-        globals' = vcat $ map tryConst globals
+        globals' = ppLlvmGlobals globals
     in types' $+$ globals'
 
 
 -- | Pretty print LLVM code
-pprLlvmCmmDecl :: LlvmEnv -> Int -> LlvmCmmDecl -> (Doc, [LlvmVar])
+pprLlvmCmmDecl :: LlvmEnv -> Int -> LlvmCmmDecl -> (SDoc, [LlvmVar])
 pprLlvmCmmDecl _ _ (CmmData _ lmdata)
   = (vcat $ map pprLlvmData lmdata, [])
 
@@ -110,18 +106,18 @@ pprLlvmCmmDecl env count (CmmProc mb_info entry_lbl (ListGraph blks))
 
 
 -- | Pretty print CmmStatic
-pprInfoTable :: LlvmEnv -> Int -> CLabel -> CmmStatics -> (Doc, [LlvmVar])
+pprInfoTable :: LlvmEnv -> Int -> CLabel -> CmmStatics -> (SDoc, [LlvmVar])
 pprInfoTable env count info_lbl stat
   = let unres = genLlvmData env (Text, stat)
         (_, (ldata, ltypes)) = resolveLlvmData env unres
 
-        setSection ((LMGlobalVar _ ty l _ _ c), d)
+        setSection (LMGlobal (LMGlobalVar _ ty l _ _ c) d)
             = let sec = mkLayoutSection count
                   ilabel = strCLabel_llvm env info_lbl
                               `appendFS` fsLit iTableSuf
                   gv = LMGlobalVar ilabel ty l sec llvmInfAlign c
                   v = if l == Internal then [gv] else []
-              in ((gv, d), v)
+              in (LMGlobal gv d, v)
         setSection v = (v,[])
 
         (ldata', llvmUsed) = setSection (last ldata)
