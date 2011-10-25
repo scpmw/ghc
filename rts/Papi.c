@@ -28,6 +28,9 @@
 #include "Stats.h"
 #include "Papi.h"
 
+#include "Task.h"
+#include "Trace.h"
+
 // used to protect the aggregated counters
 #ifdef THREADED_RTS
 static Mutex papi_counter_mutex;
@@ -102,7 +105,29 @@ long_long gc1_cycles = 0;
 static long_long papi_counter(long_long values[],int event);
 static void papi_add_events(int EventSet);
 
+#ifdef TRACING
+static void papi_overflow_handler(int EventSet, void *IP, long_long overflow, void *ctx);
+#endif
+
 static nat max_hardware_counters = 2;
+
+
+/* Instruction pointer sampling */
+#ifdef TRACING
+#define INSTR_PTR_SAMPLE_PERIOD 100000 /* How often to read the IP. In cycles */
+#define INSTR_PTR_SAMPLE_SIZE   1024   /* How many IPs to read before generating an event */
+
+#ifdef THREADED_RTS
+#define THREAD __thread
+#define MY_CAP (myTask()->cap)
+#else
+#define THREAD 
+#define MY_CAP (&MainCapability)
+#endif // TREADED_RTS
+
+static THREAD void *instr_ptr_sample[INSTR_PTR_SAMPLE_SIZE];
+static THREAD nat instr_ptr_sample_pos = 0;
+#endif // TRACING
 
 /* If you want to add events to count, extend the
  * init_countable_events and the papi_report function.
@@ -130,10 +155,8 @@ init_countable_events(void)
 #define PAPI_ADD_EVENT(EVENT) papi_add_event(#EVENT,EVENT)
 
     if (RtsFlags.PapiFlags.eventType==PAPI_FLAG_BRANCH) {
-	PAPI_ADD_EVENT(FR_BR);
-	PAPI_ADD_EVENT(FR_BR_MIS);
-	/* Docs are wrong? Opteron does not count indirect branch misses exclusively */
-	PAPI_ADD_EVENT(FR_BR_MISCOMPARE);
+	PAPI_ADD_EVENT(PAPI_BR_CN);
+	PAPI_ADD_EVENT(PAPI_BR_MSP);
     } else if (RtsFlags.PapiFlags.eventType==PAPI_FLAG_STALLS) {
 	PAPI_ADD_EVENT(FR_DISPATCH_STALLS);
 	PAPI_ADD_EVENT(FR_DISPATCH_STALLS_BR);
@@ -181,7 +204,7 @@ init_countable_events(void)
 	// PAPI_ADD_EVENT(PAPI_L2_TCR); // L2 cache reads
 	// PAPI_ADD_EVENT(PAPI_CA_CLN); // exclusive access to clean cache line
 	// PAPI_ADD_EVENT(PAPI_TLB_DM); // TLB misses
-        PAPI_ADD_EVENT(PAPI_TOT_INS); // Total instructions
+    //    PAPI_ADD_EVENT(PAPI_TOT_INS); // Total instructions
         PAPI_ADD_EVENT(PAPI_TOT_CYC); // Total instructions
 	// PAPI_ADD_EVENT(PAPI_CA_SHR); // exclusive access to shared cache line
 	// PAPI_ADD_EVENT(PAPI_RES_STL); // Cycles stalled on any resource
@@ -219,7 +242,7 @@ papi_report(long_long counters[])
     }
 
     if (RtsFlags.PapiFlags.eventType==PAPI_FLAG_BRANCH) {
-	PAPI_REPORT_PCT(counters,FR_BR_MIS,FR_BR);
+	PAPI_REPORT_PCT(counters,PAPI_BR_MSP,PAPI_BR_CN);
 	PAPI_REPORT_PCT(counters,FR_BR_MISCOMPARE,FR_BR);
     }
 
@@ -253,6 +276,7 @@ papi_init_eventset (int *event_set)
 {
     PAPI_register_thread();
     PAPI_CHECK( PAPI_create_eventset(event_set));
+	PAPI_set_multiplex(*event_set);
     papi_add_events(*event_set);
 }
 
@@ -282,11 +306,37 @@ papi_init (void)
     }
 #endif
 
+	PAPI_multiplex_init();
+
     init_countable_events();
 
     papi_init_eventset(&MutatorEvents);
     papi_init_eventset(&GCEvents);
+
+#ifdef TRACING
+	if (RtsFlags.GcFlags.giveStats >= 1) {
+		PAPI_CHECK(PAPI_overflow(MutatorEvents, PAPI_TOT_CYC, 100000, 0,
+		                         &papi_overflow_handler));
+	}
+#endif
 }
+
+#if defined(TRACING)
+
+/* Called by PAPI on each overflow */
+static void
+papi_overflow_handler(int EventSet, void *IP, long_long overflow, void *ctx)
+{
+	// Record
+	instr_ptr_sample[instr_ptr_sample_pos++] = IP;
+	// Overflow?
+	if(instr_ptr_sample_pos >= INSTR_PTR_SAMPLE_SIZE) {
+		traceInstrPtrSample(MY_CAP, INSTR_PTR_SAMPLE_SIZE, instr_ptr_sample);
+		instr_ptr_sample_pos = 0;
+	}
+}
+
+#endif
 
 /* Extract the value corresponding to an event */
 static long_long

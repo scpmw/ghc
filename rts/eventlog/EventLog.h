@@ -81,6 +81,13 @@ void postSparkCountersEvent (Capability *cap,
                              SparkCounters counters,
                              StgWord remaining);
 
+/*
+ * Instruction pointer samples
+ */
+
+void postInstrPtrSample(Capability *cap, StgWord32 cnt, void **ips);
+
+
 #else /* !TRACING */
 
 INLINE_HEADER void postSchedEvent (Capability *cap  STG_UNUSED,

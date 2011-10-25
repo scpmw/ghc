@@ -142,6 +142,9 @@
 #define EVENT_SPARK_GC            41 /* ()                     */
 #define EVENT_INTERN_STRING       42 /* (string, id) {not used by ghc} */
 
+#define EVENT_HPC_MODULE          43 /* (name, boxes, hash)    */
+#define EVENT_TICK_DUMP           44 /* (freqs, counts)        */
+#define EVENT_INSTR_PTR_SAMPLE    45 /* (ips)                  */
 
 /* Range 43 - 59 is available for new GHC and common events */
 
@@ -156,7 +159,7 @@
  * ranges higher than this are reserved but not currently emitted by ghc.
  * This must match the size of the EventDesc[] array in EventLog.c
  */
-#define NUM_GHC_EVENT_TAGS        42
+#define NUM_GHC_EVENT_TAGS        46
 
 #if 0  /* DEPRECATED EVENTS: */
 /* we don't actually need to record the thread, it's implicit */

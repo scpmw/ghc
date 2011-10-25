@@ -91,6 +91,9 @@ char *EventDesc[] = {
   [EVENT_SPARK_STEAL]         = "Spark steal",
   [EVENT_SPARK_FIZZLE]        = "Spark fizzle",
   [EVENT_SPARK_GC]            = "Spark GC",
+  [EVENT_HPC_MODULE]          = "HPC module",
+  [EVENT_TICK_DUMP]           = "Tick dump",
+  [EVENT_INSTR_PTR_SAMPLE]    = "Instruction pointer sample"
 };
 
 // Event type. 
@@ -326,6 +329,9 @@ initEventLogging(void)
         case EVENT_RTS_IDENTIFIER:   // (capset, str)
         case EVENT_PROGRAM_ARGS:     // (capset, strvec)
         case EVENT_PROGRAM_ENV:      // (capset, strvec)
+		case EVENT_HPC_MODULE:       // (name, boxes, hash)
+		case EVENT_TICK_DUMP:        // (freqs, counts)
+		case EVENT_INSTR_PTR_SAMPLE: // (ips)
             eventTypes[t].size = 0xffff;
             break;
 
@@ -737,6 +743,22 @@ void postEventStartup(EventCapNo n_caps)
     postCapNo(&eventBuf, n_caps);
 
     RELEASE_LOCK(&eventBufMutex);
+}
+
+void postInstrPtrSample(Capability *cap, StgWord32 cnt, void **ips)
+{
+	// (size:16, cap:16, cnt * (tick : 32, freq : 32) )
+	nat size = sizeof(EventCapNo) + cnt * sizeof(StgWord32), i;
+	EventsBuf *eb = &capEventBuf[cap->no];
+	
+	postEventHeader(eb, EVENT_INSTR_PTR_SAMPLE);
+	postPayloadSize(eb, size);
+	postCapNo(eb, cap->no);
+	for (i = 0; i < cnt; i++) {
+		// Downcast for 64bit architectures. Hopefully nothing of
+		// value is lost.
+		postWord32(eb, (StgWord32) (intptr_t) ips[i]);
+	}
 }
 
 void closeBlockMarker (EventsBuf *ebuf)

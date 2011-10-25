@@ -533,6 +533,26 @@ void traceUserMsg(Capability *cap, char *msg)
     traceFormatUserMsg(cap, "%s", msg);
 }
 
+void traceInstrPtrSample(Capability *cap, StgWord32 cnt, void **ips)
+{
+#ifdef DEBUG
+	StgWord32 i;
+	if (RtsFlags.TraceFlags.tracing == TRACE_STDERR) {
+		// Maybe sort this somewhen so it looks more useful...
+		tracePreface();
+		debugBelch("cap %d IP sample:", cap->no);
+		for (i = 0; i < cnt; i++)
+			debugBelch(" %p", ips[i]);
+		debugBelch("\n");
+	} else
+#endif
+	{
+        if (eventlog_enabled) {
+            postInstrPtrSample(cap, cnt, ips);
+        }
+	}
+}
+
 void traceThreadStatus_ (StgTSO *tso USED_IF_DEBUG)
 {
 #ifdef DEBUG

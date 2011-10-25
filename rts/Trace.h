@@ -153,6 +153,12 @@ void trace_(char *msg, ...);
  */
 void traceUserMsg(Capability *cap, char *msg);
 
+/*
+ * Instruction pointer samples
+ */
+
+void traceInstrPtrSample(Capability *cap, StgWord32 cnt, void **ips);
+
 /* 
  * Emit a debug message (only when DEBUG is defined)
  */
