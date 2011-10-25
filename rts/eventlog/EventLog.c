@@ -120,6 +120,9 @@ static void closeBlockMarker(EventsBuf *ebuf);
 static StgBool hasRoomForEvent(EventsBuf *eb, EventTypeNum eNum);
 static StgBool hasRoomForVariableEvent(EventsBuf *eb, nat payload_bytes);
 
+static StgBool ensureRoomForEvent(EventsBuf *eb, EventTypeNum eNum);
+static StgBool ensureRoomForVariableEvent(EventsBuf *eb, nat payload_bytes);
+
 static inline void postWord8(EventsBuf *eb, StgWord8 i)
 {
     *(eb->pos++) = i; 
@@ -192,6 +195,81 @@ static inline void postInt64(EventsBuf *eb, StgInt64 i)
 { postWord64(eb, (StgWord64)i); }
 
 
+static StgWord16 getEventSize(EventTypeNum t)
+{
+    switch (t) {
+    case EVENT_CREATE_THREAD:   // (cap, thread)
+    case EVENT_RUN_THREAD:      // (cap, thread)
+    case EVENT_THREAD_RUNNABLE: // (cap, thread)
+    case EVENT_CREATE_SPARK_THREAD: // (cap, spark_thread)
+        return sizeof(EventThreadID);
+
+    case EVENT_MIGRATE_THREAD:  // (cap, thread, new_cap)
+    case EVENT_THREAD_WAKEUP:   // (cap, thread, other_cap)
+        return sizeof(EventThreadID) + sizeof(EventCapNo);
+
+    case EVENT_STOP_THREAD:     // (cap, thread, status)
+        return sizeof(EventThreadID) + sizeof(StgWord16) + sizeof(EventThreadID);
+
+    case EVENT_STARTUP:         // (cap count)
+        return sizeof(EventCapNo);
+
+    case EVENT_CAPSET_CREATE:   // (capset, capset_type)
+        return sizeof(EventCapsetID) + sizeof(EventCapsetType);
+
+    case EVENT_CAPSET_DELETE:   // (capset)
+        return sizeof(EventCapsetID);
+
+    case EVENT_CAPSET_ASSIGN_CAP:  // (capset, cap)
+    case EVENT_CAPSET_REMOVE_CAP:
+        return sizeof(EventCapsetID) + sizeof(EventCapNo);
+
+    case EVENT_OSPROCESS_PID:   // (cap, pid)
+    case EVENT_OSPROCESS_PPID:
+        return sizeof(EventCapsetID) + sizeof(StgWord32);
+
+    case EVENT_SPARK_STEAL:     // (cap, victim_cap)
+        return sizeof(EventCapNo);
+
+    case EVENT_SHUTDOWN:        // (cap)
+    case EVENT_REQUEST_SEQ_GC:  // (cap)
+    case EVENT_REQUEST_PAR_GC:  // (cap)
+    case EVENT_GC_START:        // (cap)
+    case EVENT_GC_END:          // (cap)
+    case EVENT_GC_IDLE:
+    case EVENT_GC_WORK:
+    case EVENT_GC_DONE:
+    case EVENT_SPARK_CREATE:    // (cap)
+    case EVENT_SPARK_DUD:       // (cap)
+    case EVENT_SPARK_OVERFLOW:  // (cap)
+    case EVENT_SPARK_RUN:       // (cap)
+    case EVENT_SPARK_FIZZLE:    // (cap)
+    case EVENT_SPARK_GC:        // (cap)
+        return 0;
+
+    case EVENT_LOG_MSG:          // (msg)
+    case EVENT_USER_MSG:         // (msg)
+    case EVENT_RTS_IDENTIFIER:   // (capset, str)
+    case EVENT_PROGRAM_ARGS:     // (capset, strvec)
+    case EVENT_PROGRAM_ENV:      // (capset, strvec)
+    case EVENT_HPC_MODULE:       // (name, boxes, hash)
+    case EVENT_TICK_DUMP:        // (freqs, counts)
+    case EVENT_INSTR_PTR_SAMPLE: // (ips)
+        return 0xffff;
+
+    case EVENT_SPARK_COUNTERS:   // (cap, 7*counter)
+        return 7 * sizeof(StgWord64);
+
+    case EVENT_BLOCK_MARKER:
+        return sizeof(StgWord32) + sizeof(EventTimestamp) + 
+            sizeof(EventCapNo);
+
+    default:
+        return 0xfffe; /* ignore deprecated events */
+    }
+
+}
+
 void
 initEventLogging(void)
 {
@@ -257,96 +335,10 @@ initEventLogging(void)
 
         eventTypes[t].etNum = t;
         eventTypes[t].desc = EventDesc[t];
+		eventTypes[t].size = getEventSize(t);
 
-        switch (t) {
-        case EVENT_CREATE_THREAD:   // (cap, thread)
-        case EVENT_RUN_THREAD:      // (cap, thread)
-        case EVENT_THREAD_RUNNABLE: // (cap, thread)
-        case EVENT_CREATE_SPARK_THREAD: // (cap, spark_thread)
-            eventTypes[t].size = sizeof(EventThreadID);
-            break;
-
-        case EVENT_MIGRATE_THREAD:  // (cap, thread, new_cap)
-        case EVENT_THREAD_WAKEUP:   // (cap, thread, other_cap)
-            eventTypes[t].size =
-                sizeof(EventThreadID) + sizeof(EventCapNo);
-            break;
-
-        case EVENT_STOP_THREAD:     // (cap, thread, status)
-            eventTypes[t].size =
-                sizeof(EventThreadID) + sizeof(StgWord16) + sizeof(EventThreadID);
-            break;
-
-        case EVENT_STARTUP:         // (cap count)
-            eventTypes[t].size = sizeof(EventCapNo);
-            break;
-
-        case EVENT_CAPSET_CREATE:   // (capset, capset_type)
-            eventTypes[t].size =
-                sizeof(EventCapsetID) + sizeof(EventCapsetType);
-            break;
-
-        case EVENT_CAPSET_DELETE:   // (capset)
-            eventTypes[t].size = sizeof(EventCapsetID);
-            break;
-
-        case EVENT_CAPSET_ASSIGN_CAP:  // (capset, cap)
-        case EVENT_CAPSET_REMOVE_CAP:
-            eventTypes[t].size =
-                sizeof(EventCapsetID) + sizeof(EventCapNo);
-            break;
-
-        case EVENT_OSPROCESS_PID:   // (cap, pid)
-        case EVENT_OSPROCESS_PPID:
-            eventTypes[t].size =
-                sizeof(EventCapsetID) + sizeof(StgWord32);
-            break;
-
-        case EVENT_SPARK_STEAL:     // (cap, victim_cap)
-            eventTypes[t].size =
-                sizeof(EventCapNo);
-            break;
-
-        case EVENT_SHUTDOWN:        // (cap)
-        case EVENT_REQUEST_SEQ_GC:  // (cap)
-        case EVENT_REQUEST_PAR_GC:  // (cap)
-        case EVENT_GC_START:        // (cap)
-        case EVENT_GC_END:          // (cap)
-        case EVENT_GC_IDLE:
-        case EVENT_GC_WORK:
-        case EVENT_GC_DONE:
-        case EVENT_SPARK_CREATE:    // (cap)
-        case EVENT_SPARK_DUD:       // (cap)
-        case EVENT_SPARK_OVERFLOW:  // (cap)
-        case EVENT_SPARK_RUN:       // (cap)
-        case EVENT_SPARK_FIZZLE:    // (cap)
-        case EVENT_SPARK_GC:        // (cap)
-            eventTypes[t].size = 0;
-            break;
-
-        case EVENT_LOG_MSG:          // (msg)
-        case EVENT_USER_MSG:         // (msg)
-        case EVENT_RTS_IDENTIFIER:   // (capset, str)
-        case EVENT_PROGRAM_ARGS:     // (capset, strvec)
-        case EVENT_PROGRAM_ENV:      // (capset, strvec)
-		case EVENT_HPC_MODULE:       // (name, boxes, hash)
-		case EVENT_TICK_DUMP:        // (freqs, counts)
-		case EVENT_INSTR_PTR_SAMPLE: // (ips)
-            eventTypes[t].size = 0xffff;
-            break;
-
-        case EVENT_SPARK_COUNTERS:   // (cap, 7*counter)
-            eventTypes[t].size = 7 * sizeof(StgWord64);
-            break;
-
-        case EVENT_BLOCK_MARKER:
-            eventTypes[t].size = sizeof(StgWord32) + sizeof(EventTimestamp) + 
-                sizeof(EventCapNo);
-            break;
-
-        default:
-            continue; /* ignore deprecated events */
-        }
+		// Ignore deprecated events
+		if (eventTypes[t].size == 0xfffe) continue;
 
         // Write in buffer: the start event type.
         postEventType(&eventBuf, &eventTypes[t]);
@@ -449,9 +441,8 @@ postSchedEvent (Capability *cap,
 
     eb = &capEventBuf[cap->no];
 
-    if (!hasRoomForEvent(eb, tag)) {
-        // Flush event buffer to make room for new event.
-        printAndClearEventBuf(eb);
+    if (!ensureRoomForEvent(eb, tag)) {
+		return;
     }
     
     postEventHeader(eb, tag);
@@ -681,9 +672,8 @@ postEvent (Capability *cap, EventTypeNum tag)
 
     eb = &capEventBuf[cap->no];
 
-    if (!hasRoomForEvent(eb, tag)) {
-        // Flush event buffer to make room for new event.
-        printAndClearEventBuf(eb);
+    if (!ensureRoomForEvent(eb, tag)) {
+		return;
     }
 
     postEventHeader(eb, tag);
@@ -702,10 +692,9 @@ void postLogMsg(EventsBuf *eb, EventTypeNum type, char *msg, va_list ap)
         size = BUF;
     }
 
-    if (!hasRoomForVariableEvent(eb, size)) {
-        // Flush event buffer to make room for new event.
-        printAndClearEventBuf(eb);
-    }
+	if (!ensureRoomForVariableEvent(eb, size)) {
+		return;
+	}
 
     postEventHeader(eb, type);
     postPayloadSize(eb, size);
@@ -784,8 +773,8 @@ void closeBlockMarker (EventsBuf *ebuf)
 
 void postBlockMarker (EventsBuf *eb)
 {
-    if (!hasRoomForEvent(eb, EVENT_BLOCK_MARKER)) {
-        printAndClearEventBuf(eb);
+    if (!ensureRoomForEvent(eb, EVENT_BLOCK_MARKER)) {
+		return;
     }
 
     closeBlockMarker(eb);
@@ -862,6 +851,31 @@ StgBool hasRoomForVariableEvent(EventsBuf *eb, nat payload_bytes)
       return 1; // Buf has enough space for the event.
   }
 }    
+
+StgBool ensureRoomForEvent(EventsBuf *eb, EventTypeNum eNum)
+{
+	if (!hasRoomForEvent(eb, eNum)) {
+		// Flush event buffer to make room for new event.
+		printAndClearEventBuf(eb);
+	}
+	return 1;
+}
+
+StgBool ensureRoomForVariableEvent(EventsBuf *eb, nat payload_bytes)
+{
+	if (!hasRoomForVariableEvent(eb, payload_bytes)) {
+		// Flush event buffer to make room for new event.
+		printAndClearEventBuf(eb);
+		// Recheck. This might actually happen with, say, long log
+		// messages. Might want to increase buffer size then?
+		if (!hasRoomForVariableEvent(eb, payload_bytes)) {
+			barf("Event of size %d is dropped as it is too large for the event buffer!",
+				 payload_bytes);
+			return 0;
+		}
+	}
+	return 1;
+}
 
 void postEventType(EventsBuf *eb, EventType *et)
 {
