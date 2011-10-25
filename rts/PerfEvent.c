@@ -188,7 +188,7 @@ void perf_event_stream(Task *task) {
 	}
 
 	// Output samples
-	traceInstrPtrSample(task->cap, n_samples, ips);
+	traceInstrPtrSample(task->cap, 1, n_samples, ips);
 	stgFree(ips);
 
 	// Our final head (for incomplete data we might not have read everyhing!)

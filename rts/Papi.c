@@ -447,7 +447,7 @@ papi_stop_mutator_count(void)
 #ifdef TRACING
 	// As the counter is disabled, we can savely flush instruction pointer samples
 	if(task->instrPtrSamplePos >= INSTR_PTR_SAMPLE_MIN_SIZE) {
-		traceInstrPtrSample(MY_CAP, task->instrPtrSamplePos, task->instrPtrSample);
+		traceInstrPtrSample(MY_CAP, 1, task->instrPtrSamplePos, task->instrPtrSample);
 		task->instrPtrSamplePos = 0;
 	}
 #endif
@@ -497,6 +497,25 @@ papi_thread_stop_gc1_count(int event_set)
     PAPI_CHECK( PAPI_accum(event_set,GC1Counters));
     PAPI_CHECK( PAPI_stop(event_set,NULL));
     RELEASE_LOCK(&papi_counter_mutex);
+}
+
+void
+papi_timer(void)
+{
+
+#ifdef TRACING
+	Task *task = all_tasks;
+
+	// This is not safe, strictly speaking. TODO: Find out exactly
+	// how. "Just" new samples appearing while writing?
+	for (task = all_tasks; task; task = task->next) {
+		if(task->instrPtrSamplePos >= INSTR_PTR_SAMPLE_MIN_SIZE) {
+			traceInstrPtrSample(task->cap, 0, task->instrPtrSamplePos, task->instrPtrSample);
+			task->instrPtrSamplePos = 0;
+		}
+	}
+#endif
+
 }
 
 #endif /* USE_PAPI */

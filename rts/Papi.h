@@ -33,6 +33,8 @@ void papi_stop_gc1_count(void);
 void papi_thread_start_gc1_count(int event_set);
 void papi_thread_stop_gc1_count(int event_set);
 
+void papi_timer(void);
+
 #include "EndPrivate.h"
 
 #endif /* PAPI_H */

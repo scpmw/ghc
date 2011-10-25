@@ -85,7 +85,7 @@ void postSparkCountersEvent (Capability *cap,
  * Instruction pointer samples
  */
 
-void postInstrPtrSample(Capability *cap, StgWord32 cnt, void **ips);
+void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips);
 
 
 #else /* !TRACING */

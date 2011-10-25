@@ -533,7 +533,7 @@ void traceUserMsg(Capability *cap, char *msg)
     traceFormatUserMsg(cap, "%s", msg);
 }
 
-void traceInstrPtrSample(Capability *cap, StgWord32 cnt, void **ips)
+void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)
 {
 #ifdef DEBUG
 	StgWord32 i;
@@ -548,7 +548,7 @@ void traceInstrPtrSample(Capability *cap, StgWord32 cnt, void **ips)
 #endif
 	{
         if (eventlog_enabled) {
-            postInstrPtrSample(cap, cnt, ips);
+            postInstrPtrSample(cap, own_cap, cnt, ips);
         }
 	}
 }

@@ -745,12 +745,14 @@ void postEventStartup(EventCapNo n_caps)
     RELEASE_LOCK(&eventBufMutex);
 }
 
-void postInstrPtrSample(Capability *cap, StgWord32 cnt, void **ips)
+void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)
 {
 	// (size:16, cap:16, cnt * (tick : 32, freq : 32) )
 	nat size = sizeof(EventCapNo) + cnt * sizeof(StgWord32), i;
-	EventsBuf *eb = &capEventBuf[cap->no];
-	
+	EventsBuf *eb = own_cap ? &capEventBuf[cap->no] : &eventBuf;
+	if (!ensureRoomForVariableEvent(eb, size)) {
+		return;
+	}
 	postEventHeader(eb, EVENT_INSTR_PTR_SAMPLE);
 	postPayloadSize(eb, size);
 	postCapNo(eb, cap->no);
