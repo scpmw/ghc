@@ -93,7 +93,12 @@ char *EventDesc[] = {
   [EVENT_SPARK_GC]            = "Spark GC",
   [EVENT_HPC_MODULE]          = "HPC module",
   [EVENT_TICK_DUMP]           = "Tick dump",
-  [EVENT_INSTR_PTR_SAMPLE]    = "Instruction pointer sample"
+  [EVENT_INSTR_PTR_SAMPLE]    = "Instruction pointer sample",
+  [EVENT_DEBUG_MODULE]        = "Debug module data",
+  [EVENT_DEBUG_PROCEDURE]     = "Debug procedure data",
+  [EVENT_DEBUG_SOURCE]        = "Debug source data",
+  [EVENT_DEBUG_CORE]          = "Debug core data",
+  [EVENT_DEBUG_NAME]          = "Debug name data",
 };
 
 // Event type. 
@@ -255,6 +260,11 @@ static StgWord16 getEventSize(EventTypeNum t)
     case EVENT_HPC_MODULE:       // (name, boxes, hash)
     case EVENT_TICK_DUMP:        // (freqs, counts)
     case EVENT_INSTR_PTR_SAMPLE: // (ips)
+    case EVENT_DEBUG_MODULE: // (variable)
+    case EVENT_DEBUG_PROCEDURE: // (variable)
+    case EVENT_DEBUG_SOURCE: // (variable)
+    case EVENT_DEBUG_CORE: // (variable)
+    case EVENT_DEBUG_NAME: // (variable)
         return 0xffff;
 
     case EVENT_SPARK_COUNTERS:   // (cap, 7*counter)
@@ -716,22 +726,42 @@ void postCapMsg(Capability *cap, char *msg, va_list ap)
 void postUserMsg(Capability *cap, char *msg, va_list ap)
 {
     postLogMsg(&capEventBuf[cap->no], EVENT_USER_MSG, msg, ap);
-}    
+}
 
-void postEventStartup(EventCapNo n_caps)
+void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo,
+                void *debugData)
 {
-    ACQUIRE_LOCK(&eventBufMutex);
+	nat nameLen = strlen(modName);
+	nat size = nameLen + sizeof(modCount) + sizeof(modHashNo) + sizeof(StgWord32);
+	StgWord8 *dbg = (StgWord8 *)debugData;
+	EventsBuf *eb = &eventBuf; // Should be safe without locking
+	if (!ensureRoomForVariableEvent(eb, size)) {
+		return;
+	}
+	postEventHeader(eb, EVENT_HPC_MODULE);
+	postPayloadSize(eb, size);
+    postBuf(eb,(StgWord8*)modName,nameLen);
+	postWord32(eb,modCount);
+	postWord32(eb,modHashNo);
+	postWord32(eb,0);
 
-    if (!hasRoomForEvent(&eventBuf, EVENT_STARTUP)) {
-        // Flush event buffer to make room for new event.
-        printAndClearEventBuf(&eventBuf);
-    }
+	while (dbg && *dbg) {
 
-    // Post a STARTUP event with the number of capabilities
-    postEventHeader(&eventBuf, EVENT_STARTUP);
-    postCapNo(&eventBuf, n_caps);
+		// Get event type. Variable events only for now!
+		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
+		if(getEventSize(num) != 0xffff)
+			continue;
+		postEventHeader(eb, num);
 
-    RELEASE_LOCK(&eventBufMutex);
+		// Get size
+		StgWord16 size = *(StgWord16 *)dbg; dbg += sizeof(StgWord16);
+		postPayloadSize(eb, size);
+
+		// Post data
+		postBuf(eb, dbg, size);
+		dbg += size;
+
+	}
 }
 
 void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)
@@ -750,6 +780,21 @@ void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **
 		// value is lost.
 		postWord32(eb, (StgWord32) (intptr_t) ips[i]);
 	}
+}
+
+void postEventStartup(EventCapNo n_caps)
+{
+    ACQUIRE_LOCK(&eventBufMutex);
+
+	if (!ensureRoomForEvent(&eventBuf, EVENT_STARTUP)) {
+		return;
+	}
+
+    // Post a STARTUP event with the number of capabilities
+    postEventHeader(&eventBuf, EVENT_STARTUP);
+    postCapNo(&eventBuf, n_caps);
+
+    RELEASE_LOCK(&eventBufMutex);
 }
 
 void closeBlockMarker (EventsBuf *ebuf)

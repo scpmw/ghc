@@ -82,8 +82,11 @@ void postSparkCountersEvent (Capability *cap,
                              StgWord remaining);
 
 /*
- * Instruction pointer samples
+ * Profiling
  */
+
+void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo,
+                void *debugData);
 
 void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips);
 

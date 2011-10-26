@@ -23,7 +23,6 @@ import VarSet
 import Data.List
 import FastString
 import HscTypes	
-import Platform
 import StaticFlags
 import TyCon
 import MonadUtils
@@ -1075,27 +1074,45 @@ static void hpc_init_Main(void)
  hs_hpc_module("Main",8,1150288664,_hpc_tickboxes_Main_hpc);}
 
 \begin{code}
-hpcInitCode :: Platform -> Module -> HpcInfo -> SDoc
-hpcInitCode _ _ (NoHpcInfo {}) = empty
-hpcInitCode platform this_mod (HpcInfo tickCount hashNo)
+hpcInitCode :: DynFlags -> Module -> HpcInfo -> SDoc
+hpcInitCode dflags this_mod hpc_info
  = vcat
     [ text "static void hpc_init_" <> ppr this_mod
          <> text "(void) __attribute__((constructor));"
     , text "static void hpc_init_" <> ppr this_mod <> text "(void)"
     , braces (vcat [
-        ptext (sLit "extern StgWord64 ") <> tickboxes <>
-               ptext (sLit "[]") <> semi,
+        tickboxes_decl,
+        debug_data_decl,
         ptext (sLit "hs_hpc_module") <>
           parens (hcat (punctuate comma [
               doubleQuotes full_name_str,
               int tickCount, -- really StgWord32
               int hashNo,    -- really StgWord32
-              tickboxes
+              if opt_Hpc then tickboxes else int 0,
+              if has_debug_data then debug_data else int 0
             ])) <> semi
        ])
     ]
   where
-    tickboxes = pprCLabel platform (mkHpcTicksLabel $ this_mod)
+    platform = targetPlatform dflags
+
+    do_hpc | not opt_Hpc               = False
+           | NoHpcInfo {} <- hpc_info  = False
+           | otherwise                 = True
+    (tickCount, hashNo)
+      | do_hpc    = (hpcInfoTickCount hpc_info, hpcInfoHash hpc_info) 
+      | otherwise = (0, 0)
+
+    tickboxes = pprCLabel platform (mkHpcTicksLabel this_mod)
+    tickboxes_decl
+      | opt_Hpc   = ptext (sLit "extern StgWord64 ") <> tickboxes <> ptext (sLit "[]") <> semi
+      | otherwise = empty
+
+    has_debug_data = hscTarget dflags == HscLlvm
+    debug_data = pprCLabel platform (mkHpcDebugData this_mod)
+    debug_data_decl
+      | has_debug_data = ptext (sLit "extern char ") <> debug_data <> ptext (sLit "[]") <> semi
+      | otherwise      = empty
 
     module_name  = hcat (map (text.charToC) $
                          bytesFS (moduleNameFS (Module.moduleName this_mod)))

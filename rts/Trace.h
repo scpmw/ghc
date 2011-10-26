@@ -154,8 +154,13 @@ void trace_(char *msg, ...);
 void traceUserMsg(Capability *cap, char *msg);
 
 /*
- * Instruction pointer samples
+ * Profiling
  */
+
+void traceModule(char *modName,
+                 StgWord32 modCount,
+                 StgWord32 modHashNo,
+                 void *debugData);
 
 void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips);
 

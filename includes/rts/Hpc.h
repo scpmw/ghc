@@ -21,13 +21,15 @@ typedef struct _HpcModuleInfo {
   StgWord32 hashNo;             // Hash number for this module's mix info
   StgWord64 *tixArr;		// tix Array; local for this module
   rtsBool from_file;            // data was read from the .tix file
+  void *debugData;          // Data useful for debugging
   struct _HpcModuleInfo *next;
 } HpcModuleInfo;
 
 void hs_hpc_module (char *modName,
-                    StgWord32 modCount,
+                    StgWord32 tickCount,
                     StgWord32 modHashNo,
-                    StgWord64 *tixArr);
+                    StgWord64 *tixArr,
+                    void *debugData);
 
 HpcModuleInfo * hs_hpc_rootModule (void);
 

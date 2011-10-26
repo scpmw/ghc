@@ -533,6 +533,21 @@ void traceUserMsg(Capability *cap, char *msg)
     traceFormatUserMsg(cap, "%s", msg);
 }
 
+void traceModule(char *modName,
+                 StgWord32 modCount,
+                 StgWord32 modHashNo,
+                 void *debugData)
+{
+#ifdef DEBUG
+	if (RtsFlags.TraceFlags.tracing != TRACE_STDERR)
+#endif
+	{
+        if (eventlog_enabled) {
+            postModule(modName, modCount, modHashNo, debugData);
+        }
+	}
+}
+
 void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)
 {
 #ifdef DEBUG
