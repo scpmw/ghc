@@ -95,12 +95,11 @@ deSugar hsc_env
                                Just ([], nilOL, [], [], NoStubs, hpcInfo, emptyModBreaks))
                    _        -> do
                      (binds_cvr,ds_hpc_info, modBreaks)
-			 <- if (opt_Hpc
-				  || target == HscInterpreted
-				  || hscTarget dflags == HscLlvm
-				  || case profAuto dflags of NoProfAuto -> False
-				                             _ -> True)
-			       && (not (isHsBoot hsc_src))
+                         <- if (opt_Hpc
+                                || target `elem` [HscInterpreted, HscLlvm]
+                                || case profAuto dflags of NoProfAuto -> False
+                                                           _ -> True)
+                               && (not (isHsBoot hsc_src))
                               then  addTicksToBinds dflags mod mod_loc export_set
                                           (typeEnvTyCons type_env) binds
                               else return (binds, hpcInfo, emptyModBreaks)
