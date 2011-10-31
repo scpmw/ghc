@@ -506,8 +506,9 @@ papi_timer(void)
 #ifdef TRACING
 	Task *task = all_tasks;
 
-	// This is not safe, strictly speaking. TODO: Find out exactly
-	// how. "Just" new samples appearing while writing?
+	// This is slightly unsafe. One of the tasks in question might enter
+	// GC, and then we have duplicated instruction
+	// pointer samples.
 	for (task = all_tasks; task; task = task->next) {
 		if(task->instrPtrSamplePos >= INSTR_PTR_SAMPLE_MIN_SIZE) {
 			traceInstrPtrSample(task->cap, 0, task->instrPtrSamplePos, task->instrPtrSample);

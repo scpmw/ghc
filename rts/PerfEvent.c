@@ -46,7 +46,7 @@
 
 #ifdef TRACING
 static size_t get_page_size(void);
-static void perf_event_stream(Task *task);
+static void perf_event_stream(Task *task, StgBool own_task);
 #endif
 
 static inline int
@@ -126,7 +126,7 @@ void perf_event_init(Task *task)
 }
 
 #ifdef TRACING
-void perf_event_stream(Task *task) {
+void perf_event_stream(Task *task, StgBool own_task) {
 
 	// Read new head pointer
 	StgWord64 last_head = task->perf_event_last_head;
@@ -188,7 +188,7 @@ void perf_event_stream(Task *task) {
 	}
 
 	// Output samples
-	traceInstrPtrSample(task->cap, 1, n_samples, ips);
+	traceInstrPtrSample(task->cap, own_task, n_samples, ips);
 	stgFree(ips);
 
 	// Our final head (for incomplete data we might not have read everyhing!)
@@ -221,8 +221,25 @@ void perf_event_stop_mutator_count(void)
 	if(!task || task->perf_event_fd == -1) return;	
 	ioctl(task->perf_event_fd, PERF_EVENT_IOC_DISABLE);
 #ifdef TRACING
-	perf_event_stream(task);
+	perf_event_stream(task, 1);
 #endif
+}
+
+void
+perf_event_timer(void)
+{
+
+#ifdef TRACING
+	Task *task = all_tasks;
+
+	// This is slightly unsafe. One of the tasks in question might get
+	// an overflow, and then we have duplicated instruction
+	// pointer samples.
+	for (task = all_tasks; task; task = task->next) {
+		perf_event_stream(task, 0);
+	}
+#endif
+
 }
 
 #endif // USE_PERF_EVENT

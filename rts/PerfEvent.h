@@ -11,6 +11,8 @@ void perf_event_init(Task *task);
 void perf_event_start_mutator_count(void);
 void perf_event_stop_mutator_count(void);
 
+void perf_event_timer();
+
 #include "EndPrivate.h"
 
 #endif // PERF_EVENT_H

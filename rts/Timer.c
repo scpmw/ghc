@@ -86,9 +86,14 @@ handle_tick(int unused STG_UNUSED)
   }
 #endif
 
-#ifdef USE_PAPI
 #ifdef TRACING
+#ifdef USE_PAPI
   if(RtsFlags.PapiFlags.sampleType) {
+	  papi_timer();
+  }
+#endif
+#ifdef USE_PERF_EVENTS
+  if(RtsFlags.PerfEventFlags.sampleType) {
 	  papi_timer();
   }
 #endif
