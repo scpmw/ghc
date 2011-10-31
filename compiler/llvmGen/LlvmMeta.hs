@@ -16,7 +16,7 @@ import Module
 import DynFlags
 import FastString
 
-import Name            ( Name, nameOccName )
+import Name            ( nameOccName )
 import Literal         ( Literal(..) )
 import OccName         ( occNameFS )
 import Var             ( Var, varName )
@@ -321,7 +321,7 @@ mkProcedureEvent platform tim lbl
       ]
   where none = 0xffff
 
-mkAnnotEvent :: Set Name -> Tickish () -> [LlvmStatic]
+mkAnnotEvent :: Set Var -> Tickish () -> [LlvmStatic]
 mkAnnotEvent _ (SourceNote ss)
   = [src_ev]
     --if null names then [src_ev] else [name_ev, src_ev]
@@ -344,29 +344,34 @@ mkAnnotEvent bnds (CoreNote lbl (ExprPtr core))
       ]]
 mkAnnotEvent _ _ = []
 
-mkEvents :: Platform -> Set Name -> Module -> ModLocation -> TickMap -> LlvmStatic
-mkEvents platform bnds mod loc tick_map
+mkEvents :: Platform -> Set Var -> Module ->
+            ModLocation -> TickMap -> [RawCmmDecl] -> LlvmStatic
+mkEvents platform bnds mod loc tick_map cmm
   = mkStaticStruct $
       [ mkModuleEvent mod loc ] ++
-      concat [ mkProcedureEvent platform tim lbl
+      concat [ mkProcedureEvent platform tim (proc_lbl i l)
                : concatMap (mkAnnotEvent bnds) (timTicks tim)
-             | (lbl, tim) <- assocs tick_map] ++
+             | CmmProc i l _ <- cmm
+             , Just tim <- [Map.lookup l tick_map]] ++
       [ LMStaticLit $ mkI8 0 ]
+  where proc_lbl (Just (Statics info_lbl _)) _ = info_lbl
+        proc_lbl _                           l = l
 
-collectBinds :: Tickish () -> [Name]
---collectBinds (CoreTick bnd _) = [bnd]
+collectBinds :: Tickish () -> [Var]
+collectBinds (CoreNote bnd _) = [bnd]
 collectBinds _                = []
 
 cmmDebugLlvmGens :: DynFlags -> Module -> ModLocation ->
-                    (SDoc -> IO ()) -> TickMap -> LlvmEnv -> IO ()
-cmmDebugLlvmGens dflags mod loc render tick_map _env = do
+                    (SDoc -> IO ()) -> TickMap -> LlvmEnv ->
+                    [RawCmmDecl] -> IO ()
+cmmDebugLlvmGens dflags mod loc render tick_map _env cmm = do
 
   let collect tim = concatMap collectBinds $ timTicks tim
       binds =  Set.fromList $ concatMap collect $ elems tick_map
 
   let platform = targetPlatform dflags
 
-  let events     = flattenStruct $ mkEvents platform binds mod loc tick_map
+  let events     = flattenStruct $ mkEvents platform binds mod loc tick_map cmm
       ty         = getStatType events
       debug_sym  = fsLit $ renderWithStyle (pprCLabel platform (mkHpcDebugData mod)) (mkCodeStyle CStyle)
       sectName   = Just $ fsLit ".__ghc_debug"
@@ -386,26 +391,26 @@ mkI1 f = LMIntLit (if f then 1 else 0) (LMInt 1)
 placeholder :: Var -> CoreExpr
 placeholder = Lit . MachStr . occNameFS . nameOccName . varName -- for now
 
-stripCore :: Set Name -> CoreExpr -> CoreExpr
+stripCore :: Set Var -> CoreExpr -> CoreExpr
 stripCore bs (App e1 e2) = App (stripCore bs e1) (stripCore bs e2)
 stripCore bs (Lam b e)
-  | varName b `member` bs= Lam b (placeholder b)
+  | b `member` bs        = Lam b (placeholder b)
   | otherwise            = Lam b (stripCore bs e)
 stripCore bs (Let es e)  = Let (stripLet bs es) (stripCore bs e)
 stripCore bs (Tick _ e)  = stripCore bs e -- strip out
 stripCore bs (Case e b t as)
-  | varName b `member` bs= Case (stripCore bs e) b t [(DEFAULT,[],placeholder b)]
+  | b `member` bs        = Case (stripCore bs e) b t [(DEFAULT,[],placeholder b)]
   | otherwise            = Case (stripCore bs e) b t (map stripAlt as)
   where stripAlt (a, bn, e) = (a, bn, stripCore bs e)
 stripCore bs (CoreSyn.Cast e _)  = stripCore bs e -- strip out
 stripCore _  other       = other
 
-stripLet :: Set Name -> CoreBind -> CoreBind
+stripLet :: Set Var -> CoreBind -> CoreBind
 stripLet bs (NonRec b e)
-  | varName b `member` bs= NonRec b (placeholder b)
+  | b `member` bs        = NonRec b (placeholder b)
   | otherwise            = NonRec b (stripCore bs e)
 stripLet bs (Rec ps)     = Rec (map f ps)
   where
     f (b, e)
-      | varName b `member` bs = (b, placeholder b)
+      | b `member` bs    = (b, placeholder b)
       | otherwise        = (b, stripCore bs e)
