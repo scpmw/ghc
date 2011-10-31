@@ -30,7 +30,7 @@ import SrcLoc          (srcSpanFile,
 
 import System.FilePath (splitFileName)
 import Control.Monad   (forM, forM_)
-import Data.List       (nubBy, find, maximumBy)
+import Data.List       (nub, find, maximumBy)
 import Data.Maybe      (fromMaybe, mapMaybe)
 import Data.Map as Map (Map, fromList, assocs, lookup, elems)
 import Data.Set as Set (Set, fromList, member)
@@ -60,7 +60,7 @@ pprMeta n val = pprLlvmData ([LMGlobal (LMMetaVar n) (Just val)], [])
 
 cmmMetaLlvmGens :: DynFlags -> Module -> ModLocation ->
                    (SDoc -> IO ()) -> TickMap -> LlvmEnv -> [RawCmmDecl] -> IO ()
-cmmMetaLlvmGens dflags mod location render tiMap env cmm = do
+cmmMetaLlvmGens dflags _mod location render tiMap env cmm = do
 
   -- We need to be able to find ticks by ID
   let idLabelMap :: Map Int CLabel
@@ -71,7 +71,7 @@ cmmMetaLlvmGens dflags mod location render tiMap env cmm = do
 
   -- Allocate IDs. The instrumentation numbers will have been used for
   -- line annotations, so we make new IDs start right after them.
-  lastId <- newIORef $ fromMaybe 0 (maximum $ map timInstr $ elems tiMap)
+  lastId <- newIORef $ fromMaybe 0 (maximum $ (Nothing:) $ map timInstr $ elems tiMap)
   let freshId = modifyIORef lastId (+1) >> readIORef lastId
 
   -- Emit compile unit information. A whole lot of stuff the debugger
@@ -87,8 +87,8 @@ cmmMetaLlvmGens dflags mod location render tiMap env cmm = do
     , LMMetaString (fsLit srcFile)               -- Source code name
     , LMMetaString (fsLit srcPath)               -- Source code directory
     , LMMetaString (fsLit "GHC")                 -- Producer
-    , LMStaticLit (mkI1 $ modulePackageId mod == mainPackageId)
-                                                 -- Main compilation unit?
+    , LMStaticLit (mkI1 True)                    -- Main compilation unit?
+                                                 -- Not setting this causes LLVM to not generate anything at all!
     , LMStaticLit (mkI1 $ optLevel dflags > 0)   -- Optimized?
     , LMMetaString (fsLit "")                    -- Flags (?)
     , LMStaticLit (mkI32 0)                      -- Runtime version (?)
@@ -112,21 +112,31 @@ cmmMetaLlvmGens dflags mod location render tiMap env cmm = do
     ]
 
   -- Emit metadata for all files
-  let files = nubBy ((==) `on` srcSpanFile . sourceSpan) $
+  let files = nub $ map (srcSpanFile . sourceSpan) $
               concatMap (filter isSourceTick . timTicks) $
               Map.elems tiMap
-  fileMap <- fmap Map.fromList $ forM files $ \(SourceNote span) -> do
+  fileMap <- fmap Map.fromList $ forM files $ \file -> do
 
     -- We somewhat sneakily use the information present in
-    -- SrcSpan.
+    -- SrcSpan here.
 
     -- TODO: Note that right this might come from other modules via
     -- inlining, so we might get bad mixing of base paths here.
-    let filePath = unpackFS (srcSpanFile span)
-
     fileId <- freshId
-    emitFileMeta render fileId unitId filePath
-    return (filePath, fileId)
+    emitFileMeta render fileId unitId (unpackFS file)
+    return (file, fileId)
+
+  -- Unless we already have one, emit a "default" file metadata for
+  -- the compilation unit. This will be used to annotate all
+  -- procedures which have otherwise no associated debug data (so they
+  -- won't simply get discarded)
+  let unitFile = fromMaybe "** no source file **" (ml_hs_file location)
+  defaultFileId <- case Map.lookup (fsLit unitFile) fileMap of
+    Just fileId -> return fileId
+    Nothing     -> do
+      fileId <- freshId
+      emitFileMeta render fileId unitId unitFile
+      return fileId
 
   -- Emit metadata for files and procedures
   forM_ (assocs tiMap) $ \(lbl, tim) -> do
@@ -148,7 +158,7 @@ cmmMetaLlvmGens dflags mod location render tiMap env cmm = do
               Nothing               -> lbl
               Just (Statics lbl' _) -> lbl'
         procId <- freshId
-        emitProcMeta render procId unitId srtypeId entryLabel procTick (line, col) dflags fileMap
+        emitProcMeta render procId unitId srtypeId entryLabel procTick defaultFileId (line, col) dflags fileMap
 
         -- Generate source annotation using the given ID (this is used to
         -- reference it from LLVM code). This information has little
@@ -184,13 +194,13 @@ emitFileMeta render fileId unitId filePath = do
     ]
 
 emitProcMeta ::
-  (SDoc -> IO ()) -> Int -> Int -> Int -> LMString -> Maybe (Tickish ()) -> (Int, Int)
-  -> DynFlags -> Map String Int
+  (SDoc -> IO ()) -> Int -> Int -> Int -> LMString -> Maybe (Tickish ()) -> Int
+  -> (Int, Int) -> DynFlags -> Map FastString Int
   -> IO ()
-emitProcMeta render procId unitId srtypeId entryLabel procTick (line, _) dflags fileMap = do
+emitProcMeta render procId unitId srtypeId entryLabel procTick defaultFileId (line, _) dflags fileMap = do
 
-  let srcFileLookup = flip Map.lookup fileMap . unpackFS . srcSpanFile . sourceSpan
-      fileId = fromMaybe unitId (procTick >>= srcFileLookup)
+  let srcFileLookup = flip Map.lookup fileMap . srcSpanFile . sourceSpan
+      fileId = fromMaybe defaultFileId (procTick >>= srcFileLookup)
       funRef = LMGlobalVar entryLabel (LMPointer llvmFunTy) Internal Nothing Nothing True
 
   render $ pprMeta procId $ LMMeta
