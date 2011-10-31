@@ -747,14 +747,19 @@ void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo,
 
 	while (dbg && *dbg) {
 
-		// Get event type. Variable events only for now!
+		// Get event type and size. Variable events only for now!
 		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
 		if(getEventSize(num) != 0xffff)
 			continue;
-		postEventHeader(eb, num);
-
-		// Get size
 		StgWord16 size = *(StgWord16 *)dbg; dbg += sizeof(StgWord16);
+
+		// Flush buffer if necessary
+		if (!ensureRoomForVariableEvent(eb, size)) {
+		    return;
+		}
+
+		// Post header
+		postEventHeader(eb, num);
 		postPayloadSize(eb, size);
 
 		// Post data
@@ -908,13 +913,20 @@ StgBool ensureRoomForEvent(EventsBuf *eb, EventTypeNum eNum)
 
 StgBool ensureRoomForVariableEvent(EventsBuf *eb, nat payload_bytes)
 {
+
+	// Safety - messages of this size can't be printed at all because
+	// there's no way to write their length in 16 bits.
+	if (payload_bytes > (1 << 16)) {
+		barf("Oversized event of size %d had to be dropped!", payload_bytes);
+		return 0;
+	}
+
 	if (!hasRoomForVariableEvent(eb, payload_bytes)) {
 		// Flush event buffer to make room for new event.
 		printAndClearEventBuf(eb);
-		// Recheck. This might actually happen with, say, long log
-		// messages. Might want to increase buffer size then?
+		// Recheck. This actually shouldn't happen given an event log buffer larger than the above-checked maximum event size
 		if (!hasRoomForVariableEvent(eb, payload_bytes)) {
-			barf("Event of size %d is dropped as it is too large for the event buffer!",
+			barf("Event of size %d is dropped!",
 				 payload_bytes);
 			return 0;
 		}
