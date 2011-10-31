@@ -195,7 +195,7 @@ mkDensity dflags
   | ProfAutoAll     <- profAuto dflags   = TickAllFunctions
   | ProfAutoTop     <- profAuto dflags   = TickTopFunctions
   | ProfAutoExports <- profAuto dflags   = TickExportedFunctions
-  | HscLlvm         <- hscTarget dflags  = TickForCoverage
+  | HscLlvm         <- hscTarget dflags  = TickAllFunctions
   | otherwise = panic "density"
 
 
