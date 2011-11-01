@@ -361,6 +361,9 @@ GhcRtsWithPapi = NO
 PapiLibDir=
 PapiIncludeDir=
 
+# Include support for Linux perf_event?
+GhcRtsWithPerfEvent = @HavePerfEvent@
+
 ################################################################################
 #
 #		Paths (see paths.mk)

@@ -782,17 +782,18 @@ AC_SUBST([GTK_CONFIG])
 #Checking for PAPI
 AC_CHECK_LIB(papi, PAPI_library_init, HavePapiLib=YES, HavePapiLib=NO)
 AC_CHECK_HEADER([papi.h], [HavePapiHeader=YES], [HavePapiHeader=NO])
-AC_SUBST(HavePapiLib)
-AC_SUBST(HavePapiHeader)
-
-AC_CHECK_FUNCS(__mingw_vfprintf)
-
 if test "$HavePapiLib" = "YES" -a "$HavePapiHeader" = "YES"; then
    HavePapi=YES
 else
    HavePapi=NO
 fi
 AC_SUBST(HavePapi)
+
+AC_CHECK_FUNCS(__mingw_vfprintf)
+
+# Check for perf_event (will only be present for new-ish Linux)
+AC_CHECK_HEADER([linux/perf_event.h], [HavePerfEvent=YES], [HavePerfEvent=NO])
+AC_SUBST(HavePerfEvent)
 
 if test "$HAVE_DOCBOOK_XSL" = "NO" ||
    test "$XsltprocCmd" = ""

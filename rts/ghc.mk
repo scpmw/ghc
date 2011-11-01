@@ -433,7 +433,7 @@ rts_PACKAGE_CPP_OPTS += -DPAPI_LIB_DIR=""
 endif
 
 #-----------------------------------------------------------------------------
-# Add perf_event interface, if requested
+# Add perf_event interface, if available
 
 ifeq "$(GhcRtsWithPerfEvent)" "YES"
 rts_CC_OPTS += -DUSE_PERF_EVENT
