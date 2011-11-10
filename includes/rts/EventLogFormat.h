@@ -154,6 +154,7 @@
 #define EVENT_DEBUG_SOURCE        52
 #define EVENT_DEBUG_CORE          53
 #define EVENT_DEBUG_NAME          54
+#define EVENT_DEBUG_PTR_RANGE     55
 
 /* Range 60 - 80 is used by eden for parallel tracing
  * see http://www.mathematik.uni-marburg.de/~eden/
@@ -166,7 +167,7 @@
  * ranges higher than this are reserved but not currently emitted by ghc.
  * This must match the size of the EventDesc[] array in EventLog.c
  */
-#define NUM_GHC_EVENT_TAGS        55
+#define NUM_GHC_EVENT_TAGS        56
 
 #if 0  /* DEPRECATED EVENTS: */
 /* we don't actually need to record the thread, it's implicit */

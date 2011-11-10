@@ -199,6 +199,9 @@ static inline void postInt32(EventsBuf *eb, StgInt32 i)
 static inline void postInt64(EventsBuf *eb, StgInt64 i)
 { postWord64(eb, (StgWord64)i); }
 
+// Magic event size constants
+#define EVENT_SIZE_VARIABLE   ((StgWord16) 0xffff)
+#define EVENT_SIZE_DEPRECATED ((StgWord16) 0xfffe)
 
 static StgWord16 getEventSize(EventTypeNum t)
 {
@@ -265,7 +268,7 @@ static StgWord16 getEventSize(EventTypeNum t)
     case EVENT_DEBUG_SOURCE: // (variable)
     case EVENT_DEBUG_CORE: // (variable)
     case EVENT_DEBUG_NAME: // (variable)
-        return 0xffff;
+        return EVENT_SIZE_VARIABLE;
 
     case EVENT_SPARK_COUNTERS:   // (cap, 7*counter)
         return 7 * sizeof(StgWord64);
@@ -275,7 +278,7 @@ static StgWord16 getEventSize(EventTypeNum t)
             sizeof(EventCapNo);
 
     default:
-        return 0xfffe; /* ignore deprecated events */
+        return EVENT_SIZE_DEPRECATED; /* ignore deprecated events */
     }
 
 }
@@ -348,7 +351,7 @@ initEventLogging(void)
 		eventTypes[t].size = getEventSize(t);
 
 		// Ignore deprecated events
-		if (eventTypes[t].size == 0xfffe) continue;
+		if (eventTypes[t].size == EVENT_SIZE_DEPRECATED) continue;
 
         // Write in buffer: the start event type.
         postEventType(&eventBuf, &eventTypes[t]);
@@ -728,12 +731,10 @@ void postUserMsg(Capability *cap, char *msg, va_list ap)
     postLogMsg(&capEventBuf[cap->no], EVENT_USER_MSG, msg, ap);
 }
 
-void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo,
-                void *debugData)
+void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo)
 {
 	nat nameLen = strlen(modName);
 	nat size = nameLen + sizeof(modCount) + sizeof(modHashNo) + sizeof(StgWord32);
-	StgWord8 *dbg = (StgWord8 *)debugData;
 	EventsBuf *eb = &eventBuf; // Should be safe without locking
 	if (!ensureRoomForVariableEvent(eb, size)) {
 		return;
@@ -745,28 +746,6 @@ void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo,
 	postWord32(eb,modHashNo);
 	postWord32(eb,0);
 
-	while (dbg && *dbg) {
-
-		// Get event type and size. Variable events only for now!
-		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
-		if(getEventSize(num) != 0xffff)
-			continue;
-		StgWord16 size = *(StgWord16 *)dbg; dbg += sizeof(StgWord16);
-
-		// Flush buffer if necessary
-		if (!ensureRoomForVariableEvent(eb, size)) {
-		    return;
-		}
-
-		// Post header
-		postEventHeader(eb, num);
-		postPayloadSize(eb, size);
-
-		// Post data
-		postBuf(eb, dbg, size);
-		dbg += size;
-
-	}
 }
 
 void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)
@@ -785,6 +764,39 @@ void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **
 		// value is lost.
 		postWord32(eb, (StgWord32) (intptr_t) ips[i]);
 	}
+}
+
+void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)
+{
+
+	// Check event size
+	StgWord16 spec_size = getEventSize(num);
+	if (spec_size == EVENT_SIZE_DEPRECATED) {
+		barf("Invalid debug type num %d. Probably corrupt debug data.", num);
+		return;
+	}
+	if (spec_size != EVENT_SIZE_VARIABLE && size != spec_size) {
+		barf("Debug data %d has size %d, but %d expected!",
+		     num, size, spec_size);
+		return;
+	}
+
+	EventsBuf *eb = &eventBuf; // Should be safe without locking
+
+	// Flush buffer if necessary
+	if (!ensureRoomForVariableEvent(eb, size)) {
+		return;
+	}
+
+	// Post header
+	postEventHeader(eb, num);
+	if (spec_size == EVENT_SIZE_VARIABLE)
+		postPayloadSize(eb, size);
+
+	// Post data
+	postBuf(eb, dbg, size);
+	dbg += size;
+
 }
 
 void postEventStartup(EventCapNo n_caps)

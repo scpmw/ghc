@@ -1074,8 +1074,8 @@ static void hpc_init_Main(void)
  hs_hpc_module("Main",8,1150288664,_hpc_tickboxes_Main_hpc);}
 
 \begin{code}
-hpcInitCode :: DynFlags -> Module -> HpcInfo -> SDoc
-hpcInitCode dflags this_mod hpc_info
+hpcInitCode :: DynFlags -> Module -> ModLocation -> HpcInfo -> SDoc
+hpcInitCode dflags this_mod mod_loc hpc_info
  = vcat
     [ text "static void hpc_init_" <> ppr this_mod
          <> text "(void) __attribute__((constructor));"
@@ -1086,6 +1086,7 @@ hpcInitCode dflags this_mod hpc_info
         ptext (sLit "hs_hpc_module") <>
           parens (hcat (punctuate comma [
               doubleQuotes full_name_str,
+              doubleQuotes mod_loc_str,
               int tickCount, -- really StgWord32
               int hashNo,    -- really StgWord32
               if opt_Hpc then tickboxes else int 0,
@@ -1123,4 +1124,8 @@ hpcInitCode dflags this_mod hpc_info
        = module_name
        | otherwise
        = package_name <> char '/' <> module_name
+
+    mod_loc_str = case ml_hs_file mod_loc of
+                       Just path -> text path
+                       Nothing   -> text "*** no source *** "
 \end{code}

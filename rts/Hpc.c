@@ -44,6 +44,10 @@ HpcModuleInfo *modules = 0;
 
 static char *tixFilename = NULL;
 
+#ifdef TRACING
+void traceUnitData(char *unit_name, void *data);
+#endif
+
 static void GNU_ATTRIBUTE(__noreturn__)
 failure(char *msg) {
   debugTrace(DEBUG_hpc,"hpc failure: %s\n",msg);
@@ -220,8 +224,8 @@ startupHpc(void)
       // Add HPC module announcements to trace
       traceModule(mod->modName,
                   mod->tickCount,
-                  mod->hashNo,
-                  mod->debugData);
+                  mod->hashNo);
+      traceUnitData(mod->modSource, mod->debugData);
 #endif
   }
 
@@ -274,6 +278,7 @@ startupHpc(void)
 
 void
 hs_hpc_module(char *modName,
+              char *modSource,
               StgWord32 modCount,
               StgWord32 modHashNo,
               StgWord64 *tixArr,
@@ -293,6 +298,7 @@ hs_hpc_module(char *modName,
       tmpModule = (HpcModuleInfo *)stgMallocBytes(sizeof(HpcModuleInfo),
                                                   "Hpc.hs_hpc_module");
       tmpModule->modName = modName;
+      tmpModule->modSource = modSource;
       tmpModule->tickCount = modCount;
       tmpModule->hashNo = modHashNo;
 
@@ -431,3 +437,26 @@ exitHpc(void) {
 HpcModuleInfo *hs_hpc_rootModule(void) {
   return modules;
 }
+
+#ifdef TRACING
+
+// Writes debug data to the event log, enriching it with DWARF
+// debugging information where possible
+
+void traceUnitData(char *unit_name, void *data) {
+	// Dump all entries in debug data
+	StgWord8 *dbg = (StgWord8 *)data;
+	while(dbg && *dbg) {
+
+		// Get event type and size.
+		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
+		StgWord16 size = *(StgWord16 *)dbg; dbg += sizeof(StgWord16);
+
+		// Post data
+		traceDebugData(num, size, dbg);
+		dbg += size;
+
+	}
+}
+
+#endif // TRACING

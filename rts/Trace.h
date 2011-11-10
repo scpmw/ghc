@@ -159,10 +159,11 @@ void traceUserMsg(Capability *cap, char *msg);
 
 void traceModule(char *modName,
                  StgWord32 modCount,
-                 StgWord32 modHashNo,
-                 void *debugData);
+                 StgWord32 modHashNo);
 
 void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips);
+
+void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
 
 /* 
  * Emit a debug message (only when DEBUG is defined)

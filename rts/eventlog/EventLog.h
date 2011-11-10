@@ -85,11 +85,11 @@ void postSparkCountersEvent (Capability *cap,
  * Profiling
  */
 
-void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo,
-                void *debugData);
+void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo);
 
 void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips);
 
+void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
 
 #else /* !TRACING */
 

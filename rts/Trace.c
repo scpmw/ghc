@@ -535,15 +535,14 @@ void traceUserMsg(Capability *cap, char *msg)
 
 void traceModule(char *modName,
                  StgWord32 modCount,
-                 StgWord32 modHashNo,
-                 void *debugData)
+                 StgWord32 modHashNo)
 {
 #ifdef DEBUG
 	if (RtsFlags.TraceFlags.tracing != TRACE_STDERR)
 #endif
 	{
         if (eventlog_enabled) {
-            postModule(modName, modCount, modHashNo, debugData);
+            postModule(modName, modCount, modHashNo);
         }
 	}
 }
@@ -567,6 +566,14 @@ void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void *
         }
 	}
 }
+
+void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)
+{
+	if (eventlog_enabled) {
+		postDebugData(num, size, dbg);
+	}
+}
+
 
 void traceThreadStatus_ (StgTSO *tso USED_IF_DEBUG)
 {
