@@ -239,7 +239,7 @@ findGoodSourceTick lbl tiMap idLabelMap
   | otherwise  = Just $ maximumBy (compare `on` rangeLength) ticks
   where
     ticks = findSourceTis lbl
-    rangeLength (SourceNote span) =
+    rangeLength (SourceNote span _) =
       (srcSpanEndLine span - srcSpanStartLine span,
        srcSpanEndCol span - srcSpanStartCol span)
     rangeLength _non_source_note = error "rangeLength"
@@ -325,9 +325,8 @@ mkProcedureEvent platform tim lbl
         showSDocC = flip renderWithStyle (mkCodeStyle CStyle)
 
 mkAnnotEvent :: Set Var -> Tickish () -> [LlvmStatic]
-mkAnnotEvent _ (SourceNote ss)
-  = [src_ev]
-    --if null names then [src_ev] else [name_ev, src_ev]
+mkAnnotEvent _ (SourceNote ss names)
+  = if null names then [src_ev] else [name_ev, src_ev]
   where
     src_ev = mkEvent EVENT_DEBUG_SOURCE $ mkStaticStruct
              [ mkLit16BE $ srcSpanStartLine ss
@@ -336,10 +335,9 @@ mkAnnotEvent _ (SourceNote ss)
              , mkLit16BE $ srcSpanEndCol ss
                -- TODO: File!
              ]
-{-
     name_ev = mkEvent EVENT_DEBUG_NAME $ mkStaticStruct
-              [mkStaticString $ intercalate "/" names]
--}
+              [mkStaticString names]
+
 mkAnnotEvent bnds (CoreNote lbl (ExprPtr core))
   = [mkEvent EVENT_DEBUG_CORE $ mkStaticStruct
       [ mkStaticString $ showSDoc $ ppr lbl

@@ -282,8 +282,8 @@ cgExpr (StgTick (HpcTick m n) expr) = do
 
 \begin{code}
 
-cgExpr (StgTick (SourceNote src) expr) = do
-  addTick (SourceNote src)
+cgExpr (StgTick (SourceNote src names) expr) = do
+  addTick (SourceNote src names)
   cgExpr expr
 
 cgExpr (StgTick (CoreNote bnd core) expr) = do

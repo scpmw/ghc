@@ -973,7 +973,7 @@ mkTickish boxLabel countEntries topOnly pos fvs decl_path =
           ProfNotes   -> ProfNote cc count True{-scopes-}
           Breakpoints -> Breakpoint c ids
           SourceNotes | RealSrcSpan pos' <- pos
-                      -> SourceNote pos'
+                      -> SourceNote pos' cc_name
           _otherwise  -> panic "mkTickish: bad source span!"
     in
     ( tickish

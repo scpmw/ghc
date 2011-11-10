@@ -1629,13 +1629,13 @@ toIfaceExpr (App f a)       = toIfaceApp f [a]
 toIfaceExpr (Case s x _ as) = IfaceCase (toIfaceExpr s) (getFS x) (map toIfaceAlt as)
 toIfaceExpr (Let b e)       = IfaceLet (toIfaceBind b) (toIfaceExpr e)
 toIfaceExpr (Cast e co)     = IfaceCast (toIfaceExpr e) (coToIfaceType co)
-toIfaceExpr (Tick t e)    = IfaceTick (toIfaceTickish t) (toIfaceExpr e)
+toIfaceExpr (Tick t e)      = IfaceTick (toIfaceTickish t) (toIfaceExpr e)
 
 ---------------------
 toIfaceTickish :: Tickish Id -> IfaceTickish
 toIfaceTickish (ProfNote cc tick push) = IfaceSCC cc tick push
 toIfaceTickish (HpcTick modl ix)       = IfaceHpcTick modl ix
-toIfaceTickish (SourceNote src)        = IfaceSource src
+toIfaceTickish (SourceNote src names)  = IfaceSource src names
 toIfaceTickish _ = panic "toIfaceTickish"
 
 ---------------------

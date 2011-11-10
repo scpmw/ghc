@@ -1281,13 +1281,14 @@ instance Binary IfaceTickish where
       put_ bh cc
       put_ bh tick
       put_ bh push
-    put_ bh (IfaceSource src) = do
+    put_ bh (IfaceSource src names) = do
       putByte bh 2
       put_ bh (srcSpanFile src)
       put_ bh (srcSpanStartLine src)
       put_ bh (srcSpanStartCol src)
       put_ bh (srcSpanEndLine src)
       put_ bh (srcSpanEndCol src)
+      put_ bh names
 
     get bh = do
       h <- getByte bh
@@ -1306,7 +1307,8 @@ instance Binary IfaceTickish where
                 ec   <- get bh
                 let start = mkRealSrcLoc file sl sc
                     end   = mkRealSrcLoc file el ec
-                return (IfaceSource (mkRealSrcSpan start end))
+                names <- get bh
+                return (IfaceSource (mkRealSrcSpan start end) names)
         _ -> panic ("get IfaceTickish " ++ show h)
 
 -------------------------------------------------------------------------

@@ -352,6 +352,8 @@ data Tickish id =
 
   | SourceNote
     { sourceSpan :: RealSrcSpan -- ^ Source covered
+    , sourceName :: String      -- ^ Name for source location
+                                --   (uses same names as CCs)
     }
 
   -- | A core note. These types of ticks only live after Core2Stg and
