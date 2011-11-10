@@ -16,6 +16,7 @@ import Module
 import DynFlags
 import FastString
 
+import Config          ( cProjectName, cProjectVersion )
 import Name            ( nameOccName )
 import Literal         ( Literal(..) )
 import OccName         ( occNameFS )
@@ -28,7 +29,7 @@ import SrcLoc          (srcSpanFile,
                         srcSpanStartLine, srcSpanStartCol,
                         srcSpanEndLine, srcSpanEndCol)
 
-import System.FilePath (splitFileName)
+import System.Directory(getCurrentDirectory)
 import Control.Monad   (forM, forM_)
 import Data.List       (nub, find, maximumBy)
 import Data.Maybe      (fromMaybe, mapMaybe)
@@ -74,19 +75,18 @@ cmmMetaLlvmGens dflags _mod location render tiMap env cmm = do
   lastId <- newIORef $ fromMaybe 0 (maximum $ (Nothing:) $ map timInstr $ elems tiMap)
   let freshId = modifyIORef lastId (+1) >> readIORef lastId
 
-  -- Emit compile unit information. A whole lot of stuff the debugger
-  -- probably won't even care about.
-  let (srcPath, srcFile) = case ml_hs_file location of
-        Just path -> splitFileName path
-        Nothing   -> ("", "")
+  -- Emit compile unit information.
+  srcPath <- getCurrentDirectory
+  let srcFile  = fromMaybe "" (ml_hs_file location)
+      producerName = cProjectName ++ " " ++ cProjectVersion
   unitId <- freshId
   render $ pprMeta unitId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_compile_unit)
     , LMStaticLit (LMNullLit LMMetaType)         -- "unused"
     , LMStaticLit (mkI32 dW_LANG_Haskell)        -- DWARF language identifier
     , LMMetaString (fsLit srcFile)               -- Source code name
-    , LMMetaString (fsLit srcPath)               -- Source code directory
-    , LMMetaString (fsLit "GHC")                 -- Producer
+    , LMMetaString (fsLit srcPath)               -- Compilation base directory
+    , LMMetaString (fsLit producerName)          -- Producer
     , LMStaticLit (mkI1 True)                    -- Main compilation unit?
                                                  -- Not setting this causes LLVM to not generate anything at all!
     , LMStaticLit (mkI1 $ optLevel dflags > 0)   -- Optimized?
@@ -185,11 +185,11 @@ cmmMetaLlvmGens dflags _mod location render tiMap env cmm = do
 
 emitFileMeta :: (SDoc -> IO ()) -> Int -> Int -> FilePath -> IO ()
 emitFileMeta render fileId unitId filePath = do
-  let (fileDir, file) = splitFileName filePath
+  srcPath <- getCurrentDirectory
   render $ pprMeta fileId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_file_type)
-    , LMMetaString (fsLit file)                  -- Source file name
-    , LMMetaString (fsLit fileDir)               -- Source file directory
+    , LMMetaString (fsLit filePath)              -- Source file name
+    , LMMetaString (fsLit srcPath)               -- Source file directory
     , LMMetaRef unitId                           -- Reference to compile unit
     ]
 
@@ -316,10 +316,10 @@ mkProcedureEvent platform tim lbl
   = mkEvent EVENT_DEBUG_PROCEDURE $ mkStaticStruct
       [ mkLit16BE $ fromMaybe none $ timInstr tim
       , mkLit16BE $ fromMaybe none $ timParent tim
-      , mkStaticString $ showSDoc $ pprCLabel platform lbl
-        -- TODO: Hack!
+      , mkStaticString $ showSDocC  $ pprCLabel platform lbl
       ]
   where none = 0xffff
+        showSDocC = flip renderWithStyle (mkCodeStyle CStyle)
 
 mkAnnotEvent :: Set Var -> Tickish () -> [LlvmStatic]
 mkAnnotEvent _ (SourceNote ss)
@@ -340,7 +340,7 @@ mkAnnotEvent _ (SourceNote ss)
 mkAnnotEvent bnds (CoreNote lbl (ExprPtr core))
   = [mkEvent EVENT_DEBUG_CORE $ mkStaticStruct
       [ mkStaticString $ showSDoc $ ppr lbl
-      , mkStaticString $ showSDoc $ ppr $ stripCore bnds core
+      , mkStaticString $ take 10000 $ showSDoc $ ppr $ stripCore bnds core
       ]]
 mkAnnotEvent _ _ = []
 
