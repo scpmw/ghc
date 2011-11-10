@@ -99,6 +99,7 @@ char *EventDesc[] = {
   [EVENT_DEBUG_SOURCE]        = "Debug source data",
   [EVENT_DEBUG_CORE]          = "Debug core data",
   [EVENT_DEBUG_NAME]          = "Debug name data",
+  [EVENT_DEBUG_PTR_RANGE]     = "Debug pointer range",
 };
 
 // Event type. 
@@ -276,6 +277,9 @@ static StgWord16 getEventSize(EventTypeNum t)
     case EVENT_BLOCK_MARKER:
         return sizeof(StgWord32) + sizeof(EventTimestamp) + 
             sizeof(EventCapNo);
+
+    case EVENT_DEBUG_PTR_RANGE:
+        return sizeof(StgWord64) + sizeof(StgWord64);
 
     default:
         return EVENT_SIZE_DEPRECATED; /* ignore deprecated events */
@@ -751,7 +755,7 @@ void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo)
 void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)
 {
 	// (size:16, cap:16, cnt * (tick : 32, freq : 32) )
-	nat size = sizeof(EventCapNo) + cnt * sizeof(StgWord32), i;
+	nat size = sizeof(EventCapNo) + cnt * sizeof(StgWord64), i;
 	EventsBuf *eb = own_cap ? &capEventBuf[cap->no] : &eventBuf;
 	if (!ensureRoomForVariableEvent(eb, size)) {
 		return;
@@ -760,9 +764,7 @@ void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **
 	postPayloadSize(eb, size);
 	postCapNo(eb, cap->no);
 	for (i = 0; i < cnt; i++) {
-		// Downcast for 64bit architectures. Hopefully nothing of
-		// value is lost.
-		postWord32(eb, (StgWord32) (intptr_t) ips[i]);
+		postWord64(eb, (StgWord64) ips[i]);
 	}
 }
 
@@ -797,6 +799,20 @@ void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)
 	postBuf(eb, dbg, size);
 	dbg += size;
 
+}
+
+void postProcPtrRange(void *low_pc, void * high_pc)
+{
+	EventsBuf *eb = &eventBuf; // Should be safe without locking
+
+	if (!ensureRoomForEvent(&eventBuf, EVENT_DEBUG_PTR_RANGE)) {
+		return;
+	}
+
+	// Post data
+	postEventHeader(eb, EVENT_DEBUG_PTR_RANGE);
+	postWord64(eb, (StgWord64) low_pc);
+	postWord64(eb, (StgWord64) high_pc);
 }
 
 void postEventStartup(EventCapNo n_caps)

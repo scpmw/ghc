@@ -91,6 +91,8 @@ void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **
 
 void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
 
+void postProcPtrRange(void *low_pc, void *high_pc);
+
 #else /* !TRACING */
 
 INLINE_HEADER void postSchedEvent (Capability *cap  STG_UNUSED,

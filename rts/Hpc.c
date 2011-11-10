@@ -14,6 +14,10 @@
 #include <string.h>
 #include <assert.h>
 
+#ifdef USE_DWARF
+#include <Dwarf.h>
+#endif
+
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
 #endif
@@ -211,6 +215,13 @@ startupHpc(void)
 
   debugTrace(DEBUG_hpc,"startupHpc");
 
+#ifdef USE_DWARF
+#ifdef TRACING
+  // Load DWARF information
+  dwarf_load();
+#endif
+#endif
+
   // Go through modules
   HpcModuleInfo *mod = modules;
   StgBool have_tix = 0;
@@ -228,6 +239,12 @@ startupHpc(void)
       traceUnitData(mod->modSource, mod->debugData);
 #endif
   }
+
+#ifdef USE_DWARF
+#ifdef TRACING
+  dwarf_free();
+#endif
+#endif
 
   /* No tix? No point in continuing */
   if (!have_tix)
@@ -446,16 +463,43 @@ HpcModuleInfo *hs_hpc_rootModule(void) {
 void traceUnitData(char *unit_name, void *data) {
 	// Dump all entries in debug data
 	StgWord8 *dbg = (StgWord8 *)data;
+#ifdef USE_DWARF
+	DwarfUnit *unit = dwarf_get_unit(unit_name);
+#endif
 	while(dbg && *dbg) {
 
 		// Get event type and size.
 		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
 		StgWord16 size = *(StgWord16 *)dbg; dbg += sizeof(StgWord16);
 
+#ifdef USE_DWARF
+		// Follow data
+		char *proc_name = 0;
+		DwarfProc *proc = 0;
+		switch (num) {
+
+		case EVENT_DEBUG_PROCEDURE:
+			if (!unit) break;
+			proc_name = (char *)dbg + sizeof(StgWord16) + sizeof(StgWord16);
+			proc = dwarf_get_proc(unit, proc_name);
+			break;
+
+		default: break;
+		}
+#endif
+
 		// Post data
 		traceDebugData(num, size, dbg);
 		dbg += size;
 
+#ifdef USE_DWARF
+		// Post additional data about procedure. Note we might have
+		// multiple ranges per procedure!
+		while (proc && !strcmp(proc_name, proc->name)) {
+			traceProcPtrRange(proc->low_pc, proc->high_pc);
+			proc = proc->next;
+		}
+ #endif
 	}
 }
 

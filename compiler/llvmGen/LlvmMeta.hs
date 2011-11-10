@@ -271,6 +271,9 @@ mkStaticString :: String -> LlvmStatic
 -- "\\00" that we actually neither want nor need. I am a bit unsure
 -- though what the "right thing to do" is here, therefore I'll just
 -- hack around it for the moment. Also: This is inefficient. -- PMW
+--
+-- Note: The terminating '\0' is now required by the RTS so it can
+-- treat pointers into the event log as null-terminated C strings.
 mkStaticString str = LMStaticStr (mkFastString (concatMap esc str)) typ
   where typ = LMArray (length str + 1) i8
         esc '\\'   = "\\\\"

@@ -574,6 +574,13 @@ void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)
 	}
 }
 
+void traceProcPtrRange(void *low_pc, void *high_pc)
+{
+	if (eventlog_enabled) {
+		postProcPtrRange(low_pc, high_pc);
+	}
+}
+
 
 void traceThreadStatus_ (StgTSO *tso USED_IF_DEBUG)
 {
