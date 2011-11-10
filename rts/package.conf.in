@@ -47,6 +47,10 @@ extra-libraries:
 #if USE_PAPI
 			     , "papi"
 #endif
+#if USE_DWARF
+                 , "dwarf"
+                 , "elf"
+#endif
 
 #ifdef INSTALLING
 include-dirs:		INCLUDE_DIR PAPI_INCLUDE_DIR

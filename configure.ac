@@ -795,6 +795,18 @@ AC_CHECK_FUNCS(__mingw_vfprintf)
 AC_CHECK_HEADER([linux/perf_event.h], [HavePerfEvent=YES], [HavePerfEvent=NO])
 AC_SUBST(HavePerfEvent)
 
+# Check for libdwarf
+AC_CHECK_HEADER([libdwarf.h], [HaveDwarfHeader=YES], [HaveLibDwarfHeader=NO])
+AC_CHECK_LIB(dwarf, dwarf_init, [HaveDwarfLib=YES], [HaveDwarfLib=NO])
+AC_CHECK_LIB(elf, elf_begin, [HaveElfLib=YES], [HaveElfLib=NO])
+if test "$HaveDwarfLib" = "YES" -a "$HaveDwarfHeader" = "YES" -a "$HaveElfLib" = "YES"; then
+   HaveLibDwarf=YES
+else
+   HaveLibDwarf=NO
+fi
+AC_SUBST(HaveLibDwarf)
+
+
 if test "$HAVE_DOCBOOK_XSL" = "NO" ||
    test "$XsltprocCmd" = ""
 then

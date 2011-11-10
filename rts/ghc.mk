@@ -439,6 +439,14 @@ ifeq "$(GhcRtsWithPerfEvent)" "YES"
 rts_CC_OPTS += -DUSE_PERF_EVENT
 endif
 
+#-----------------------------------------------------------------------------
+# Add support for reading DWARF debugging information, if available
+
+ifeq "$(GhcRtsWithDwarf)" "YES"
+rts_CC_OPTS += -DUSE_DWARF
+rts_PACKAGE_CPP_OPTS += -DUSE_DWARF
+endif
+
 # -----------------------------------------------------------------------------
 # dependencies
 
