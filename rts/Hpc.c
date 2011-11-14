@@ -218,7 +218,8 @@ startupHpc(void)
 #ifdef USE_DWARF
 #ifdef TRACING
   // Load DWARF information
-  dwarf_load();
+  if (RtsFlags.TraceFlags.tracing)
+      dwarf_load();
 #endif
 #endif
 
@@ -242,7 +243,8 @@ startupHpc(void)
 
 #ifdef USE_DWARF
 #ifdef TRACING
-  dwarf_free();
+  if (RtsFlags.TraceFlags.tracing)
+      dwarf_free();
 #endif
 #endif
 
