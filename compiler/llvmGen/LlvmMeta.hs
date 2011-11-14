@@ -333,7 +333,7 @@ mkAnnotEvent _ (SourceNote ss names)
              , mkLit16BE $ srcSpanStartCol ss
              , mkLit16BE $ srcSpanEndLine ss
              , mkLit16BE $ srcSpanEndCol ss
-               -- TODO: File!
+             , mkStaticString $ unpackFS $ srcSpanFile ss
              ]
     name_ev = mkEvent EVENT_DEBUG_NAME $ mkStaticStruct
               [mkStaticString names]
