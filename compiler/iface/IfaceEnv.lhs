@@ -33,7 +33,6 @@ import UniqFM
 import FastString
 import UniqSupply
 import SrcLoc
-import MkId
 import BasicTypes
 
 import Outputable
