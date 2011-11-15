@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <string.h>
 
+
 // As far as I know, there are two ways for getting at the program's
 // memory map on Linux:
 //
@@ -32,6 +33,10 @@
 // both aren't portable. For now I use the /proc/self/maps method
 // by default, as it also solves the problem of where to get the
 // location of the executable from.
+
+// #define USE_DL_ITERATE_PHDR
+
+
 #ifdef USE_DL_ITERATE_PHDR
 #define _GNU_SOURCE
 #include <link.h>
@@ -41,7 +46,7 @@
 DwarfUnit *dwarf_units = 0;
 
 static void *dwarf_get_code_offset(Elf *elf, void *seg_start);
-//static void dwarf_load_symbols(Elf *elf, void *seg_start);
+static void dwarf_load_symbols(char *file, Elf *elf, void *seg_start);
 
 static void dwarf_load_file(char *module_path, void *seg_start);
 static void dwarf_load_dies(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *seg_start);
@@ -52,10 +57,6 @@ static DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name, void *low_pc, void
                                  DwarfSource source, DwarfProc *after);
 
 static void dwarf_stats(void);
-
-struct dwarf_state {
-	char *exe;
-};
 
 #ifndef USE_DL_ITERATE_PHDR
 
@@ -192,6 +193,9 @@ void dwarf_load_file(char *module_path, void *seg_start) {
 		return;
 	}
 
+	// Load symbols
+	dwarf_load_symbols(module_path, elf, seg_start);
+
 	// Find symbol address offset
 	void *code_offset = dwarf_get_code_offset(elf, seg_start);
 
@@ -306,9 +310,10 @@ void *dwarf_get_code_offset(Elf *elf, void *seg_start)
 	return 0;
 }
 
-#if 0
 
-// Unused. Sadly, this is not very useful unless
+// Use "FILE" type annotations in symbol table to find out which files
+// the symbols originally came from. Sadly, this is not very useful
+// until
 //
 // 1. The backend starts generating proper .file directives
 //    into the assembler files. Probably straightforward for NCG,
@@ -322,7 +327,14 @@ void *dwarf_get_code_offset(Elf *elf, void *seg_start)
 // On the other hand, being able to support this would make us
 // independent from another dependency...
 
-void dwarf_load_symbols(Elf *elf, void *seg_start)
+// #define GET_FILE_FROM_SYMTAB
+
+
+// Catch-all unit to use where we don't have (or chose to ignore) a
+// "file" entry in the symtab
+#define SYMTAB_UNIT_NAME "SYMTAB: %s"
+
+void dwarf_load_symbols(char *file, Elf *elf, void *seg_start)
 {
 
 	// Get file header
@@ -347,9 +359,14 @@ void dwarf_load_symbols(Elf *elf, void *seg_start)
 		if (!data)
 			return;
 
+		// Find or create the catch-all unit for symtab entries
+		char symtab_unit_name[1024];
+		snprintf (symtab_unit_name, 1024, SYMTAB_UNIT_NAME, file);
+		DwarfUnit *unit = dwarf_get_unit(symtab_unit_name);
+		if (!unit) unit = dwarf_new_unit(symtab_unit_name, "");
+
 		// Iterate over symbols
 		nat ndx;
-		DwarfUnit *unit = 0;
 		for (ndx = 1; ndx < hdr.sh_size / hdr.sh_entsize; ndx++) {
 
 			// Get symbol data
@@ -366,7 +383,7 @@ void dwarf_load_symbols(Elf *elf, void *seg_start)
 				continue;
 			}
 
-			// Load associated section header. Use cached one of
+			// Load associated section header. Use cached one where
 			// applicable.
 			if (sym.st_shndx != sym_shndx) {
 				if (sym.st_shndx == SHN_ABS) {
@@ -390,14 +407,20 @@ void dwarf_load_symbols(Elf *elf, void *seg_start)
 			// Type?
 			switch (GELF_ST_TYPE(sym.st_info)) {
 
+#ifdef GET_FILE_FROM_SYMTAB
 			case STT_FILE:
 
 				// Create unit, if necessary
 				unit = dwarf_get_unit(name);
 				if (!unit) unit = dwarf_new_unit(name, "");
 				break;
+#endif
 
+			// Haskell symbols can appear in the symbol table flagged as
+			// just about anything.
+			case STT_NOTYPE:
 			case STT_FUNC:
+			case STT_OBJECT:
 
 				// Only look at symbols from executable sections
 				if (!(sym_shdr.sh_flags & SHF_EXECINSTR) ||
@@ -421,7 +444,6 @@ void dwarf_load_symbols(Elf *elf, void *seg_start)
 	}
 }
 
-#endif // 0
 
 void dwarf_load_dies(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *code_offset)
 {
