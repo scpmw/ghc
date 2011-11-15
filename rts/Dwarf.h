@@ -26,9 +26,12 @@ struct DwarfProc_ {
 	char *name;
 	void *low_pc;
 	void *high_pc;
+	StgBool copied;
 	DwarfSource source;
 	struct DwarfProc_ *next;
 };
+
+extern DwarfUnit *dwarf_units;
 
 void dwarf_load(void);
 DwarfUnit *dwarf_get_unit(char *name);

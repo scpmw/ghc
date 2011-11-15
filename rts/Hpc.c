@@ -49,7 +49,8 @@ HpcModuleInfo *modules = 0;
 static char *tixFilename = NULL;
 
 #ifdef TRACING
-void traceUnitData(char *unit_name, void *data);
+static void traceUnitData(char *unit_name, void *data);
+static void traceUnaccountedProcs(void);
 #endif
 
 static void GNU_ATTRIBUTE(__noreturn__)
@@ -243,8 +244,13 @@ startupHpc(void)
 
 #ifdef USE_DWARF
 #ifdef TRACING
-  if (RtsFlags.TraceFlags.tracing)
+  if (RtsFlags.TraceFlags.tracing) {
+
+      // Trace out all information that we haven't yet written to the event log
+      traceUnaccountedProcs();
+
       dwarf_free();
+  }
 #endif
 #endif
 
@@ -499,10 +505,46 @@ void traceUnitData(char *unit_name, void *data) {
 		// multiple ranges per procedure!
 		while (proc && !strcmp(proc_name, proc->name)) {
 			traceProcPtrRange(proc->low_pc, proc->high_pc);
+			proc->copied = 1;
 			proc = proc->next;
 		}
  #endif
 	}
 }
+
+#ifdef USE_DWARF
+
+// Writes out information about all procedures that we don't have
+// entries in the debugging info for - but still know something
+// interesting about, like their procedure name is and where the code
+// was coming from. This will, for example, catch libraries without
+// debug info as well as RTS stuff.
+
+void traceUnaccountedProcs() {
+	DwarfUnit *unit;
+
+	for (unit = dwarf_units; unit; unit = unit->next) {
+		StgBool module_put = 0;
+		DwarfProc *proc;
+
+		for (proc = unit->procs; proc; proc = proc->next)
+			if (!proc->copied) {
+
+				// Need to put module header?
+				if (!module_put) {
+					traceDebugModule(unit->name);
+					module_put = 1;
+				}
+
+				// Print everything we know about the procedure
+				traceDebugProc(proc->name);
+				traceProcPtrRange(proc->low_pc, proc->high_pc);
+
+			}
+	}
+
+}
+
+#endif // USE_DWARF
 
 #endif // TRACING

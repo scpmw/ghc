@@ -574,6 +574,18 @@ void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)
 	}
 }
 
+void traceDebugModule(char *mod_name)
+{
+	if (eventlog_enabled)
+		postDebugModule(mod_name);
+}
+
+void traceDebugProc(char *label)
+{
+	if (eventlog_enabled)
+		postDebugProc(label);
+}
+
 void traceProcPtrRange(void *low_pc, void *high_pc)
 {
 	if (eventlog_enabled) {

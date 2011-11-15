@@ -801,6 +801,42 @@ void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)
 
 }
 
+void postDebugModule(char *mod_name)
+{
+	EventsBuf *eb = &eventBuf; // Should be safe without locking
+
+	// Check for flush
+	nat size = strlen(mod_name) + 1;
+	if (!ensureRoomForVariableEvent(eb, size)) {
+		return;
+	}
+
+	// Write out
+	postEventHeader(eb, EVENT_DEBUG_MODULE);
+	postPayloadSize(eb, size);
+	postBuf(eb, (StgWord8 *)mod_name, (int) size);
+
+}
+
+void postDebugProc(char *label)
+{
+	EventsBuf *eb = &eventBuf; // Should be safe without locking
+
+	// Check for flush
+	nat size = sizeof(StgWord16) + sizeof(StgWord16) + strlen(label) + 1;
+	if (!ensureRoomForVariableEvent(eb, size)) {
+		return;
+	}
+
+	// Write out
+	postEventHeader(eb, EVENT_DEBUG_PROCEDURE);
+	postPayloadSize(eb, size);
+	postWord16(eb, (StgWord16)0xffff);
+	postWord16(eb, (StgWord16)0xffff);
+	postBuf(eb, (StgWord8 *)label, (int) strlen(label) + 1);
+
+}
+
 void postProcPtrRange(void *low_pc, void * high_pc)
 {
 	EventsBuf *eb = &eventBuf; // Should be safe without locking

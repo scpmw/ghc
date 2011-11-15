@@ -566,6 +566,7 @@ DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name,
 	proc->low_pc = low_pc;
 	proc->high_pc = high_pc;
 	proc->source = source;
+	proc->copied = 0;
 
 	proc->next = (after ? after->next : unit->procs);
 	*(after ? &after->next : &unit->procs) = proc;

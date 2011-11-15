@@ -165,6 +165,8 @@ void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void *
 
 void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
 
+void traceDebugModule(char *unit_name);
+void traceDebugProc(char *label);
 void traceProcPtrRange(void *low_pc, void *high_pc);
 
 
