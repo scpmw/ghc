@@ -50,7 +50,8 @@ static char *tixFilename = NULL;
 
 #ifdef TRACING
 static void traceUnitData(char *unit_name, void *data);
-static void traceUnaccountedProcs(void);
+static void traceAllUnaccountedProcs(void);
+static void traceUnaccountedProcs(DwarfUnit *unit, StgBool put_module);
 #endif
 
 static void GNU_ATTRIBUTE(__noreturn__)
@@ -247,7 +248,7 @@ startupHpc(void)
   if (RtsFlags.TraceFlags.tracing) {
 
       // Trace out all information that we haven't yet written to the event log
-      traceUnaccountedProcs();
+      traceAllUnaccountedProcs();
 
       dwarf_free();
   }
@@ -510,6 +511,13 @@ void traceUnitData(char *unit_name, void *data) {
 		}
  #endif
 	}
+
+#ifdef USE_DWARF
+	// Add extra procedures
+	if (unit)
+		traceUnaccountedProcs(unit, 0);
+#endif
+
 }
 
 #ifdef USE_DWARF
@@ -520,29 +528,33 @@ void traceUnitData(char *unit_name, void *data) {
 // was coming from. This will, for example, catch libraries without
 // debug info as well as RTS stuff.
 
-void traceUnaccountedProcs() {
+void traceAllUnaccountedProcs() {
 	DwarfUnit *unit;
 
 	for (unit = dwarf_units; unit; unit = unit->next) {
-		StgBool module_put = 0;
-		DwarfProc *proc;
-
-		for (proc = unit->procs; proc; proc = proc->next)
-			if (!proc->copied) {
-
-				// Need to put module header?
-				if (!module_put) {
-					traceDebugModule(unit->name);
-					module_put = 1;
-				}
-
-				// Print everything we know about the procedure
-				traceDebugProc(proc->name);
-				traceProcPtrRange(proc->low_pc, proc->high_pc);
-
-			}
+		traceUnaccountedProcs(unit, 1);
 	}
+}
 
+void traceUnaccountedProcs(DwarfUnit *unit, StgBool put_module) {
+	DwarfProc *proc;
+
+	for (proc = unit->procs; proc; proc = proc->next)
+		if (!proc->copied) {
+
+			// Need to put module header?
+			if (put_module) {
+				traceModule(unit->name, 0, 0);
+				traceDebugModule(unit->name);
+				put_module = 0;
+			}
+
+			// Print everything we know about the procedure
+			traceDebugProc(proc->name);
+			traceProcPtrRange(proc->low_pc, proc->high_pc);
+			proc->copied = 1;
+
+		}
 }
 
 #endif // USE_DWARF
