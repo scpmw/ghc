@@ -56,8 +56,6 @@ static DwarfUnit *dwarf_new_unit(char *name, char *comp_dir);
 static DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name, void *low_pc, void *high_pc,
                                  DwarfSource source, DwarfProc *after);
 
-static void dwarf_stats(void);
-
 #ifndef USE_DL_ITERATE_PHDR
 
 void dwarf_load()
@@ -572,23 +570,6 @@ DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name,
 	*(after ? &after->next : &unit->procs) = proc;
 
 	return proc;
-}
-
-void dwarf_stats()
-{
-	puts("DWARF stats:");
-	DwarfUnit *unit;
-	for (unit = dwarf_units; unit; unit = unit->next) {
-		nat dw = 0, elf = 0;
-		DwarfProc *proc;
-		for (proc = unit->procs; proc; proc = proc->next) {
-			switch(proc->source) {
-			case DwarfSourceDwarf: dw++; break;
-			case DwarfSourceSymtab: elf++; break;
-			}
-		}
-		printf("%s: %d syms, %d dwarfs\n", unit->name, elf, dw);
-	}
 }
 
 void dwarf_free()
