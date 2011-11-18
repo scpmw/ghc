@@ -292,7 +292,7 @@ isLiftedTypeKind _                = False
 %*									*
 %************************************************************************
 
-\begin{code}  
+\begin{code}
 tyVarsOfType :: Type -> VarSet
 -- ^ NB: for type synonyms tyVarsOfType does /not/ expand the synonym
 -- tyVarsOfType returns only the free *type* variables of a type
@@ -438,7 +438,6 @@ This invariant has several crucial consequences:
   the TvSubstEnv is enough
 
 * In substTy, substTheta, we can short-circuit when the TvSubstEnv is empty
-\end{code}
 
 
 
