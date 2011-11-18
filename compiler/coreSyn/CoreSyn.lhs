@@ -6,12 +6,19 @@
 \begin{code}
 {-# LANGUAGE DeriveDataTypeable, DeriveFunctor #-}
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 -- | CoreSyn holds all the main data types for use by for the Glasgow Haskell Compiler midsection
 module CoreSyn (
 	-- * Main data types
-	Expr(..), Alt, Bind(..), AltCon(..), Arg, Tickish(..), ExprPtr(..),
-	CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
-	TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..),
+        Expr(..), Alt, Bind(..), AltCon(..), Arg, Tickish(..),  ExprPtr(..),
+        CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
+        TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..),
 
         -- ** 'Expr' construction
 	mkLets, mkLams,
@@ -37,6 +44,7 @@ module CoreSyn (
         isRuntimeArg, isRuntimeVar,
 
         tickishCounts, tickishScoped, tickishIsCode, mkNoTick, mkNoScope,
+        tickishCanSplit,
 
         -- * Unfolding data types
         Unfolding(..),  UnfoldingGuidance(..), UnfoldingSource(..),
@@ -271,17 +279,37 @@ type Arg b = Expr b
 type Alt b = (AltCon, [b], Expr b)
 
 -- | A case alternative constructor (i.e. pattern match)
-data AltCon = DataAlt DataCon	-- ^ A plain data constructor: @case e of { Foo x -> ... }@.
-                                -- Invariant: the 'DataCon' is always from a @data@ type, and never from a @newtype@
-	    | LitAlt  Literal   -- ^ A literal: @case e of { 1 -> ... }@
-	    | DEFAULT           -- ^ Trivial alternative: @case e of { _ -> ... }@
-	 deriving (Eq, Ord, Data, Typeable)
+data AltCon 
+  = DataAlt DataCon   --  ^ A plain data constructor: @case e of { Foo x -> ... }@.
+                      -- Invariant: the 'DataCon' is always from a @data@ type, and never from a @newtype@
+
+  | LitAlt  Literal   -- ^ A literal: @case e of { 1 -> ... }@
+                      -- Invariant: always an *unlifted* literal
+		      -- See Note [Literal alternatives]
+	      	      
+  | DEFAULT           -- ^ Trivial alternative: @case e of { _ -> ... }@
+   deriving (Eq, Ord, Data, Typeable)
 
 -- | Binding, used for top level bindings in a module and local bindings in a @let@.
 data Bind b = NonRec b (Expr b)
 	    | Rec [(b, (Expr b))]
   deriving (Data, Typeable)
 \end{code}
+
+Note [Literal alternatives]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Literal alternatives (LitAlt lit) are always for *un-lifted* literals.
+We have one literal, a literal Integer, that is lifted, and we don't
+allow in a LitAlt, because LitAlt cases don't do any evaluation. Also
+(see Trac #5603) if you say
+    case 3 of
+      S# x -> ...
+      J# _ _ -> ...
+(where S#, J# are the constructors for Integer) we don't want the
+simplifier calling findAlt with argument (LitAlt 3).  No no.  Integer
+literals are an opaque encoding of an algebraic data type, not of
+an unlifted literal, like all the others.
+
 
 -------------------------- CoreSyn INVARIANTS ---------------------------
 
@@ -399,10 +427,12 @@ tickishScoped CoreNote{}   = True
 
 mkNoTick :: Tickish id -> Tickish id
 mkNoTick n@ProfNote{} = n {profNoteCount = False}
+mkNoTick Breakpoint{} = panic "mkNoTick: Breakpoint" -- cannot split a BP
 mkNoTick t = t
 
 mkNoScope :: Tickish id -> Tickish id
 mkNoScope n@ProfNote{} = n {profNoteScope = False}
+mkNoScope Breakpoint{} = panic "mkNoScope: Breakpoint" -- cannot split a BP
 mkNoScope t = t
 
 -- | Return True if this source annotation compiles to some code, or will
@@ -411,6 +441,12 @@ tickishIsCode :: Tickish id -> Bool
 tickishIsCode SourceNote{} = False
 tickishIsCode CoreNote{}   = False
 tickishIsCode _tickish     = True  -- all the rest for now
+
+-- | Return True if this Tick can be split into (tick,scope) parts with
+-- 'mkNoScope' and 'mkNoTick' respectively.
+tickishCanSplit :: Tickish Id -> Bool
+tickishCanSplit Breakpoint{} = False
+tickishCanSplit _ = True
 \end{code}
 
 
@@ -524,9 +560,11 @@ Representation of desugared vectorisation declarations that are fed to the vecto
 'ModGuts').
 
 \begin{code}
-data CoreVect = Vect     Id    (Maybe CoreExpr)
-              | NoVect   Id
-              | VectType Bool TyCon (Maybe TyCon)
+data CoreVect = Vect      Id   (Maybe CoreExpr)
+              | NoVect    Id
+              | VectType  Bool TyCon (Maybe TyCon)
+              | VectClass TyCon                     -- class tycon
+              | VectInst  Bool Id                   -- (1) whether SCALAR & (2) instance dfun
 \end{code}
 
 

@@ -6,12 +6,20 @@
 --
 -----------------------------------------------------------------------------
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module CgProf (
 	mkCCostCentre, mkCCostCentreStack,
 
 	-- Cost-centre Profiling
         dynProfHdr, profDynAlloc, profAlloc, staticProfHdr, initUpdFrameProf,
         enterCostCentreThunk,
+        enterCostCentreFun,
         costCentreFrom,
 	curCCS, curCCSAddr,
 	emitCostCentreDecl, emitCostCentreStackDecl, 
@@ -47,6 +55,7 @@ import Module
 import Constants	-- Lots of field offsets
 import Outputable
 
+import Data.Char
 import Control.Monad
 
 -----------------------------------------------------------------------------
@@ -128,6 +137,14 @@ enterCostCentreThunk closure =
   ifProfiling $ do 
     stmtC $ CmmStore curCCSAddr (costCentreFrom closure)
 
+enterCostCentreFun :: CostCentreStack -> CmmExpr -> Code
+enterCostCentreFun ccs closure =
+  ifProfiling $ do
+    if isCurrentCCS ccs
+       then emitRtsCall rtsPackageId (fsLit "enterFunCCS")
+               [CmmHinted (costCentreFrom closure) AddrHint] False
+       else return () -- top-level function, nothing to do
+
 ifProfiling :: Code -> Code
 ifProfiling code
   | opt_SccProfilingOn = code
@@ -145,9 +162,11 @@ emitCostCentreDecl
    :: CostCentre
    -> Code
 emitCostCentreDecl cc = do 
-  { label <- newStringCLit (costCentreUserName cc)
-  ; modl  <- newStringCLit (Module.moduleNameString 
-                                (Module.moduleName (cc_mod cc)))
+                        -- NB. bytesFS: we want the UTF-8 bytes here (#5559)
+  { label <- newByteStringCLit (bytesFS $ costCentreUserNameFS cc)
+  ; modl  <- newByteStringCLit (bytesFS $ Module.moduleNameFS
+                                        $ Module.moduleName
+                                        $ cc_mod cc)
                 -- All cost centres will be in the main package, since we
                 -- don't normally use -auto-all or add SCCs to other packages.
                 -- Hence don't emit the package name in the module here.
@@ -157,10 +176,14 @@ emitCostCentreDecl cc = do
 	      modl,	-- char *module,
               zero,	-- StgWord time_ticks
               zero64,	-- StgWord64 mem_alloc
+              is_caf,   -- StgInt is_caf
               zero      -- struct _CostCentre *link
 	    ] 
   ; emitDataLits (mkCCLabel cc) lits
   }
+  where
+     is_caf | isCafCC cc = mkIntCLit (ord 'c') -- 'c' == is a CAF
+            | otherwise  = zero
 
 
 emitCostCentreStackDecl

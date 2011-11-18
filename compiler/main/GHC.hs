@@ -6,6 +6,13 @@
 --
 -- -----------------------------------------------------------------------------
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module GHC (
 	-- * Initialisation
 	defaultErrorHandler,
@@ -257,7 +264,7 @@ import RdrName
 import qualified HsSyn -- hack as we want to reexport the whole module
 import HsSyn hiding ((<.>))
 import Type     hiding( typeKind )
-import Coercion		( synTyConResKind )
+import Kind		( synTyConResKind )
 import TcType		hiding( typeKind )
 import Id
 import TysPrim		( alphaTyVars )
@@ -874,7 +881,7 @@ compileCore simplify fn = do
         gutsToCoreModule (Right mg) = CoreModule {
           cm_module  = mg_module mg,
           cm_types   = typeEnvFromEntities (bindersOfBinds (mg_binds mg))
-                                           (mg_tcs mg) (mg_clss mg)
+                                           (mg_tcs mg)
                                            (mg_fam_insts mg),
           cm_binds   = mg_binds mg
          }

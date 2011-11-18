@@ -8,6 +8,13 @@
    -- When the earliest compiler we want to boostrap with is
    -- GHC 7.2, we can make RealSrcLoc properly abstract
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 
 -- | This module contains types that relate to the positions of things
 -- in source files, and allow tagging of those things with locations
@@ -98,10 +105,7 @@ data RealSrcLoc
   = SrcLoc	FastString	-- A precise location (file name)
 		{-# UNPACK #-} !Int		-- line number, begins at 1
 		{-# UNPACK #-} !Int		-- column number, begins at 1
-
-#ifdef DEBUG
-  deriving Show -- debugging
-#endif
+  deriving Show
 
 data SrcLoc
   = RealSrcLoc {-# UNPACK #-}!RealSrcLoc
@@ -254,24 +258,16 @@ data RealSrcSpan
 	  srcSpanLine	  :: {-# UNPACK #-} !Int,
 	  srcSpanCol      :: {-# UNPACK #-} !Int
 	}
-#ifdef DEBUG
   deriving (Eq, Typeable, Show) -- Show is used by Lexer.x, becuase we
                                 -- derive Show for Token
-#else
-  deriving (Eq, Typeable)
-#endif
 
 data SrcSpan =
     RealSrcSpan !RealSrcSpan
   | UnhelpfulSpan !FastString	-- Just a general indication
 				-- also used to indicate an empty span
 
-#ifdef DEBUG
   deriving (Eq, Ord, Typeable, Show) -- Show is used by Lexer.x, becuase we
                                      -- derive Show for Token
-#else
-  deriving (Eq, Ord, Typeable)
-#endif
 
 -- | Built-in "bad" 'SrcSpan's for common sources of location uncertainty
 noSrcSpan, wiredInSrcSpan :: SrcSpan

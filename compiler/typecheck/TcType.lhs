@@ -15,6 +15,13 @@ The "tc" prefix is for "TypeChecker", because the type checker
 is the principal client.
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module TcType (
   --------------------------------
   -- Types 
@@ -26,7 +33,7 @@ module TcType (
   UserTypeCtxt(..), pprUserTypeCtxt,
   TcTyVarDetails(..), pprTcTyVarDetails, vanillaSkolemTv, superSkolemTv,
   MetaDetails(Flexi, Indirect), MetaInfo(..), 
-  isImmutableTyVar, isSkolemTyVar, isMetaTyVar,  isMetaTyVarTy,
+  isImmutableTyVar, isSkolemTyVar, isMetaTyVar,  isMetaTyVarTy, isTyVarTy,
   isSigTyVar, isOverlappableTyVar,  isTyConableTyVar,
   isAmbiguousTyVar, metaTvRef, 
   isFlexi, isIndirect, isRuntimeUnkSkol,
@@ -80,6 +87,7 @@ module TcType (
   -- * Tidying type related things up for printing
   tidyType,      tidyTypes,
   tidyOpenType,  tidyOpenTypes,
+  tidyOpenKind,
   tidyTyVarBndr, tidyFreeTyVars,
   tidyOpenTyVar, tidyOpenTyVars,
   tidyTopType,
@@ -110,7 +118,7 @@ module TcType (
   openTypeKind, constraintKind, mkArrowKind, mkArrowKinds, 
   isLiftedTypeKind, isUnliftedTypeKind, isSubOpenTypeKind, 
   isSubArgTypeKind, isSubKind, splitKindFunTys, defaultKind,
-  kindVarRef, mkKindVar,  
+  mkMetaKindVar,
 
   --------------------------------
   -- Rexported from Type
@@ -339,22 +347,29 @@ data UserTypeCtxt
   | ExprSigCtxt		-- Expression type signature
   | ConArgCtxt Name	-- Data constructor argument
   | TySynCtxt Name	-- RHS of a type synonym decl
-  | GenPatCtxt		-- Pattern in generic decl
-			-- 	f{| a+b |} (Inl x) = ...
   | LamPatSigCtxt		-- Type sig in lambda pattern
 			-- 	f (x::t) = ...
   | BindPatSigCtxt	-- Type sig in pattern binding pattern
 			--	(x::t, y) = e
   | ResSigCtxt		-- Result type sig
 			-- 	f x :: t = ....
-  | ForSigCtxt Name	-- Foreign inport or export signature
+  | ForSigCtxt Name	-- Foreign import or export signature
   | DefaultDeclCtxt	-- Types in a default declaration
+  | InstDeclCtxt        -- An instance declaration
   | SpecInstCtxt	-- SPECIALISE instance pragma
   | ThBrackCtxt		-- Template Haskell type brackets [t| ... |]
-
   | GenSigCtxt          -- Higher-rank or impredicative situations
                         -- e.g. (f e) where f has a higher-rank type
                         -- We might want to elaborate this
+  | GhciCtxt            -- GHCi command :kind <type>
+
+  | ClassSCCtxt Name	-- Superclasses of a class
+  | SigmaCtxt		-- Theta part of a normal for-all type
+			--	f :: <S> => a -> a
+  | DataTyCtxt Name	-- Theta part of a data decl
+			--	data <S> => T a = MkT a
+\end{code}
+
 
 -- Notes re TySynCtxt
 -- We allow type synonyms that aren't types; e.g.  type List = []
@@ -368,26 +383,19 @@ data UserTypeCtxt
 
 ---------------------------------
 -- Kind variables:
-
+\begin{code}
 mkKindName :: Unique -> Name
 mkKindName unique = mkSystemName unique kind_var_occ
 
-kindVarRef :: KindVar -> IORef MetaDetails
-kindVarRef tc = 
-  ASSERT ( isTcTyVar tc )
-  case tcTyVarDetails tc of
-    MetaTv TauTv ref -> ref
-    _                -> pprPanic "kindVarRef" (ppr tc)
-
-mkKindVar :: Unique -> IORef MetaDetails -> KindVar
-mkKindVar u r 
+mkMetaKindVar :: Unique -> IORef MetaDetails -> MetaKindVar
+mkMetaKindVar u r
   = mkTcTyVar (mkKindName u)
               tySuperKind  -- not sure this is right,
                             -- do we need kind vars for
                             -- coercions?
               (MetaTv TauTv r)
 
-kind_var_occ :: OccName	-- Just one for all KindVars
+kind_var_occ :: OccName	-- Just one for all MetaKindVars
 			-- They may be jiggled by tidying
 kind_var_occ = mkOccName tvName "k"
 \end{code}
@@ -410,20 +418,24 @@ pprTcTyVarDetails (MetaTv TcsTv _) = ptext (sLit "tcs")
 pprTcTyVarDetails (MetaTv SigTv _) = ptext (sLit "sig")
 
 pprUserTypeCtxt :: UserTypeCtxt -> SDoc
-pprUserTypeCtxt (InfSigCtxt n)   = ptext (sLit "the inferred type for") <+> quotes (ppr n)
-pprUserTypeCtxt (FunSigCtxt n)   = ptext (sLit "the type signature for") <+> quotes (ppr n)
-pprUserTypeCtxt ExprSigCtxt      = ptext (sLit "an expression type signature")
-pprUserTypeCtxt (ConArgCtxt c)   = ptext (sLit "the type of the constructor") <+> quotes (ppr c)
-pprUserTypeCtxt (TySynCtxt c)    = ptext (sLit "the RHS of the type synonym") <+> quotes (ppr c)
-pprUserTypeCtxt GenPatCtxt       = ptext (sLit "the type pattern of a generic definition")
-pprUserTypeCtxt ThBrackCtxt      = ptext (sLit "a Template Haskell quotation [t|...|]")
-pprUserTypeCtxt LamPatSigCtxt    = ptext (sLit "a pattern type signature")
-pprUserTypeCtxt BindPatSigCtxt   = ptext (sLit "a pattern type signature")
-pprUserTypeCtxt ResSigCtxt       = ptext (sLit "a result type signature")
-pprUserTypeCtxt (ForSigCtxt n)   = ptext (sLit "the foreign declaration for") <+> quotes (ppr n)
-pprUserTypeCtxt DefaultDeclCtxt  = ptext (sLit "a type in a `default' declaration")
-pprUserTypeCtxt SpecInstCtxt     = ptext (sLit "a SPECIALISE instance pragma")
-pprUserTypeCtxt GenSigCtxt       = ptext (sLit "a type expected by the context")
+pprUserTypeCtxt (InfSigCtxt n)    = ptext (sLit "the inferred type for") <+> quotes (ppr n)
+pprUserTypeCtxt (FunSigCtxt n)    = ptext (sLit "the type signature for") <+> quotes (ppr n)
+pprUserTypeCtxt ExprSigCtxt       = ptext (sLit "an expression type signature")
+pprUserTypeCtxt (ConArgCtxt c)    = ptext (sLit "the type of the constructor") <+> quotes (ppr c)
+pprUserTypeCtxt (TySynCtxt c)     = ptext (sLit "the RHS of the type synonym") <+> quotes (ppr c)
+pprUserTypeCtxt ThBrackCtxt       = ptext (sLit "a Template Haskell quotation [t|...|]")
+pprUserTypeCtxt LamPatSigCtxt     = ptext (sLit "a pattern type signature")
+pprUserTypeCtxt BindPatSigCtxt    = ptext (sLit "a pattern type signature")
+pprUserTypeCtxt ResSigCtxt        = ptext (sLit "a result type signature")
+pprUserTypeCtxt (ForSigCtxt n)    = ptext (sLit "the foreign declaration for") <+> quotes (ppr n)
+pprUserTypeCtxt DefaultDeclCtxt   = ptext (sLit "a type in a `default' declaration")
+pprUserTypeCtxt InstDeclCtxt      = ptext (sLit "an instance declaration")
+pprUserTypeCtxt SpecInstCtxt      = ptext (sLit "a SPECIALISE instance pragma")
+pprUserTypeCtxt GenSigCtxt        = ptext (sLit "a type expected by the context")
+pprUserTypeCtxt GhciCtxt          = ptext (sLit "a type in a GHCi command")
+pprUserTypeCtxt (ClassSCCtxt c)   = ptext (sLit "the super-classes of class") <+> quotes (ppr c)
+pprUserTypeCtxt SigmaCtxt         = ptext (sLit "the context of a polymorphic type")
+pprUserTypeCtxt (DataTyCtxt tc)   = ptext (sLit "the context of the data type declaration for") <+> quotes (ppr tc)
 \end{code}
 
 
@@ -439,13 +451,14 @@ pprUserTypeCtxt GenSigCtxt       = ptext (sLit "a type expected by the context")
 -- 
 -- It doesn't change the uniques at all, just the print names.
 tidyTyVarBndr :: TidyEnv -> TyVar -> (TidyEnv, TyVar)
-tidyTyVarBndr (tidy_env, subst) tyvar
-  = case tidyOccName tidy_env occ1 of
+tidyTyVarBndr tidy_env@(occ_env, subst) tyvar
+  = case tidyOccName occ_env occ1 of
       (tidy', occ') -> ((tidy', subst'), tyvar')
 	where
           subst' = extendVarEnv subst tyvar tyvar'
-          tyvar' = setTyVarName tyvar name'
+          tyvar' = setTyVarKind (setTyVarName tyvar name') kind'
           name'  = tidyNameOcc name occ'
+          kind'  = tidyKind tidy_env (tyVarKind tyvar)
   where
     name = tyVarName tyvar
     occ  = getOccName name
@@ -523,8 +536,11 @@ tidyTopType :: Type -> Type
 tidyTopType ty = tidyType emptyTidyEnv ty
 
 ---------------
-tidyKind :: TidyEnv -> Kind -> (TidyEnv, Kind)
-tidyKind env k = tidyOpenType env k
+tidyOpenKind :: TidyEnv -> Kind -> (TidyEnv, Kind)
+tidyOpenKind = tidyOpenType
+
+tidyKind :: TidyEnv -> Kind -> Kind
+tidyKind = tidyType
 \end{code}
 
 %************************************************************************
@@ -965,13 +981,14 @@ tcInstHeadTyNotSynonym ty
 
 tcInstHeadTyAppAllTyVars :: Type -> Bool
 -- Used in Haskell-98 mode, for the argument types of an instance head
--- These must be a constructor applied to type variable arguments
+-- These must be a constructor applied to type variable arguments.
+-- But we allow kind instantiations.
 tcInstHeadTyAppAllTyVars ty
   | Just ty' <- tcView ty       -- Look through synonyms
   = tcInstHeadTyAppAllTyVars ty'
   | otherwise
   = case ty of
-	TyConApp _ tys  -> ok tys
+	TyConApp _ tys  -> ok (filter (not . isKind) tys)  -- avoid kinds
 	FunTy arg res   -> ok [arg, res]
 	_               -> False
   where
@@ -996,7 +1013,7 @@ tcInstHeadTyAppAllTyVars ty
 Deconstructors and tests on predicate types
 
 \begin{code}
--- | Like 'predTypePredTree' but doesn't look through type synonyms.
+-- | Like 'classifyPredType' but doesn't look through type synonyms.
 -- Used to check that programs only use "simple" contexts without any
 -- synonyms in them.
 shallowPredTypePredTree :: PredType -> PredTree
@@ -1006,13 +1023,13 @@ shallowPredTypePredTree ev_ty
       () | Just clas <- tyConClass_maybe tc
          -> ClassPred clas tys
       () | tc `hasKey` eqTyConKey
-         , let [ty1, ty2] = tys
+         , let [_, ty1, ty2] = tys
          -> EqPred ty1 ty2
       () | Just ip <- tyConIP_maybe tc
          , let [ty] = tys
          -> IPPred ip ty
       () | isTupleTyCon tc
-         -> TuplePred (map shallowPredTypePredTree tys)
+         -> TuplePred tys
       _ -> IrredPred ev_ty
   | otherwise
   = IrredPred ev_ty
@@ -1027,14 +1044,13 @@ evVarPred_maybe v = if isPredTy ty then Just ty else Nothing
   where ty = varType v
 
 evVarPred :: EvVar -> PredType
-#ifdef DEBUG
 evVarPred var
+ | debugIsOn
   = case evVarPred_maybe var of
       Just pred -> pred
       Nothing   -> pprPanic "tcEvVarPred" (ppr var <+> ppr (varType var))
-#else
-evVarPred = varType
-#endif
+ | otherwise
+  = varType var
 \end{code}
 
 Superclasses
@@ -1045,31 +1061,32 @@ mkMinimalBySCs :: [PredType] -> [PredType]
 mkMinimalBySCs ptys = [ ploc |  ploc <- ptys
                              ,  ploc `not_in_preds` rec_scs ]
  where
-   rec_scs = concatMap (trans_super_classes . predTypePredTree) ptys
+   rec_scs = concatMap trans_super_classes ptys
    not_in_preds p ps = null (filter (eqPred p) ps)
-   trans_super_classes (ClassPred cls tys) = transSuperClasses cls tys
-   trans_super_classes (TuplePred ts)      = concatMap trans_super_classes ts
-   trans_super_classes _other_pty          = []
+
+   trans_super_classes pred   -- Superclasses of pred, excluding pred itself
+     = case classifyPredType pred of
+         ClassPred cls tys -> transSuperClasses cls tys
+         TuplePred ts      -> concatMap trans_super_classes ts
+         _                 -> []
 
 transSuperClasses :: Class -> [Type] -> [PredType]
-transSuperClasses cls tys
-  = foldl (\pts p -> trans_sc p ++ pts) [] $
-    immSuperClasses cls tys
-  where trans_sc :: PredType -> [PredType]
-        trans_sc = trans_sc' . predTypePredTree
-
-        trans_sc' :: PredTree -> [PredType]
-        trans_sc' ptree@(ClassPred cls tys)
-          = foldl (\pts p -> trans_sc p ++ pts) [predTreePredType ptree] $
-            immSuperClasses cls tys
-        trans_sc' ptree@(TuplePred ts)
-          = foldl (\pts t -> trans_sc' t ++ pts) [predTreePredType ptree] ts
-        trans_sc' ptree = [predTreePredType ptree]
+transSuperClasses cls tys    -- Superclasses of (cls tys),
+                             -- excluding (cls tys) itself
+  = concatMap trans_sc (immSuperClasses cls tys)
+  where 
+    trans_sc :: PredType -> [PredType]
+    -- (trans_sc p) returns (p : p's superclasses)
+    trans_sc p = case classifyPredType p of
+                   ClassPred cls tys -> p : transSuperClasses cls tys
+                   TuplePred ps      -> concatMap trans_sc ps
+                   _                 -> [p]
 
 immSuperClasses :: Class -> [Type] -> [PredType]
 immSuperClasses cls tys
   = substTheta (zipTopTvSubst tyvars tys) sc_theta
-  where (tyvars,sc_theta,_,_) = classBigSig cls
+  where 
+    (tyvars,sc_theta,_,_) = classBigSig cls
 \end{code}
 
 
@@ -1146,9 +1163,7 @@ deNoteType :: Type -> Type
 -- Remove all *outermost* type synonyms and other notes
 deNoteType ty | Just ty' <- tcView ty = deNoteType ty'
 deNoteType ty = ty
-\end{code}
 
-\begin{code}
 tcTyVarsOfType :: Type -> TcTyVarSet
 -- Just the *TcTyVars* free in the type
 -- (Types.tyVarsOfTypes finds all free TyVars)

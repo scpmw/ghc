@@ -6,6 +6,13 @@
 --
 -----------------------------------------------------------------------------
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module RtClosureInspect(
      cvObtainTerm,      -- :: HscEnv -> Int -> Bool -> Maybe Type -> HValue -> IO Term
      cvReconstructType,
@@ -38,6 +45,7 @@ import Var
 import TcRnMonad
 import TcType
 import TcMType
+import TcHsSyn ( mkZonkTcTyVar )
 import TcUnify
 import TcEnv
 
@@ -1123,7 +1131,7 @@ zonkTerm = foldTermM (TermFoldM
 zonkRttiType :: TcType -> TcM Type
 -- Zonk the type, replacing any unbound Meta tyvars
 -- by skolems, safely out of Meta-tyvar-land
-zonkRttiType = zonkType (mkZonkTcTyVar zonk_unbound_meta) 
+zonkRttiType = zonkType (mkZonkTcTyVar zonk_unbound_meta mkTyVarTy)
   where
     zonk_unbound_meta tv 
       = ASSERT( isTcTyVar tv )

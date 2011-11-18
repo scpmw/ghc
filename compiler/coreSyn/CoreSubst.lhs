@@ -6,6 +6,13 @@
 Utility functions on @Core@ syntax
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module CoreSubst (
 	-- * Main data types
 	Subst(..), -- Implementation exported for supercompiler's Renaming.hs only
@@ -33,7 +40,7 @@ module CoreSubst (
 
 	-- ** Simple expression optimiser
         simpleOptPgm, simpleOptExpr, simpleOptExprWith,
-        exprIsConApp_maybe
+        exprIsConApp_maybe, exprIsLiteral_maybe
     ) where
 
 #include "HsVersions.h"
@@ -41,6 +48,7 @@ module CoreSubst (
 import CoreSyn
 import CoreFVs
 import CoreUtils
+import Literal  ( Literal )
 import OccurAnal( occurAnalyseExpr, occurAnalysePgm )
 
 import qualified Type
@@ -741,10 +749,12 @@ substVects subst = map (substVect subst)
 
 ------------------
 substVect :: Subst -> CoreVect -> CoreVect
-substVect _subst (Vect   v Nothing)    = Vect   v Nothing
-substVect subst  (Vect   v (Just rhs)) = Vect   v (Just (simpleOptExprWith subst rhs))
+substVect _subst (Vect   v Nothing)    = Vect v Nothing
+substVect subst  (Vect   v (Just rhs)) = Vect v (Just (simpleOptExprWith subst rhs))
 substVect _subst vd@(NoVect _)         = vd
 substVect _subst vd@(VectType _ _ _)   = vd
+substVect _subst vd@(VectClass _)      = vd
+substVect _subst vd@(VectInst _ _)     = vd
 
 ------------------
 substVarSet :: Subst -> VarSet -> VarSet
@@ -939,7 +949,8 @@ simple_opt_expr' subst expr
       = case altcon of
           DEFAULT -> go rhs
           _       -> mkLets (catMaybes mb_binds) $ simple_opt_expr subst' rhs
-            where (subst', mb_binds) = mapAccumL simple_opt_out_bind subst (zipEqual "simpleOptExpr" bs es)
+            where (subst', mb_binds) = mapAccumL simple_opt_out_bind subst 
+                                                 (zipEqual "simpleOptExpr" bs es)
 
       | otherwise
       = Case e' b' (substTy subst ty)
@@ -1006,9 +1017,11 @@ simple_opt_bind' subst (NonRec b r)
 
 ----------------------
 simple_opt_out_bind :: Subst -> (InVar, OutExpr) -> (Subst, Maybe CoreBind)
-simple_opt_out_bind subst (b, r') = case maybe_substitute subst b r' of
-      Just ext_subst -> (ext_subst, Nothing)
-      Nothing        -> (subst', Just (NonRec b2 r'))
+simple_opt_out_bind subst (b, r') 
+  | Just ext_subst <- maybe_substitute subst b r'
+  = (ext_subst, Nothing)
+  | otherwise
+  = (subst', Just (NonRec b2 r'))
   where
     (subst', b') = subst_opt_bndr subst b
     b2 = add_info subst' b b'
@@ -1028,6 +1041,8 @@ maybe_substitute subst b r
     Just (extendCvSubst subst b co)
 
   | isId b              -- let x = e in <body>
+  , not (isCoVar b)	-- See Note [Do not inline CoVars unconditionally]
+    		 	-- in SimplUtils
   , safe_to_inline (idOccInfo b) 
   , isAlwaysActive (idInlineActivation b)	-- Note [Inline prag in simplOpt]
   , not (isStableUnfolding (idUnfolding b))
@@ -1154,7 +1169,7 @@ exprIsConApp_maybe id_unf expr
     go :: Either InScopeSet Subst 
        -> CoreExpr -> ConCont 
        -> Maybe (DataCon, [Type], [CoreExpr])
-    go subst (Tick t expr) cont 
+    go subst (Tick t expr) cont
        | not (tickishIsCode t) = go subst expr cont
     go subst (Cast expr co1) (CC [] co2)
        = go subst expr (CC [] (subst_co subst co1 `mkTransCo` co2))
@@ -1247,17 +1262,15 @@ dealWithCoercion co stuff@(dc, _dc_univ_args, dc_args)
 
           -- Cast the value arguments (which include dictionaries)
         new_val_args = zipWith cast_arg arg_tys val_args
-        cast_arg arg_ty arg = mkCoerce (theta_subst arg_ty) arg
-    in
-#ifdef DEBUG
-    let dump_doc = vcat [ppr dc,      ppr dc_univ_tyvars, ppr dc_ex_tyvars,
+        cast_arg arg_ty arg = mkCast arg (theta_subst arg_ty)
+
+        dump_doc = vcat [ppr dc,      ppr dc_univ_tyvars, ppr dc_ex_tyvars,
                          ppr arg_tys, ppr dc_args,        ppr _dc_univ_args,
                          ppr ex_args, ppr val_args]
     in
     ASSERT2( eqType _from_ty (mkTyConApp to_tc _dc_univ_args), dump_doc )
     ASSERT2( all isTypeArg ex_args, dump_doc )
     ASSERT2( equalLength val_args arg_tys, dump_doc )
-#endif
     Just (dc, to_tc_arg_tys, ex_args ++ new_val_args)
 
   | otherwise
@@ -1286,3 +1299,18 @@ Note [DFun arity check]
 Here we check that the total number of supplied arguments (inclding 
 type args) matches what the dfun is expecting.  This may be *less*
 than the ordinary arity of the dfun: see Note [DFun unfoldings] in CoreSyn
+
+\begin{code}
+exprIsLiteral_maybe :: IdUnfoldingFun -> CoreExpr -> Maybe Literal
+-- Same deal as exprIsConApp_maybe, but much simpler
+-- Nevertheless we do need to look through unfoldings for
+-- Integer literals, which are vigorously hoisted to top level
+-- and not subsequently inlined
+exprIsLiteral_maybe id_unf e
+  = case e of
+      Lit l     -> Just l
+      Tick _ e' -> exprIsLiteral_maybe id_unf e' -- dubious?
+      Var v     | Just rhs <- expandUnfolding_maybe (id_unf v)
+                -> exprIsLiteral_maybe id_unf rhs
+      _         -> Nothing
+\end{code}       

@@ -6,12 +6,19 @@
 --
 -----------------------------------------------------------------------------
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module StgCmmUtils (
 	cgLit, mkSimpleLit,
 	emitDataLits, mkDataLits,
         emitRODataLits, mkRODataLits,
-	emitRtsCall, emitRtsCallWithVols, emitRtsCallWithResult,
-	assignTemp, newTemp, withTemp,
+        emitRtsCall, emitRtsCallWithVols, emitRtsCallWithResult, emitRtsCallGen,
+        assignTemp, newTemp, withTemp,
 
 	newUnboxedTupleRegs,
 
@@ -171,20 +178,20 @@ tagToClosure tycon tag
 -------------------------------------------------------------------------
 
 emitRtsCall :: PackageId -> FastString -> [(CmmExpr,ForeignHint)] -> Bool -> FCode ()
-emitRtsCall pkg fun args safe = emitRtsCall' [] pkg fun args Nothing safe
+emitRtsCall pkg fun args safe = emitRtsCallGen [] pkg fun args Nothing safe
    -- The 'Nothing' says "save all global registers"
 
 emitRtsCallWithVols :: PackageId -> FastString -> [(CmmExpr,ForeignHint)] -> [GlobalReg] -> Bool -> FCode ()
 emitRtsCallWithVols pkg fun args vols safe
-   = emitRtsCall' [] pkg fun args (Just vols) safe
+   = emitRtsCallGen [] pkg fun args (Just vols) safe
 
 emitRtsCallWithResult :: LocalReg -> ForeignHint -> PackageId -> FastString
 	-> [(CmmExpr,ForeignHint)] -> Bool -> FCode ()
 emitRtsCallWithResult res hint pkg fun args safe
-   = emitRtsCall' [(res,hint)] pkg fun args Nothing safe
+   = emitRtsCallGen [(res,hint)] pkg fun args Nothing safe
 
 -- Make a call to an RTS C procedure
-emitRtsCall'
+emitRtsCallGen
    :: [(LocalReg,ForeignHint)]
    -> PackageId
    -> FastString
@@ -192,9 +199,8 @@ emitRtsCall'
    -> Maybe [GlobalReg]
    -> Bool -- True <=> CmmSafe call
    -> FCode ()
-emitRtsCall' res pkg fun args _vols safe
-  = --error "emitRtsCall'"
-    do { updfr_off <- getUpdFrameOff
+emitRtsCallGen res pkg fun args _vols safe
+  = do { updfr_off <- getUpdFrameOff
        ; emit caller_save
        ; emit $ call updfr_off
        ; emit caller_load }
@@ -320,6 +326,12 @@ callerSaves (VanillaReg 7 _)	= True
 #endif
 #ifdef CALLER_SAVES_R8
 callerSaves (VanillaReg 8 _)	= True
+#endif
+#ifdef CALLER_SAVES_R9
+callerSaves (VanillaReg 9 _)	= True
+#endif
+#ifdef CALLER_SAVES_R10
+callerSaves (VanillaReg 10 _)	= True
 #endif
 #ifdef CALLER_SAVES_F1
 callerSaves (FloatReg 1)	= True

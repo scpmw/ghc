@@ -4,6 +4,13 @@
 \section[RnSource]{Main pass of renamer}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module RnSource ( 
 	rnSrcDecls, addTcgDUs, rnTyClDecls, findSplice
     ) where
@@ -25,7 +32,6 @@ import RnEnv
 import RnNames
 import RnHsDoc          ( rnHsDoc, rnMbLHsDoc )
 import TcRnMonad
-import Kind             ( liftedTypeKind )
 
 import ForeignCall	( CCallTarget(..) )
 import Module
@@ -69,20 +75,20 @@ Checks the @(..)@ etc constraints in the export list.
 \begin{code}
 -- Brings the binders of the group into scope in the appropriate places;
 -- does NOT assume that anything is in scope already
-rnSrcDecls :: HsGroup RdrName -> RnM (TcGblEnv, HsGroup Name)
+rnSrcDecls :: [Name] -> HsGroup RdrName -> RnM (TcGblEnv, HsGroup Name)
 -- Rename a HsGroup; used for normal source files *and* hs-boot files
-rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
-                            hs_tyclds  = tycl_decls,
-                            hs_instds  = inst_decls,
-                            hs_derivds = deriv_decls,
-                            hs_fixds   = fix_decls,
-                            hs_warnds  = warn_decls,
-                            hs_annds   = ann_decls,
-                            hs_fords   = foreign_decls,
-                            hs_defds   = default_decls,
-                            hs_ruleds  = rule_decls,
-                            hs_vects   = vect_decls,
-                            hs_docs    = docs })
+rnSrcDecls extra_deps group@(HsGroup { hs_valds   = val_decls,
+                                       hs_tyclds  = tycl_decls,
+                                       hs_instds  = inst_decls,
+                                       hs_derivds = deriv_decls,
+                                       hs_fixds   = fix_decls,
+                                       hs_warnds  = warn_decls,
+                                       hs_annds   = ann_decls,
+                                       hs_fords   = foreign_decls,
+                                       hs_defds   = default_decls,
+                                       hs_ruleds  = rule_decls,
+                                       hs_vects   = vect_decls,
+                                       hs_docs    = docs })
  = do {
    -- (A) Process the fixity declarations, creating a mapping from
    --     FastStrings to FixItems.
@@ -130,7 +136,7 @@ rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
    -- means we'll only report a declaration as unused if it isn't
    -- mentioned at all.  Ah well.
    traceRn (text "Start rnTyClDecls") ;
-   (rn_tycl_decls, src_fvs1) <- rnTyClDecls tycl_decls ;
+   (rn_tycl_decls, src_fvs1) <- rnTyClDecls extra_deps tycl_decls ;
 
    -- (F) Rename Value declarations right-hand sides
    traceRn (text "Start rnmono") ;
@@ -352,7 +358,7 @@ rnDefaultDecl (DefaultDecl tys)
   = do { (tys', fvs) <- mapFvRn (rnHsTypeFVs doc_str) tys
        ; return (DefaultDecl tys', fvs) }
   where
-    doc_str = text "In a `default' declaration"
+    doc_str = DefaultDeclCtx
 \end{code}
 
 %*********************************************************
@@ -366,7 +372,7 @@ rnHsForeignDecl :: ForeignDecl RdrName -> RnM (ForeignDecl Name, FreeVars)
 rnHsForeignDecl (ForeignImport name ty _ spec)
   = do { topEnv :: HscEnv <- getTopEnv
        ; name' <- lookupLocatedTopBndrRn name
-       ; (ty', fvs) <- rnHsTypeFVs (fo_decl_msg name) ty
+       ; (ty', fvs) <- rnHsTypeFVs (ForeignDeclCtx name) ty
 
         -- Mark any PackageTarget style imports as coming from the current package
        ; let packageId = thisPackage $ hsc_dflags topEnv
@@ -376,15 +382,11 @@ rnHsForeignDecl (ForeignImport name ty _ spec)
 
 rnHsForeignDecl (ForeignExport name ty _ spec)
   = do { name' <- lookupLocatedOccRn name
-       ; (ty', fvs) <- rnHsTypeFVs (fo_decl_msg name) ty
+       ; (ty', fvs) <- rnHsTypeFVs (ForeignDeclCtx name) ty
        ; return (ForeignExport name' ty' noForeignExportCoercionYet spec, fvs `addOneFV` unLoc name') }
 	-- NB: a foreign export is an *occurrence site* for name, so 
 	--     we add it to the free-variable list.  It might, for example,
 	--     be imported from another module
-
-fo_decl_msg :: Located RdrName -> SDoc
-fo_decl_msg name = ptext (sLit "In the foreign declaration for") <+> ppr name
-
 
 -- | For Windows DLLs we need to know what packages imported symbols are from
 --	to generate correct calls. Imported symbols are tagged with the current
@@ -449,9 +451,8 @@ rnSrcInstDecl (InstDecl inst_ty mbinds uprags ats)
 	--
 	-- But the (unqualified) method names are in scope
        ; let binders = collectHsBindsBinders mbinds'
-	     bndr_set = mkNameSet binders
        ; uprags' <- bindLocalNames binders $
-	            renameSigs (Just bndr_set) okInstDclSig uprags
+	            renameSigs (InstDeclCtxt cls) uprags
 
        ; return (InstDecl inst_ty' mbinds' uprags' ats',
 	         meth_fvs `plusFV` at_fvs
@@ -540,7 +541,7 @@ rnHsRuleDecl (HsRule rule_name act vars lhs _fv_lhs rhs _fv_rhs)
 	; return (HsRule rule_name act vars' lhs' fv_lhs' rhs' fv_rhs',
 		  fv_vars `plusFV` fv_lhs' `plusFV` fv_rhs') }
   where
-    doc = text "In the transformation rule" <+> ftext rule_name
+    doc = RuleCtx rule_name
   
     get_var (RuleBndr v)      = v
     get_var (RuleBndrSig v _) = v
@@ -665,6 +666,18 @@ rnHsVectDecl (HsVectTypeIn isScalar tycon (Just rhs_tycon))
        }
 rnHsVectDecl (HsVectTypeOut _ _ _)
   = panic "RnSource.rnHsVectDecl: Unexpected 'HsVectTypeOut'"
+rnHsVectDecl (HsVectClassIn cls)
+  = do { cls' <- lookupLocatedOccRn cls
+       ; return (HsVectClassIn cls', unitFV (unLoc cls'))
+       }
+rnHsVectDecl (HsVectClassOut _)
+  = panic "RnSource.rnHsVectDecl: Unexpected 'HsVectClassOut'"
+rnHsVectDecl (HsVectInstIn isScalar instTy)
+  = do { instTy' <- rnLHsInstType (text "In a VECTORISE pragma") instTy
+       ; return (HsVectInstIn isScalar instTy', emptyFVs)
+       }
+rnHsVectDecl (HsVectInstOut _ _)
+  = panic "RnSource.rnHsVectDecl: Unexpected 'HsVectInstOut'"
 \end{code}
 
 %*********************************************************
@@ -686,18 +699,65 @@ in order to get the set of tyvars used by it, make an assoc list,
 and then go over it again to rename the tyvars!
 However, we can also do some scoping checks at the same time.
 
+
+Note [Extra dependencies from .hs-boot files]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider the following case:
+
+  module A where
+    import B
+    data A1 = A1 B1
+  
+  module B where
+    import {-# SOURCE #-} A
+    type DisguisedA1 = A1
+    data B1 = B1 DisguisedA1
+
+We do not follow type synonyms when building the dependencies for each datatype,
+so we will not find out that B1 really depends on A1 (which means it depends on
+itself). To handle this problem, at the moment we add dependencies to everything
+that comes from an .hs-boot file. But we don't add those dependencies to
+everything. Imagine module B above had another datatype declaration:
+
+  data B2 = B2 Int
+
+Even though B2 has a dependency (on Int), all its dependencies are from things
+that live on other packages. Since we don't have mutual dependencies across
+packages, it is safe not to add the dependencies on the .hs-boot stuff to B2.
+
+See also Note [Grouping of type and class declarations] in TcTyClsDecls.
+
 \begin{code}
-rnTyClDecls :: [[LTyClDecl RdrName]] -> RnM ([[LTyClDecl Name]], FreeVars)
--- Renamed the declarations and do depedency analysis on them
-rnTyClDecls tycl_ds
+isInPackage :: PackageId -> Name -> Bool
+isInPackage pkgId nm = case nameModule_maybe nm of
+                         Nothing -> False
+                         Just m  -> pkgId == modulePackageId m
+-- We use nameModule_maybe because we might be in a TH splice, in which case
+-- there is no module name. In that case we cannot have mutual dependencies,
+-- so it's fine to return False here.
+
+rnTyClDecls :: [Name] -> [[LTyClDecl RdrName]]
+            -> RnM ([[LTyClDecl Name]], FreeVars)
+-- Rename the declarations and do depedency analysis on them
+rnTyClDecls extra_deps tycl_ds
   = do { ds_w_fvs <- mapM (wrapLocFstM (rnTyClDecl Nothing)) (concat tycl_ds)
+       ; thisPkg  <- fmap thisPackage getDOpts
+       ; let add_boot_deps :: FreeVars -> FreeVars
+             -- See Note [Extra dependencies from .hs-boot files]
+             add_boot_deps fvs | any (isInPackage thisPkg) (nameSetToList fvs)
+                               = fvs `plusFV` mkFVs extra_deps
+                               | otherwise
+                               = fvs
 
-       ; let sccs :: [SCC (LTyClDecl Name)]
-             sccs = depAnalTyClDecls ds_w_fvs
+             ds_w_fvs' = map (\(ds, fvs) -> (ds, add_boot_deps fvs)) ds_w_fvs
 
-             all_fvs = foldr (plusFV . snd) emptyFVs ds_w_fvs
+             sccs :: [SCC (LTyClDecl Name)]
+             sccs = depAnalTyClDecls ds_w_fvs'
+
+             all_fvs = foldr (plusFV . snd) emptyFVs ds_w_fvs'
 
        ; return (map flattenSCC sccs, all_fvs) }
+
 
 rnTyClDecl :: Maybe Name  -- Just cls => this TyClDecl is nested 
 	      	    	  --             inside an *instance decl* for cls
@@ -713,12 +773,16 @@ rnTyClDecl _ (ForeignType {tcdLName = name, tcdExtName = ext_name})
 -- and "data family"), both top level and (for an associated type) 
 -- in a class decl
 rnTyClDecl mb_cls (TyFamily { tcdLName = tycon, tcdTyVars = tyvars
-                            , tcdFlavour = flav, tcdKind = kind }) 
-  = bindQTvs mb_cls tyvars $ \tyvars' ->
+                            , tcdFlavour = flav, tcdKind = kind })
+  = bindQTvs fmly_doc mb_cls tyvars $ \tyvars' ->
     do { tycon' <- lookupLocatedTopBndrRn tycon
+       ; kind' <- rnLHsMaybeKind fmly_doc kind
+       ; let fv_kind = maybe emptyFVs extractHsTyNames kind'
+             fvs = extractHsTyVarBndrNames_s tyvars' fv_kind
        ; return ( TyFamily { tcdLName = tycon', tcdTyVars = tyvars'
-                           , tcdFlavour = flav, tcdKind = kind }
-                , emptyFVs)  }
+                           , tcdFlavour = flav, tcdKind = kind' }
+                , fvs) }
+  where fmly_doc = TyFamilyCtx tycon
 
 -- "data", "newtype", "data instance, and "newtype instance" declarations
 -- both top level and (for an associated type) in an instance decl
@@ -727,17 +791,19 @@ rnTyClDecl mb_cls tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
 			   	 tcdTyPats = typats, tcdCons = condecls, 
 			   	 tcdKindSig = sig, tcdDerivs = derivs}
   = do	{ tycon' <- lookupTcdName mb_cls tydecl
+        ; sig' <- rnLHsMaybeKind data_doc sig
 	; checkTc (h98_style || null (unLoc context)) 
                   (badGadtStupidTheta tycon)
 
     	; ((tyvars', context', typats', derivs'), stuff_fvs)
-		<- bindQTvs mb_cls tyvars $ \ tyvars' -> do
+		<- bindQTvs data_doc mb_cls tyvars $ \ tyvars' -> do
 		         	 -- Checks for distinct tyvars
 		   { context' <- rnContext data_doc context
                    ; (typats', fvs1) <- rnTyPats data_doc tycon' typats
                    ; (derivs', fvs2) <- rn_derivs derivs
                    ; let fvs = fvs1 `plusFV` fvs2 `plusFV` 
                                extractHsCtxtTyNames context'
+                               `plusFV` maybe emptyFVs extractHsTyNames sig'
 		   ; return ((tyvars', context', typats', derivs'), fvs) }
 
 	-- For the constructor declarations, bring into scope the tyvars 
@@ -754,7 +820,7 @@ rnTyClDecl mb_cls tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
 
 	; return (TyData {tcdND = new_or_data, tcdCtxt = context', 
 			   tcdLName = tycon', tcdTyVars = tyvars', 
-			   tcdTyPats = typats', tcdKindSig = sig,
+			   tcdTyPats = typats', tcdKindSig = sig',
 			   tcdCons = condecls', tcdDerivs = derivs'}, 
 	     	   con_fvs `plusFV` stuff_fvs)
         }
@@ -762,8 +828,8 @@ rnTyClDecl mb_cls tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
     h98_style = case condecls of	 -- Note [Stupid theta]
 		     L _ (ConDecl { con_res = ResTyGADT {} }) : _  -> False
 		     _    		                           -> True
-               		     						  
-    data_doc = text "In the data type declaration for" <+> quotes (ppr tycon)
+
+    data_doc = TyDataCtx tycon
 
     rn_derivs Nothing   = return (Nothing, emptyFVs)
     rn_derivs (Just ds) = do { ds' <- rnLHsTypes data_doc ds
@@ -772,16 +838,16 @@ rnTyClDecl mb_cls tydecl@TyData {tcdND = new_or_data, tcdCtxt = context,
 -- "type" and "type instance" declarations
 rnTyClDecl mb_cls tydecl@(TySynonym { tcdTyVars = tyvars, tcdLName = name,
 		  	              tcdTyPats = typats, tcdSynRhs = ty})
-  = bindQTvs mb_cls tyvars $ \ tyvars' -> do
+  = bindQTvs syn_doc mb_cls tyvars $ \ tyvars' -> do
     {    	 -- Checks for distinct tyvars
       name' <- lookupTcdName mb_cls tydecl
     ; (typats',fvs1) <- rnTyPats syn_doc name' typats
     ; (ty', fvs2)    <- rnHsTypeFVs syn_doc ty
-    ; return (TySynonym { tcdLName = name', tcdTyVars = tyvars' 
-    			, tcdTyPats = typats', tcdSynRhs = ty'},
-    	      fvs1 `plusFV` fvs2) }
+    ; return (TySynonym { tcdLName = name', tcdTyVars = tyvars'
+    			, tcdTyPats = typats', tcdSynRhs = ty'}
+             , extractHsTyVarBndrNames_s tyvars' (fvs1 `plusFV` fvs2)) }
   where
-    syn_doc = text "In the declaration for type synonym" <+> quotes (ppr name)
+    syn_doc = TySynCtx name
 
 rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls, 
 		         tcdTyVars = tyvars, tcdFDs = fds, tcdSigs = sigs, 
@@ -792,13 +858,13 @@ rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls,
 
 	-- Tyvars scope over superclass context and method signatures
 	; ((tyvars', context', fds', ats', at_defs', sigs'), stuff_fvs)
-	    <- bindTyVarsFV tyvars $ \ tyvars' -> do
+	    <- bindTyVarsFV cls_doc tyvars $ \ tyvars' -> do
          	 -- Checks for distinct tyvars
 	     { context' <- rnContext cls_doc context
-	     ; fds'  <- rnFds cls_doc fds
+	     ; fds'  <- rnFds (docOfHsDocContext cls_doc) fds
              ; let rn_at = rnTyClDecl (Just cls')
              ; (ats', fv_ats) <- mapAndUnzipM (wrapLocFstM rn_at) ats
-	     ; sigs' <- renameSigs Nothing okClsDclSig sigs
+	     ; sigs' <- renameSigs (ClsDeclCtxt cls') sigs
              ; (at_defs', fv_at_defs) <- mapAndUnzipM (wrapLocFstM rn_at) at_defs
 	     ; let fvs = extractHsCtxtTyNames context'	`plusFV`
 	                 hsSigsFVs sigs'                `plusFV`
@@ -841,21 +907,20 @@ rnTyClDecl _ (ClassDecl {tcdCtxt = context, tcdLName = lcls,
 			      tcdTyVars = tyvars', tcdFDs = fds', tcdSigs = sigs',
 			      tcdMeths = mbinds', tcdATs = ats', tcdATDefs = at_defs',
                               tcdDocs = docs'},
-	     	  meth_fvs `plusFV` stuff_fvs) }
+	     	  extractHsTyVarBndrNames_s tyvars' (meth_fvs `plusFV` stuff_fvs)) }
   where
-    cls_doc  = text "In the declaration for class" <+> ppr lcls
+    cls_doc  = ClassDeclCtx lcls
 
 
-bindQTvs :: Maybe Name -> [LHsTyVarBndr RdrName]
+bindQTvs :: HsDocContext -> Maybe Name -> [LHsTyVarBndr RdrName]
          -> ([LHsTyVarBndr Name] -> RnM (a, FreeVars))
          -> RnM (a, FreeVars)
--- For *associated* type/data family instances (in an instance decl)
--- don't quantify over the already-in-scope type variables
-bindQTvs mb_cls tyvars thing_inside
+bindQTvs doc mb_cls tyvars thing_inside
   | isNothing mb_cls    -- Not associated
-  = bindTyVarsFV tyvars thing_inside
+  = bindTyVarsFV doc tyvars thing_inside
   | otherwise 	 	-- Associated
   = do { let tv_rdr_names = map hsLTyVarLocName tyvars
+       	     -- *All* the free vars of the family patterns
 
        -- Check for duplicated bindings
        -- This test is irrelevant for data/type *instances*, where the tyvars
@@ -864,9 +929,10 @@ bindQTvs mb_cls tyvars thing_inside
        ; mapM_ dupBoundTyVar (findDupRdrNames tv_rdr_names)
 
        ; rdr_env <- getLocalRdrEnv
+
        ; tv_ns <- mapM (mk_tv_name rdr_env) tv_rdr_names
-       ; (thing, fvs) <- bindLocalNamesFV tv_ns $
-                         thing_inside (zipWith replaceLTyVarName tyvars tv_ns)
+       ; tyvars' <- zipWithM (\old new -> replaceLTyVarName old new (rnLHsKind doc)) tyvars tv_ns
+       ; (thing, fvs) <- bindLocalNamesFV tv_ns $ thing_inside tyvars'
 
 	-- Check that the RHS of the decl mentions only type variables
 	-- bound on the LHS.  For example, this is not ok
@@ -924,10 +990,21 @@ depAnalTyClDecls ds_w_fvs
     edges = [ (d, tcdName (unLoc d), map get_assoc (nameSetToList fvs))
             | (d, fvs) <- ds_w_fvs ]
     get_assoc n = lookupNameEnv assoc_env n `orElse` n
-    assoc_env = mkNameEnv [ (tcdName assoc_decl, cls_name) 
-                          | (L _ (ClassDecl { tcdLName = L _ cls_name
-                                            , tcdATs   = ats }) ,_) <- ds_w_fvs
-                          , L _ assoc_decl <- ats ]
+    assoc_env = mkNameEnv assoc_env_list
+    -- We also need to consider data constructor names since they may
+    -- appear in types because of promotion.
+    assoc_env_list = do
+      (L _ d, _) <- ds_w_fvs
+      case d of
+        ClassDecl { tcdLName = L _ cls_name
+                  , tcdATs = ats } -> do
+                       L _ assoc_decl <- ats
+                       return (tcdName assoc_decl, cls_name)
+        TyData { tcdLName = L _ data_name
+               , tcdCons = cons } -> do
+                       L _ dc <- cons
+                       return (unLoc (con_name dc), data_name)
+        _ -> []
 \end{code}
 
 Note [Dependency analysis of type and class decls]
@@ -951,7 +1028,7 @@ is jolly confusing.  See Trac #4875
 %*********************************************************
 
 \begin{code}
-rnTyPats :: SDoc -> Located Name -> Maybe [LHsType RdrName] -> RnM (Maybe [LHsType Name], FreeVars)
+rnTyPats :: HsDocContext -> Located Name -> Maybe [LHsType RdrName] -> RnM (Maybe [LHsType Name], FreeVars)
 -- Although, we are processing type patterns here, all type variables will
 -- already be in scope (they are the same as in the 'tcdTyVars' field of the
 -- type declaration to which these patterns belong)
@@ -991,22 +1068,22 @@ rnConDecl decl@(ConDecl { con_name = name, con_qvars = tvs
 	 -- With Implicit, find the mentioned ones, and use them as binders
 	; new_tvs <- case expl of
 	    	       Implicit -> return (userHsTyVarBndrs mentioned_tvs)
-            	       Explicit -> do { warnUnusedForAlls doc tvs mentioned_tvs
+            	       Explicit -> do { warnUnusedForAlls (docOfHsDocContext doc) tvs mentioned_tvs
                                       ; return tvs }
 
         ; mb_doc' <- rnMbLHsDoc mb_doc 
 
-        ; bindTyVarsRn new_tvs $ \new_tyvars -> do
+        ; bindTyVarsRn doc new_tvs $ \new_tyvars -> do
 	{ new_context <- rnContext doc cxt
 	; new_details <- rnConDeclDetails doc details
         ; (new_details', new_res_ty)  <- rnConResult doc new_details res_ty
         ; return (decl { con_name = new_name, con_qvars = new_tyvars, con_cxt = new_context 
                        , con_details = new_details', con_res = new_res_ty, con_doc = mb_doc' }) }}
  where
-    doc = text "In the definition of data constructor" <+> quotes (ppr name)
-    get_rdr_tvs tys  = extractHsRhoRdrTyVars cxt (noLoc (HsTupleTy (HsBoxyTuple liftedTypeKind) tys))
+    doc = ConDeclCtx name
+    get_rdr_tvs tys  = extractHsRhoRdrTyVars cxt (noLoc (HsTupleTy HsBoxedTuple tys))
 
-rnConResult :: SDoc
+rnConResult :: HsDocContext
             -> HsConDetails (LHsType Name) [ConDeclField Name]
             -> ResType RdrName
             -> RnM (HsConDetails (LHsType Name) [ConDeclField Name],
@@ -1026,10 +1103,10 @@ rnConResult doc details (ResTyGADT ty)
 			  -- See Note [Sorting out the result type] in RdrHsSyn
 		
        ; when (not (null arg_tys) && case details of { RecCon {} -> True; _ -> False })
-              (addErr (badRecResTy doc))
+              (addErr (badRecResTy (docOfHsDocContext doc)))
        ; return (details', ResTyGADT res_ty) }
 
-rnConDeclDetails :: SDoc
+rnConDeclDetails :: HsDocContext
                  -> HsConDetails (LHsType RdrName) [ConDeclField RdrName]
                  -> RnM (HsConDetails (LHsType Name) [ConDeclField Name])
 rnConDeclDetails doc (PrefixCon tys)

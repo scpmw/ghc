@@ -42,6 +42,13 @@
   the scrutinee of the case, and we can inline it.  
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module SetLevels (
 	setLevels, 
 
@@ -56,7 +63,7 @@ module SetLevels (
 
 import CoreSyn
 import CoreMonad	( FloatOutSwitches(..) )
-import CoreUtils	( exprType, exprOkForSpeculation, mkPiTypes )
+import CoreUtils	( exprType, exprOkForSpeculation )
 import CoreArity	( exprBotStrictness_maybe )
 import CoreFVs		-- all of it
 import Coercion         ( isCoVar )
@@ -67,10 +74,12 @@ import IdInfo
 import Var
 import VarSet
 import VarEnv
+import Literal		( litIsTrivial )
 import Demand		( StrictSig, increaseStrictSigArity )
 import Name		( getOccName, mkSystemVarName )
 import OccName		( occNameString )
-import Type		( isUnLiftedType, Type )
+import Type		( isUnLiftedType, Type, sortQuantVars, mkPiTypes )
+import Kind		( kiVarsOfKinds )
 import BasicTypes	( Arity )
 import UniqSupply
 import Util
@@ -569,7 +578,8 @@ notWorthFloating e abs_vars
   = go e (count isId abs_vars)
   where
     go (_, AnnVar {}) n    = n >= 0
-    go (_, AnnLit {}) n    = n >= 0
+    go (_, AnnLit lit) n   = ASSERT( n==0 ) 
+                             litIsTrivial lit	-- Note [Floating literals]
     go (_, AnnCast e _)  n = go e n
     go (_, AnnApp e arg) n 
        | (_, AnnType {}) <- arg = go e n
@@ -586,6 +596,16 @@ notWorthFloating e abs_vars
     is_triv (_, AnnApp e (_, AnnCoercion {})) = is_triv e
     is_triv _                             = False     
 \end{code}
+
+Note [Floating literals]
+~~~~~~~~~~~~~~~~~~~~~~~~
+It's important to float Integer literals, so that they get shared,
+rather than being allocated every time round the loop.
+Hence the litIsTrivial.
+
+We'd *like* to share MachStr literal strings too, mainly so we could
+CSE them, but alas can't do so directly because they are unlifted.
+
 
 Note [Escaping a value lambda]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -826,7 +846,7 @@ isFunction :: CoreExprWithFVs -> Bool
 -- constructors.  So the simple thing is just to look for lambdas
 isFunction (_, AnnLam b e) | isId b    = True
                            | otherwise = isFunction e
-isFunction (_, AnnTick _ e)          = isFunction e  -- dubious
+-- isFunction (_, AnnTick _ e)          = isFunction e  -- dubious
 isFunction _                           = False
 
 countFreeIds :: VarSet -> Int
@@ -977,22 +997,13 @@ abstractVars :: Level -> LevelEnv -> VarSet -> [Var]
 	-- whose level is greater than the destination level
 	-- These are the ones we are going to abstract out
 abstractVars dest_lvl (LE { le_lvl_env = lvl_env, le_env = id_env }) fvs
-  = map zap $ uniq $ sortLe le 
+  = map zap $ uniq $ sortQuantVars  -- IA0_NOTE: centralizing sorting on variables
 	[var | fv <- varSetElems fvs
 	     , var <- absVarsOf id_env fv
 	     , abstract_me var ]
 	-- NB: it's important to call abstract_me only on the OutIds the
 	-- come from absVarsOf (not on fv, which is an InId)
   where
-	-- Sort the variables so the true type variables come first;
-	-- the tyvars scope over Ids and coercion vars
-    v1 `le` v2 = case (is_tv v1, is_tv v2) of
-		   (True, False) -> True
-		   (False, True) -> False
-		   _    	 -> v1 <= v2	-- Same family
-
-    is_tv v = isTyVar v 
-
     uniq :: [Var] -> [Var]
 	-- Remove adjacent duplicates; the sort will have brought them together
     uniq (v1:v2:vs) | v1 == v2  = uniq (v2:vs)
@@ -1017,7 +1028,9 @@ absVarsOf :: IdEnv ([Var], LevelledExpr) -> Var -> [Var]
 	-- variables
 	--
 	-- Also, if x::a is an abstracted variable, then so is a; that is,
-	--	we must look in x's type
+	-- we must look in x's type. What's more, if a mentions kind variables,
+	-- we must also return those.
+	-- 
 	-- And similarly if x is a coercion variable.
 absVarsOf id_env v 
   | isId v    = [av2 | av1 <- lookup_avs v
@@ -1028,7 +1041,9 @@ absVarsOf id_env v
 			Just (abs_vars, _) -> abs_vars
 			Nothing	           -> [v]
 
-    add_tyvars v = v : varSetElems (varTypeTyVars v)
+    add_tyvars v = v : (varSetElems tyvars ++ varSetElems kivars)
+    tyvars = varTypeTyVars v
+    kivars = kiVarsOfKinds (map tyVarKind (varSetElems tyvars))
 \end{code}
 
 \begin{code}

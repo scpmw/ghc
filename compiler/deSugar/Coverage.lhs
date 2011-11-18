@@ -3,6 +3,13 @@
 % (c) University of Glasgow, 2007
 %
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module Coverage (addTicksToBinds, hpcInitCode) where
 
 import Type
@@ -23,8 +30,10 @@ import VarSet
 import Data.List
 import FastString
 import HscTypes	
+import Platform
 import StaticFlags
 import TyCon
+import BasicTypes
 import MonadUtils
 import Maybes
 import CLabel
@@ -177,17 +186,6 @@ data TickDensity
   -- -| TickCallSites        -- for stack tracing
   deriving Eq
 
--- We never add breakpoints to simple pattern bindings (there's always
--- a tick on the rhs anyway).  For profiling, we only add ticks to
--- simple pattern bindings if they are top-level.
---
-ticksOnSimplePatBinds :: TickDensity -> Bool{- top level -} -> Bool
-ticksOnSimplePatBinds TickForBreakPoints    _     = False
-ticksOnSimplePatBinds TickAllFunctions      False = False
-ticksOnSimplePatBinds TickTopFunctions      False = False
-ticksOnSimplePatBinds TickExportedFunctions False = False
-ticksOnSimplePatBinds _                     _     = True
-
 mkDensity :: DynFlags -> TickDensity
 mkDensity dflags
   | opt_Hpc                              = TickForCoverage
@@ -198,6 +196,33 @@ mkDensity dflags
   | HscLlvm         <- hscTarget dflags  = TickAllFunctions
   | otherwise = panic "density"
 
+
+-- | Decide whether to add a tick to a binding or not.
+shouldTickBind  :: TickDensity
+                -> Bool         -- top level?
+                -> Bool         -- exported?
+                -> Bool         -- simple pat bind?
+                -> Bool         -- INLINE pragma?
+                -> Bool
+
+shouldTickBind density top_lev exported simple_pat inline
+ = case density of
+      TickForBreakPoints    -> not simple_pat
+        -- we never add breakpoints to simple pattern bindings
+        -- (there's always a tick on the rhs anyway).
+      TickAllFunctions      -> not inline
+      TickTopFunctions      -> top_lev && not inline
+      TickExportedFunctions -> exported && not inline
+      TickForCoverage       -> True
+
+shouldTickPatBind :: TickDensity -> Bool -> Bool
+shouldTickPatBind density top_lev
+  = case density of
+      TickForBreakPoints    -> False
+      TickAllFunctions      -> True
+      TickTopFunctions      -> top_lev
+      TickExportedFunctions -> False
+      TickForCoverage       -> False
 
 -- -----------------------------------------------------------------------------
 -- Adding ticks to bindings
@@ -219,8 +244,9 @@ addTickLHsBind (L pos bind@(AbsBinds { abs_binds   = binds,
    -- tick the right bindings.
    add_exports env =
      env{ exports = exports env `addListToNameSet`
-                      [ idName mid | ABE pid mid _ _ <- abs_exports
-                                   , idName pid `elemNameSet` (exports env) ] }
+                      [ idName mid
+                      | ABE{ abe_poly = pid, abe_mono = mid } <- abs_exports
+                      , idName pid `elemNameSet` (exports env) ] }
 
 addTickLHsBind (L pos (funBind@(FunBind { fun_id = (L _ id)  }))) = do
   let name = getOccString id
@@ -232,24 +258,24 @@ addTickLHsBind (L pos (funBind@(FunBind { fun_id = (L _ id)  }))) = do
         addTickMatchGroup False (fun_matches funBind)
 
   blackListed <- isBlackListed pos
-
   density <- getDensity
-  let toplev = null decl_path
-
   exported_names <- liftM exports getEnv
 
   -- We don't want to generate code for blacklisted positions
   -- We don't want redundant ticks on simple pattern bindings
   -- We don't want to tick non-exported bindings in TickExportedFunctions
-  tick <- if blackListed
-             || (isSimplePatBind funBind
-                 && not (ticksOnSimplePatBinds density toplev))
-             || (density == TickExportedFunctions
-                 && not (idName id `elemNameSet` exported_names))
+  let simple = isSimplePatBind funBind
+      toplev = null decl_path
+      exported = idName id `elemNameSet` exported_names
+      inline   = {- pprTrace "inline" (ppr id <+> ppr (idInlinePragma id)) $ -}
+                 isAnyInlinePragma (idInlinePragma id)
+
+  tick <- if not blackListed &&
+               shouldTickBind density toplev exported simple inline
              then
-                return Nothing
-             else
                 bindTick density name pos fvs
+             else
+                return Nothing
 
   return $ L pos $ funBind { fun_matches = MatchGroup matches' ty
                            , fun_tick = tick }
@@ -260,19 +286,26 @@ addTickLHsBind (L pos (funBind@(FunBind { fun_id = (L _ id)  }))) = do
    isSimplePatBind funBind = matchGroupArity (fun_matches funBind) == 0
 
 -- TODO: Revisit this
-addTickLHsBind (L pos (pat@(PatBind { pat_rhs = rhs }))) = do
+addTickLHsBind (L pos (pat@(PatBind { pat_lhs = lhs, pat_rhs = rhs }))) = do
   let name = "(...)"
   (fvs, rhs') <- getFreeVars $ addPathEntry name $ addTickGRHSs False False rhs
 
   density <- getDensity
-  tickish <- case density of
-               TickForCoverage    -> return Nothing
-               TickForBreakPoints -> return Nothing
-               TickExportedFunctions -> return Nothing -- pat binds never exported
-               _other -> bindTick density name pos fvs
+  decl_path <- getPathEntry
+  let top_lev = null decl_path
+  let add_ticks = shouldTickPatBind density top_lev
+
+  tickish <- if add_ticks
+                then bindTick density name pos fvs
+                else return Nothing
+
+  let patvars = map getOccString (collectPatBinders lhs)
+  patvar_ticks <- if add_ticks
+                     then mapM (\v -> bindTick density v pos fvs) patvars
+                     else return []
 
   return $ L pos $ pat { pat_rhs = rhs',
-                         pat_tick = tickish }
+                         pat_ticks = (tickish, patvar_ticks)}
 
 -- Only internal stuff, not from source, uses VarBind, so we ignore it.
 addTickLHsBind var_bind@(L _ (VarBind {})) = return var_bind
@@ -357,9 +390,10 @@ addTickLHsExprOptAlt oneOfMany (L pos e0)
         (addTickLHsExpr (L pos e0))
 
 addBinTickLHsExpr :: (Bool -> BoxLabel) -> LHsExpr Id -> TM (LHsExpr Id)
-addBinTickLHsExpr boxLabel (L pos e0) =
-    allocBinTickBox boxLabel pos $
-        addTickHsExpr e0
+addBinTickLHsExpr boxLabel (L pos e0)
+  = ifDensity TickForCoverage
+        (allocBinTickBox boxLabel pos $ addTickHsExpr e0)
+        (addTickLHsExpr (L pos e0))
 
 
 -- -----------------------------------------------------------------------------
@@ -522,9 +556,6 @@ addTickGRHSBody isOneOfMany isLambda expr@(L pos e0) = do
        addPathEntry "\\" $
          allocTickBox (ExpBox False) True{-count-} False{-not top-} pos $
            addTickHsExpr e0
-    TickTopFunctions ->
-       allocTickBox (ExpBox False) False{-no count-} True{-top-} pos $
-         addTickHsExpr e0
     _otherwise ->
        addTickLHsExprAlways expr
 
@@ -821,6 +852,7 @@ data TickTransEnv = TTE { fileName     :: FastString
                         , this_mod     :: Module
                         , tickishType  :: TickishType
                         }
+
 --	deriving Show
 
 data TickishType = ProfNotes | HpcTicks | Breakpoints | SourceNotes

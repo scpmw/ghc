@@ -4,6 +4,13 @@
 \section[TysWiredIn]{Wired-in knowledge about {\em non-primitive} types}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 -- | This module is about types that can be defined in Haskell, but which
 --   must be wired into the compiler nonetheless.  C.f module TysPrim
 module TysWiredIn (
@@ -339,9 +346,9 @@ mk_tuple sort arity = (tycon, tuple_con)
 	  ConstraintTuple -> constraintKind
 
 	tyvars = take arity $ case sort of
-	  BoxedTuple   -> alphaTyVars
-	  UnboxedTuple -> openAlphaTyVars
-	  ConstraintTuple    -> tyVarList constraintKind
+	  BoxedTuple      -> alphaTyVars
+	  UnboxedTuple    -> argAlphaTyVars	-- No nested unboxed tuples
+	  ConstraintTuple -> tyVarList constraintKind
 
 	tuple_con = pcDataCon dc_name tyvars tyvar_tys tycon
 	tyvar_tys = mkTyVarTys tyvars
@@ -413,16 +420,25 @@ mkIPName ip tycon_u datacon_u dc_wrk_u co_ax_u = name_ip
 \begin{code}
 eqTyCon :: TyCon
 eqTyCon = mkAlgTyCon eqTyConName
-            (mkArrowKinds [openTypeKind, openTypeKind] constraintKind)
-            [alphaTyVar, betaTyVar]
+            (ForAllTy kv $ mkArrowKinds [k, k] constraintKind)
+            [kv, a, b]
             []      -- No stupid theta
             (DataTyCon [eqBoxDataCon] False)
             NoParentTyCon
             NonRecursive
             False
-    
+  where
+    kv = kKiVar
+    k = mkTyVarTy kv
+    a:b:_ = tyVarList k
+
 eqBoxDataCon :: DataCon
-eqBoxDataCon = pcDataCon eqBoxDataConName [alphaTyVar, betaTyVar] [TyConApp eqPrimTyCon [mkTyVarTy alphaTyVar, mkTyVarTy betaTyVar]] eqTyCon
+eqBoxDataCon = pcDataCon eqBoxDataConName args [TyConApp eqPrimTyCon (map mkTyVarTy args)] eqTyCon
+  where
+    kv = kKiVar
+    k = mkTyVarTy kv
+    a:b:_ = tyVarList k
+    args = [kv, a, b]
 \end{code}
 
 \begin{code}

@@ -22,6 +22,14 @@
 -- * 'Id.Id': see "Id#name_types"
 --
 -- * 'Var.Var': see "Var#name_types"
+
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module RdrName (
         -- * The main type
 	RdrName(..),	-- Constructors exported only to BinIface
@@ -32,7 +40,7 @@ module RdrName (
 	nameRdrName, getRdrName, 
 
 	-- ** Destruction
-	rdrNameOcc, rdrNameSpace, setRdrNameSpace,
+	rdrNameOcc, rdrNameSpace, setRdrNameSpace, demoteRdrName,
 	isRdrDataCon, isRdrTyVar, isRdrTc, isQual, isQual_maybe, isUnqual, 
 	isOrig, isOrig_maybe, isExact, isExact_maybe, isSrcRdrName,
 
@@ -151,6 +159,14 @@ setRdrNameSpace (Orig m occ) ns = Orig m (setOccNameSpace ns occ)
 setRdrNameSpace (Exact n)    ns = ASSERT( isExternalName n ) 
 		       	          Orig (nameModule n)
 				       (setOccNameSpace ns (nameOccName n))
+
+-- demoteRdrName lowers the NameSpace of RdrName.
+-- see Note [Demotion] in OccName
+demoteRdrName :: RdrName -> Maybe RdrName
+demoteRdrName (Unqual occ) = fmap Unqual (demoteOccName occ)
+demoteRdrName (Qual m occ) = fmap (Qual m) (demoteOccName occ)
+demoteRdrName (Orig _ _) = panic "demoteRdrName"
+demoteRdrName (Exact _) = panic "demoteRdrName"
 \end{code}
 
 \begin{code}

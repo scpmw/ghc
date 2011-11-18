@@ -1,6 +1,13 @@
 {-# OPTIONS -fno-cse #-}
 -- -fno-cse is needed for GLOBAL_VAR's to behave properly
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSp
+-- for details
+
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 -----------------------------------------------------------------------------
 --
@@ -412,7 +419,7 @@ runGHCi paths maybe_exprs = do
            -- This would be a good place for runFileInputT.
            Right hdl ->
                do runInputTWithPrefs defaultPrefs defaultSettings $
-                            runCommands False $ fileLoop hdl
+                            runCommands $ fileLoop hdl
                   liftIO (hClose hdl `catchIO` \_ -> return ())
      where
       getDirectory f = case takeDirectory f of "" -> "."; d -> d
@@ -447,11 +454,14 @@ runGHCi paths maybe_exprs = do
   dflags <- getDynFlags
   let show_prompt = verbosity dflags > 0 || is_tty
 
+  -- reset line number
+  getGHCiState >>= \st -> setGHCiState st{line_number=1}
+
   case maybe_exprs of
         Nothing ->
           do
             -- enter the interactive loop
-            runGHCiInput $ runCommands False $ nextInputLine show_prompt is_tty
+            runGHCiInput $ runCommands $ nextInputLine show_prompt is_tty
         Just exprs -> do
             -- just evaluate the expression we were given
             enqueueCommands exprs
@@ -465,7 +475,7 @@ runGHCi paths maybe_exprs = do
                                    -- this used to be topHandlerFastExit, see #2228
                                      $ topHandler e
             runInputTWithPrefs defaultPrefs defaultSettings $ do
-                runCommands' handle False (return Nothing)
+                runCommands' handle (return Nothing)
 
   -- and finally, exit
   liftIO $ when (verbosity dflags > 0) $ putStrLn "Leaving GHCi."
@@ -485,7 +495,9 @@ nextInputLine :: Bool -> Bool -> InputT GHCi (Maybe String)
 nextInputLine show_prompt is_tty
   | is_tty = do
     prompt <- if show_prompt then lift mkPrompt else return ""
-    getInputLine prompt
+    r <- getInputLine prompt
+    incrementLineNo
+    return r
   | otherwise = do
     when show_prompt $ lift mkPrompt >>= liftIO . putStr
     fileLoop stdin
@@ -521,8 +533,8 @@ checkPerms name =
             else return True
 #endif
 
-incrementLines :: InputT GHCi ()
-incrementLines = do
+incrementLineNo :: InputT GHCi ()
+incrementLineNo = do
    st <- lift $ getGHCiState
    let ln = 1+(line_number st)
    lift $ setGHCiState st{line_number=ln}
@@ -540,7 +552,7 @@ fileLoop hdl = do
                 -- perhaps did getContents which closes stdin at
                 -- EOF.
         Right l -> do
-           incrementLines
+           incrementLineNo
            return (Just l)
 
 mkPrompt :: GHCi String
@@ -593,15 +605,12 @@ queryQueue = do
     c:cs -> do setGHCiState st{ cmdqueue = cs }
                return (Just c)
 
-runCommands :: Bool -> InputT GHCi (Maybe String) -> InputT GHCi ()
+runCommands :: InputT GHCi (Maybe String) -> InputT GHCi ()
 runCommands = runCommands' handler
 
 runCommands' :: (SomeException -> GHCi Bool) -- ^ Exception handler
-             -> Bool
              -> InputT GHCi (Maybe String) -> InputT GHCi ()
-runCommands' eh resetLineTo1 getCmd = do
-    when resetLineTo1 $ lift $ do st <- getGHCiState
-                                  setGHCiState $ st { line_number = 0 }
+runCommands' eh getCmd = do
     b <- ghandle (\e -> case fromException e of
                           Just UserInterrupt -> return $ Just False
                           _ -> case fromException e of
@@ -613,7 +622,7 @@ runCommands' eh resetLineTo1 getCmd = do
             (runOneCommand eh getCmd)
     case b of
       Nothing -> return ()
-      Just _  -> runCommands' eh resetLineTo1 getCmd
+      Just _  -> runCommands' eh getCmd
 
 runOneCommand :: (SomeException -> GHCi Bool) -> InputT GHCi (Maybe String)
             -> InputT GHCi (Maybe Bool)
@@ -1728,17 +1737,17 @@ setCmd ""
               nest 2 (vcat (map (warnSetting dflags) DynFlags.fWarningFlags))
           ))
 
-  where flagSetting dflags (str, _, f, _)
+  where flagSetting dflags (str, f, _)
           | dopt f dflags = fstr str
           | otherwise     = fnostr str
-        warnSetting dflags (str, _, f, _)
+        warnSetting dflags (str, f, _)
           | wopt f dflags = fstr str
           | otherwise     = fnostr str
 
         fstr   str = text "-f"    <> text str
         fnostr str = text "-fno-" <> text str
 
-        (ghciFlags,others)  = partition (\(_, _, f, _) -> f `elem` flags)
+        (ghciFlags,others)  = partition (\(_, f, _) -> f `elem` flags)
                                         DynFlags.fFlags
         flags = [Opt_PrintExplicitForalls
                 ,Opt_PrintBindResult
@@ -2021,7 +2030,7 @@ showLanguages = do
    dflags <- getDynFlags
    liftIO $ putStrLn $ showSDoc $ vcat $
       text "active language flags:" :
-      [text ("  -X" ++ str) | (str, _, f, _) <- DynFlags.xFlags, xopt f dflags]
+      [text ("  -X" ++ str) | (str, f, _) <- DynFlags.xFlags, xopt f dflags]
 
 
 -- -----------------------------------------------------------------------------

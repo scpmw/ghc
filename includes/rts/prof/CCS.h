@@ -39,6 +39,8 @@ typedef struct _CostCentre {
     StgWord   time_ticks;
     StgWord64 mem_alloc;      // align 8 (Note [struct alignment])
 
+    StgInt is_caf;            // non-zero for a CAF cost centre
+
     struct _CostCentre *link;
 } CostCentre;
 
@@ -47,8 +49,10 @@ typedef struct _CostCentreStack {
 
     CostCentre *cc;             // Cost centre at the top of the stack
 
-    struct _CostCentreStack *prevStack; // parent
-    struct _IndexTable *indexTable;     // children
+    struct _CostCentreStack *prevStack;   // parent
+    struct _IndexTable      *indexTable;  // children
+    struct _CostCentreStack *root;        // root of stack
+    StgWord    depth;           // number of items in the stack
 
     StgWord64  scc_count;       // Count of times this CCS is entered
                                 // align 8 (Note [struct alignment])
@@ -84,6 +88,10 @@ typedef struct _CostCentreStack {
 
 #define EMPTY_STACK NULL
 #define EMPTY_TABLE NULL
+
+/* Constants used to set is_caf flag on CostCentres */
+#define CC_IS_CAF      'c'            /* 'c'  => *is* a CAF cc           */
+#define CC_NOT_CAF     0
 
 /* -----------------------------------------------------------------------------
  * Data Structures
@@ -142,6 +150,9 @@ extern CostCentreStack CCS_OVERHEAD[];   // Profiling overhead
 extern CostCentre      CC_DONT_CARE[];
 extern CostCentreStack CCS_DONT_CARE[];  // shouldn't ever get set
 
+extern CostCentre      CC_PINNED[];
+extern CostCentreStack CCS_PINNED[];     // pinned memory
+
 #endif /* IN_STG_CODE */
 
 extern unsigned int RTS_VAR(CC_ID);     // global ids
@@ -154,6 +165,7 @@ extern unsigned int RTS_VAR(era);
  * ---------------------------------------------------------------------------*/
 
 CostCentreStack * pushCostCentre (CostCentreStack *, CostCentre *);
+void              enterFunCCS    (CostCentreStack *);
 
 /* -----------------------------------------------------------------------------
    Registering CCs and CCSs
@@ -190,14 +202,15 @@ extern CostCentreStack * RTS_VAR(CCS_LIST);         // registered CCS list
  * Declaring Cost Centres & Cost Centre Stacks.
  * -------------------------------------------------------------------------- */
 
-# define CC_DECLARE(cc_ident,name,mod,is_local) \
-     is_local CostCentre cc_ident[1]            \
-       = {{ ccID       : 0,                     \
-            label      : name,                  \
-            module     : mod,                   \
-            time_ticks : 0,                     \
-            mem_alloc  : 0,                     \
-            link       : 0                      \
+# define CC_DECLARE(cc_ident,name,mod,caf,is_local)     \
+     is_local CostCentre cc_ident[1]                    \
+       = {{ ccID       : 0,                             \
+            label      : name,                          \
+            module     : mod,                           \
+            time_ticks : 0,                             \
+            mem_alloc  : 0,                             \
+            link       : 0,                             \
+            is_caf     : caf                            \
          }};
 
 # define CCS_DECLARE(ccs_ident,cc_ident,is_local)       \
@@ -206,6 +219,8 @@ extern CostCentreStack * RTS_VAR(CCS_LIST);         // registered CCS list
 	    cc 			: cc_ident,             \
 	    prevStack 		: NULL,                 \
 	    indexTable 		: NULL,                 \
+            root                : NULL,                 \
+            depth               : 0,                    \
             selected            : 0,                    \
 	    scc_count 		: 0,                    \
 	    time_ticks 		: 0,                    \

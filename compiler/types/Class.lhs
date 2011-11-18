@@ -6,6 +6,13 @@
 The @Class@ datatype
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module Class (
 	Class,
         ClassOpItem, DefMeth (..),
@@ -32,9 +39,10 @@ import BasicTypes
 import Unique
 import Util
 import Outputable
+import SrcLoc
 import FastString
 
-import Data.Typeable hiding (TyCon)
+import Data.Typeable (Typeable)
 import qualified Data.Data as Data
 \end{code}
 
@@ -49,14 +57,16 @@ A @Class@ corresponds to a Greek kappa in the static semantics:
 \begin{code}
 data Class
   = Class {
-	classTyCon :: TyCon,		-- The data type constructor for
-					-- dictionaries of this class
+	classTyCon :: TyCon,	-- The data type constructor for
+				-- dictionaries of this class
+                                -- See Note [ATyCon for classes] in TypeRep
 
 	className :: Name,              -- Just the cached name of the TyCon
 	classKey  :: Unique,		-- Cached unique of TyCon
 	
-	classTyVars  :: [TyVar],	-- The class type variables;
+	classTyVars  :: [TyVar],	-- The class kind and type variables;
 		     			-- identical to those of the TyCon
+
 	classFunDeps :: [FunDep TyVar],	-- The functional dependencies
 
 	-- Superclasses: eg: (F a ~ b, F b ~ G a, Eq a, Show b)
@@ -90,12 +100,19 @@ type ClassATItem = (TyCon, [ATDefault])
   -- Default associated types from these templates. If the template list is empty,
   -- we assume that there is no default -- not that the default is to generate no
   -- instances (this only makes a difference for warnings).
+  -- We can have more than one default per type; see
+  -- Note [Associated type defaults] in TcTyClsDecls
 
-data ATDefault = ATD [TyVar] [Type] Type
-  -- Each associated type default template is a triple of:
-  --   1. TyVars of the RHS and family arguments (including the class TVs)
-  --   3. The instantiated family arguments
-  --   2. The RHS of the synonym
+-- Each associated type default template is a triple of:
+data ATDefault = ATD { -- TyVars of the RHS and family arguments 
+                       -- (including the class TVs)
+                       atDefaultTys     :: [TyVar],
+                       -- The instantiated family arguments
+                       atDefaultPats    :: [Type],
+                       -- The RHS of the synonym
+                       atDefaultRhs     :: Type,
+                       -- The source location of the synonym
+                       atDefaultSrcSpan :: SrcSpan }
 
 -- | Convert a `DefMethSpec` to a `DefMeth`, which discards the name field in
 --   the `DefMeth` constructor of the `DefMeth`.

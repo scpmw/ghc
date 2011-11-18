@@ -6,6 +6,13 @@
 TcMatches: Typecheck some @Matches@
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module TcMatches ( tcMatchesFun, tcGRHSsPat, tcMatchesCase, tcMatchLambda,
 		   TcMatchCtxt(..), TcStmtChecker,
 		   tcStmts, tcStmtsAndThen, tcDoStmts, tcBody,
@@ -533,8 +540,6 @@ tcMcStmt _ (ExprStmt rhs then_op guard_op _) res_ty thing_inside
 
 -- Grouping statements
 --
---   [ body | stmts, then group by e ]
---     ->  e :: t
 --   [ body | stmts, then group by e using f ]
 --     ->  e :: t
 --         f :: forall a. (a -> t) -> m a -> m (m a)

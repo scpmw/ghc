@@ -12,6 +12,13 @@ The occurrence analyser re-typechecks a core expression, returning a new
 core expression with (hopefully) improved usage information.
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 {-# LANGUAGE BangPatterns #-}
 module OccurAnal (
         occurAnalysePgm, occurAnalyseExpr
@@ -21,7 +28,7 @@ module OccurAnal (
 
 import CoreSyn
 import CoreFVs
-import CoreUtils        ( exprIsTrivial, isDefaultAlt, isExpandableApp, mkCoerce )
+import CoreUtils        ( exprIsTrivial, isDefaultAlt, isExpandableApp, mkCast )
 import Id
 import Name( localiseName )
 import BasicTypes
@@ -1074,9 +1081,6 @@ We need to gather info about what coercion variables appear, so that
 we can sort them into the right place when doing dependency analysis.
 
 \begin{code}
-\end{code}
-
-\begin{code}
 occAnal env (Tick tickish body)
   | Breakpoint _ ids <- tickish
   = (mapVarEnv markInsideSCC usage
@@ -1341,7 +1345,7 @@ wrapProxy (bndr, rhs_var, co) (body_usg, body)
   where
     (body_usg', tagged_bndr) = tagBinder body_usg bndr
     rhs_usg = unitVarEnv rhs_var NoOccInfo	-- We don't need exact info
-    rhs = mkCoerce co (Var (zapIdOccInfo rhs_var)) -- See Note [Zap case binders in proxy bindings]
+    rhs = mkCast (Var (zapIdOccInfo rhs_var)) co -- See Note [Zap case binders in proxy bindings]
 \end{code}
 
 
@@ -1902,7 +1906,8 @@ markMany, markInsideLam, markInsideSCC :: OccInfo -> OccInfo
 
 markMany _  = NoOccInfo
 
-markInsideSCC occ = markMany occ
+markInsideSCC occ = markInsideLam occ
+  -- inside an SCC, we can inline lambdas only.
 
 markInsideLam (OneOcc _ one_br int_cxt) = OneOcc True one_br int_cxt
 markInsideLam occ                       = occ

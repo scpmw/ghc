@@ -1,4 +1,11 @@
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 -- | Handy functions for creating much Core syntax
 module MkCore (
         -- * Constructing normal syntax
@@ -281,8 +288,10 @@ mkIPUnbox ipx = Var x `Cast` mkAxInstCo (ipCoAxiom ip) [ty]
 \begin{code}
 
 mkEqBox :: Coercion -> CoreExpr
-mkEqBox co = Var (dataConWorkId eqBoxDataCon) `mkTyApps` [ty1, ty2] `App` Coercion co
+mkEqBox co = ASSERT( typeKind ty2 `eqKind` k )
+             Var (dataConWorkId eqBoxDataCon) `mkTyApps` [k, ty1, ty2] `App` Coercion co
   where Pair ty1 ty2 = coercionKind co
+        k = typeKind ty1
 
 \end{code}
 

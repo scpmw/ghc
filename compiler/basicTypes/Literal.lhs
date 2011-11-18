@@ -7,6 +7,13 @@
 \begin{code}
 {-# LANGUAGE DeriveDataTypeable #-}
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module Literal
         (
         -- * Main data type
@@ -23,9 +30,10 @@ module Literal
         , literalType
         , hashLiteral
         , absentLiteralOf
+        , pprLiteral
 
         -- ** Predicates on Literals and their contents
-        , litIsDupable, litIsTrivial
+        , litIsDupable, litIsTrivial, litIsLifted
         , inIntRange, inWordRange, tARGET_MAX_INT, inCharRange
         , isZeroLit
         , litFitsInChar
@@ -135,7 +143,9 @@ easier to write RULEs for them.
    in TcIface.
 
  * When looking for CAF-hood (in TidyPgm), we must take account of the
-   CAF-hood of the mk_integer field in LitInteger; see TidyPgm.cafRefsL
+   CAF-hood of the mk_integer field in LitInteger; see TidyPgm.cafRefsL.
+   Indeed this is the only reason we put the mk_integer field in the 
+   literal -- otherwise we could just look it up in CorePrep.
 
 
 Binary instance
@@ -199,7 +209,7 @@ instance Binary Literal where
 
 \begin{code}
 instance Outputable Literal where
-    ppr lit = pprLit lit
+    ppr lit = pprLiteral (\d -> d) lit
 
 instance Show Literal where
     showsPrec p lit = showsPrecSDoc p (ppr lit)
@@ -358,6 +368,10 @@ litFitsInChar (MachInt i)
                          = fromInteger i <= ord minBound
                         && fromInteger i >= ord maxBound
 litFitsInChar _         = False
+
+litIsLifted :: Literal -> Bool
+litIsLifted (LitInteger {}) = True
+litIsLifted _               = False
 \end{code}
 
         Types
@@ -375,12 +389,12 @@ literalType (MachWord64  _) = word64PrimTy
 literalType (MachFloat _)   = floatPrimTy
 literalType (MachDouble _)  = doublePrimTy
 literalType (MachLabel _ _ _) = addrPrimTy
-literalType (LitInteger _ mkIntegerId)
+literalType (LitInteger _ mk_integer_id)
       -- We really mean idType, rather than varType, but importing Id
       -- causes a module import loop
-    = case varType mkIntegerId of
-      FunTy _ (FunTy _ integerTy) -> integerTy
-      _ -> panic "literalType: mkIntegerId has the wrong type"
+    = case varType mk_integer_id of
+        FunTy _ (FunTy _ integerTy) -> integerTy
+        _ -> panic "literalType: mkIntegerId has the wrong type"
 
 absentLiteralOf :: TyCon -> Maybe Literal
 -- Return a literal of the appropriate primtive
@@ -437,21 +451,24 @@ litTag (LitInteger  {})    = _ILIT(11)
   exceptions: MachFloat gets an initial keyword prefix.
 
 \begin{code}
-pprLit :: Literal -> SDoc
-pprLit (MachChar ch)    = pprHsChar ch
-pprLit (MachStr s)      = pprHsString s
-pprLit (MachInt i)      = pprIntVal i
-pprLit (MachInt64 i)    = ptext (sLit "__int64") <+> integer i
-pprLit (MachWord w)     = ptext (sLit "__word") <+> integer w
-pprLit (MachWord64 w)   = ptext (sLit "__word64") <+> integer w
-pprLit (MachFloat f)    = ptext (sLit "__float") <+> float (fromRat f)
-pprLit (MachDouble d)   = double (fromRat d)
-pprLit (MachNullAddr)   = ptext (sLit "__NULL")
-pprLit (MachLabel l mb fod) = ptext (sLit "__label") <+> b <+> ppr fod
+pprLiteral :: (SDoc -> SDoc) -> Literal -> SDoc
+-- The function is used on non-atomic literals
+-- to wrap parens around literals that occur in
+-- a context requiring an atomic thing
+pprLiteral _       (MachChar ch)    = pprHsChar ch
+pprLiteral _       (MachStr s)      = pprHsString s
+pprLiteral _       (MachInt i)      = pprIntVal i
+pprLiteral _       (MachDouble d)   = double (fromRat d)
+pprLiteral _       (MachNullAddr)   = ptext (sLit "__NULL")
+pprLiteral add_par (LitInteger i _) = add_par (ptext (sLit "__integer") <+> integer i)
+pprLiteral add_par (MachInt64 i)    = add_par (ptext (sLit "__int64") <+> integer i)
+pprLiteral add_par (MachWord w)     = add_par (ptext (sLit "__word") <+> integer w)
+pprLiteral add_par (MachWord64 w)   = add_par (ptext (sLit "__word64") <+> integer w)
+pprLiteral add_par (MachFloat f)    = add_par (ptext (sLit "__float") <+> float (fromRat f))
+pprLiteral add_par (MachLabel l mb fod) = add_par (ptext (sLit "__label") <+> b <+> ppr fod)
     where b = case mb of
               Nothing -> pprHsString l
               Just x  -> doubleQuotes (text (unpackFS l ++ '@':show x))
-pprLit (LitInteger i _) = ptext (sLit "__integer") <+> integer i
 
 pprIntVal :: Integer -> SDoc
 -- ^ Print negative integers with parens to be sure it's unambiguous

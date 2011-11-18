@@ -4,6 +4,13 @@ o% (c) The AQUA Project, Glasgow University, 1993-1998
 \section[SimplMonad]{The simplifier Monad}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module SimplEnv (
 	InId, InBind, InExpr, InAlt, InArg, InType, InBndr, InVar,
 	OutId, OutTyVar, OutBind, OutExpr, OutAlt, OutArg, OutType, OutBndr, OutVar,
@@ -12,9 +19,7 @@ module SimplEnv (
 	-- The simplifier mode
 	setMode, getMode, updMode,
 
-        setEnclosingCC, getEnclosingCC,
-
-	-- Environments
+        -- Environments
 	SimplEnv(..), StaticEnv, pprSimplEnv,	-- Temp not abstract
         mkSimplEnv, extendIdSubst, SimplEnv.extendTvSubst, SimplEnv.extendCvSubst,
 	zapSubstEnv, setSubstEnv, 
@@ -32,7 +37,7 @@ module SimplEnv (
 	-- Floats
   	Floats, emptyFloats, isEmptyFloats, addNonRec, addFloats, extendFloats,
 	wrapFloats, floatBinds, setFloats, zapFloats, addRecFloats,
-        doFloatFromRhs, getFloatBinds, getFloats, tickFloats
+        doFloatFromRhs, getFloatBinds, getFloats, mapFloats
     ) where
 
 #include "HsVersions.h"
@@ -42,7 +47,6 @@ import CoreMonad	( SimplifierMode(..) )
 import IdInfo
 import CoreSyn
 import CoreUtils
-import CostCentre
 import Var
 import VarEnv
 import VarSet
@@ -59,7 +63,6 @@ import BasicTypes
 import MonadUtils
 import Outputable
 import FastString
-import Util
 
 import Data.List
 \end{code}
@@ -108,7 +111,6 @@ data SimplEnv
      -- wrt the original expression
 
 	seMode 	    :: SimplifierMode,
-        seCC        :: CostCentreStack, -- The enclosing CCS (when profiling)
 
 	-- The current substitution
 	seTvSubst   :: TvSubstEnv,	-- InTyVar |--> OutType
@@ -228,8 +230,7 @@ seIdSubst:
 \begin{code}
 mkSimplEnv :: SimplifierMode -> SimplEnv
 mkSimplEnv mode
-  = SimplEnv { seCC = noCCS
-             , seMode = mode
+  = SimplEnv { seMode = mode
              , seInScope = init_in_scope
              , seFloats = emptyFloats
              , seTvSubst = emptyVarEnv
@@ -269,13 +270,6 @@ setMode mode env = env { seMode = mode }
 
 updMode :: (SimplifierMode -> SimplifierMode) -> SimplEnv -> SimplEnv
 updMode upd env = env { seMode = upd (seMode env) }
-
----------------------
-getEnclosingCC :: SimplEnv -> CostCentreStack
-getEnclosingCC env = seCC env
-
-setEnclosingCC :: SimplEnv -> CostCentreStack -> SimplEnv
-setEnclosingCC env cc = env {seCC = cc}
 
 ---------------------
 extendIdSubst :: SimplEnv -> Id -> SimplSR -> SimplEnv
@@ -433,13 +427,12 @@ addNonRec env id rhs
     env { seFloats = seFloats env `addFlts` unitFloat (NonRec id rhs),
 	  seInScope = extendInScopeSet (seInScope env) id }
 
-tickFloats :: SimplEnv -> Tickish Id -> SimplEnv
--- When floating out of a Tick, we have to add ticks to the floats
-tickFloats env@SimplEnv { seFloats = Floats fs ff } tickish
-   = env { seFloats = Floats (mapOL add_tick fs) ff }
+mapFloats :: SimplEnv -> ((Id,CoreExpr) -> (Id,CoreExpr)) -> SimplEnv
+mapFloats env@SimplEnv { seFloats = Floats fs ff } fun
+   = env { seFloats = Floats (mapOL app fs) ff }
    where
-     add_tick (NonRec b e) = NonRec b (mkTick tickish e)
-     add_tick (Rec bs)     = Rec (mapSnd (mkTick tickish) bs)
+     app (NonRec b e) = case fun (b,e) of (b',e') -> NonRec b' e'
+     app (Rec bs)     = Rec (map fun bs)
 
 extendFloats :: SimplEnv -> OutBind -> SimplEnv
 -- Add these bindings to the floats, and extend the in-scope env too

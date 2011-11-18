@@ -5,6 +5,13 @@
 \section[DataCon]{@DataCon@: Data Constructors}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module DataCon (
         -- * Main data types
 	DataCon, DataConIds(..),
@@ -851,16 +858,17 @@ dataConCannotMatch tys con
   | all isTyVarTy tys = False	-- Also common
   | otherwise
   = typesCantMatch [(Type.substTy subst ty1, Type.substTy subst ty2)
-                   | (ty1, ty2) <- concatMap (predEqs . predTypePredTree) theta ]
+                   | (ty1, ty2) <- concatMap predEqs theta ]
   where
     dc_tvs  = dataConUnivTyVars con
     theta   = dataConTheta con
     subst   = zipTopTvSubst dc_tvs tys
 
     -- TODO: could gather equalities from superclasses too
-    predEqs (EqPred ty1 ty2) = [(ty1, ty2)]
-    predEqs (TuplePred ts)   = concatMap predEqs ts
-    predEqs _                = []
+    predEqs pred = case classifyPredType pred of
+                     EqPred ty1 ty2 -> [(ty1, ty2)]
+                     TuplePred ts   -> concatMap predEqs ts
+                     _              -> []
 \end{code}
 
 %************************************************************************
@@ -945,6 +953,7 @@ computeRep stricts tys
   where
     unbox HsNoBang       ty = [(NotMarkedStrict, ty)]
     unbox HsStrict       ty = [(MarkedStrict,    ty)]
+    unbox HsNoUnpack     ty = [(MarkedStrict,    ty)]
     unbox HsUnpackFailed ty = [(MarkedStrict,    ty)]
     unbox HsUnpack ty = zipEqual "computeRep" (dataConRepStrictness arg_dc) arg_tys
                       where

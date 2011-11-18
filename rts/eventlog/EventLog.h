@@ -48,11 +48,11 @@ void postCapMsg(Capability *cap, char *msg, va_list ap);
 void postEventStartup(EventCapNo n_caps);
 
 /*
- * Post a capability set modification event
+ * Post an event that is associated with a capability set
  */
-void postCapsetModifyEvent (EventTypeNum tag,
-                            EventCapsetID capset,
-                            StgWord32 other);
+void postCapsetEvent (EventTypeNum tag,
+                      EventCapsetID capset,
+                      StgWord info);
 
 /*
  * Post a capability set event with a string payload
@@ -68,6 +68,8 @@ void postCapsetVecEvent (EventTypeNum tag,
                          EventCapsetID capset,
                          int argc,
                          char *msg[]);
+
+void postWallClockTime (EventCapsetID capset);
 
 /* 
  * Post a `par` spark event
@@ -95,6 +97,13 @@ void postDebugModule(char *unit_name);
 void postDebugProc(char *label);
 void postProcPtrRange(void *low_pc, void *high_pc);
 
+/*
+ * Post an event to annotate a thread with a label
+ */
+void postThreadLabel(Capability    *cap,
+                     EventThreadID  id,
+                     char          *label);
+
 #else /* !TRACING */
 
 INLINE_HEADER void postSchedEvent (Capability *cap  STG_UNUSED,
@@ -117,6 +126,12 @@ INLINE_HEADER void postCapMsg (Capability *cap STG_UNUSED,
                                va_list ap STG_UNUSED)
 { /* nothing */ }
 
+
+INLINE_HEADER void postThreadLabel(Capability    *cap   STG_UNUSED,
+                                   EventThreadID  id    STG_UNUSED,
+                                   char          *label STG_UNUSED)
+{ /* nothing */ }
+                                   
 #endif
 
 #include "EndPrivate.h"

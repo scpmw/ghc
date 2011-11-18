@@ -8,6 +8,13 @@ FunDeps - functional dependencies
 It's better to read it as: "if we know these, then we're going to know these"
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module FunDeps (
         FDEq (..),
  	Equation(..), pprEquation,
@@ -133,11 +140,11 @@ oclose preds fixed_tvs
 	      ]
      
     classesOfPredTy :: PredType -> [(Class, [Type])]
-    classesOfPredTy = go . predTypePredTree
-      where
-       go (ClassPred cls tys) = [(cls, tys)]
-       go (TuplePred ts)      = concatMap go ts
-       go _                   = []
+    classesOfPredTy pred
+       = case classifyPredType pred of
+            ClassPred cls tys -> [(cls, tys)]
+            TuplePred ts      -> concatMap classesOfPredTy ts
+            _                 -> []
 \end{code}
 
     

@@ -13,6 +13,7 @@ module CgUtils (
         emitRODataLits, mkRODataLits,
         emitIf, emitIfThenElse,
         emitRtsCall, emitRtsCallWithVols, emitRtsCallWithResult,
+        emitRtsCallGen,
         assignTemp, assignTemp_, newTemp,
         emitSimultaneously,
         emitSwitch, emitLitSwitch,
@@ -235,22 +236,23 @@ emitRtsCall
    -> Bool                      -- ^ whether this is a safe call
    -> Code                      -- ^ cmm code
 
-emitRtsCall pkg fun args safe = emitRtsCall' [] pkg fun args Nothing safe
+emitRtsCall pkg fun args safe = emitRtsCallGen [] pkg fun args Nothing safe
    -- The 'Nothing' says "save all global registers"
 
 emitRtsCallWithVols :: PackageId -> FastString -> [CmmHinted CmmExpr] -> [GlobalReg] -> Bool -> Code
 emitRtsCallWithVols pkg fun args vols safe
-   = emitRtsCall' [] pkg fun args (Just vols) safe
+   = emitRtsCallGen [] pkg fun args (Just vols) safe
 
 emitRtsCallWithResult
    :: LocalReg -> ForeignHint
    -> PackageId -> FastString
    -> [CmmHinted CmmExpr] -> Bool -> Code
+
 emitRtsCallWithResult res hint pkg fun args safe
-   = emitRtsCall' [CmmHinted res hint] pkg fun args Nothing safe
+   = emitRtsCallGen [CmmHinted res hint] pkg fun args Nothing safe
 
 -- Make a call to an RTS C procedure
-emitRtsCall'
+emitRtsCallGen
    :: [CmmHinted LocalReg]
    -> PackageId
    -> FastString
@@ -258,7 +260,7 @@ emitRtsCall'
    -> Maybe [GlobalReg]
    -> Bool -- True <=> CmmSafe call
    -> Code
-emitRtsCall' res pkg fun args vols safe = do
+emitRtsCallGen res pkg fun args vols safe = do
   safety <- if safe
             then getSRTInfo >>= (return . CmmSafe)
             else return CmmUnsafe
@@ -348,6 +350,12 @@ callerSaves (VanillaReg 7 _)    = True
 #ifdef CALLER_SAVES_R8
 callerSaves (VanillaReg 8 _)    = True
 #endif
+#ifdef CALLER_SAVES_R9
+callerSaves (VanillaReg 9 _)    = True
+#endif
+#ifdef CALLER_SAVES_R10
+callerSaves (VanillaReg 10 _)   = True
+#endif
 #ifdef CALLER_SAVES_F1
 callerSaves (FloatReg 1)        = True
 #endif
@@ -405,15 +413,19 @@ baseRegOffset (VanillaReg 7 _)    = oFFSET_StgRegTable_rR7
 baseRegOffset (VanillaReg 8 _)    = oFFSET_StgRegTable_rR8
 baseRegOffset (VanillaReg 9 _)    = oFFSET_StgRegTable_rR9
 baseRegOffset (VanillaReg 10 _)   = oFFSET_StgRegTable_rR10
+baseRegOffset (VanillaReg n _)    = panic ("Registers above R10 are not supported (tried to use R" ++ show n ++ ")")
 baseRegOffset (FloatReg  1)       = oFFSET_StgRegTable_rF1
 baseRegOffset (FloatReg  2)       = oFFSET_StgRegTable_rF2
 baseRegOffset (FloatReg  3)       = oFFSET_StgRegTable_rF3
 baseRegOffset (FloatReg  4)       = oFFSET_StgRegTable_rF4
+baseRegOffset (FloatReg  n)       = panic ("Registers above F4 are not supported (tried to use F" ++ show n ++ ")")
 baseRegOffset (DoubleReg 1)       = oFFSET_StgRegTable_rD1
 baseRegOffset (DoubleReg 2)       = oFFSET_StgRegTable_rD2
+baseRegOffset (DoubleReg n)       = panic ("Registers above D2 are not supported (tried to use D" ++ show n ++ ")")
 baseRegOffset Sp                  = oFFSET_StgRegTable_rSp
 baseRegOffset SpLim               = oFFSET_StgRegTable_rSpLim
 baseRegOffset (LongReg 1)         = oFFSET_StgRegTable_rL1
+baseRegOffset (LongReg n)         = panic ("Registers above L1 are not supported (tried to use L" ++ show n ++ ")")
 baseRegOffset Hp                  = oFFSET_StgRegTable_rHp
 baseRegOffset HpLim               = oFFSET_StgRegTable_rHpLim
 baseRegOffset CurrentTSO          = oFFSET_StgRegTable_rCurrentTSO
@@ -423,7 +435,7 @@ baseRegOffset EagerBlackholeInfo  = oFFSET_stgEagerBlackholeInfo
 baseRegOffset GCEnter1            = oFFSET_stgGCEnter1
 baseRegOffset GCFun               = oFFSET_stgGCFun
 baseRegOffset BaseReg             = panic "baseRegOffset:BaseReg"
-baseRegOffset _                   = panic "baseRegOffset:other"
+baseRegOffset PicBaseReg          = panic "baseRegOffset:PicBaseReg"
 
 
 -------------------------------------------------------------------------
@@ -914,6 +926,12 @@ activeStgRegs = [
 #endif
 #ifdef REG_R8
     ,VanillaReg 8 VGcPtr
+#endif
+#ifdef REG_R9
+    ,VanillaReg 9 VGcPtr
+#endif
+#ifdef REG_R10
+    ,VanillaReg 10 VGcPtr
 #endif
 #ifdef REG_SpLim
     ,SpLim

@@ -141,20 +141,21 @@
 #define EVENT_SPARK_FIZZLE        40 /* ()                     */
 #define EVENT_SPARK_GC            41 /* ()                     */
 #define EVENT_INTERN_STRING       42 /* (string, id) {not used by ghc} */
+#define EVENT_WALL_CLOCK_TIME     43 /* (capset, unix_epoch_seconds, nanoseconds) */
+#define EVENT_THREAD_LABEL        44 /* (thread, name_string)  */
 
+/* Range 45 - 59 is available for new GHC and common events */
 
-/* Range 43 - 59 is available for new GHC and common events */
+#define EVENT_HPC_MODULE          51 /* (name, boxes, hash)    */
+#define EVENT_TICK_DUMP           52 /* (freqs, counts)        */
+#define EVENT_INSTR_PTR_SAMPLE    53 /* (ips)                  */
 
-#define EVENT_HPC_MODULE          44 /* (name, boxes, hash)    */
-#define EVENT_TICK_DUMP           45 /* (freqs, counts)        */
-#define EVENT_INSTR_PTR_SAMPLE    46 /* (ips)                  */
-
-#define EVENT_DEBUG_MODULE        50
-#define EVENT_DEBUG_PROCEDURE     51
-#define EVENT_DEBUG_SOURCE        52
-#define EVENT_DEBUG_CORE          53
-#define EVENT_DEBUG_NAME          54
-#define EVENT_DEBUG_PTR_RANGE     55
+#define EVENT_DEBUG_MODULE        54
+#define EVENT_DEBUG_PROCEDURE     55
+#define EVENT_DEBUG_SOURCE        56
+#define EVENT_DEBUG_CORE          57
+#define EVENT_DEBUG_NAME          58
+#define EVENT_DEBUG_PTR_RANGE     59
 
 /* Range 60 - 80 is used by eden for parallel tracing
  * see http://www.mathematik.uni-marburg.de/~eden/

@@ -6,6 +6,13 @@
 Desugaring foreign calls
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module DsCCall 
 	( dsCCall
 	, mkFCall
@@ -135,7 +142,7 @@ unboxArg arg
 
   -- Recursive newtypes
   | Just(_rep_ty, co) <- splitNewTypeRepCo_maybe arg_ty
-  = unboxArg (mkCoerce co arg)
+  = unboxArg (mkCast arg co)
       
   -- Booleans
   | Just tc <- tyConAppTyCon_maybe arg_ty, 
@@ -335,7 +342,7 @@ resultWrapper result_ty
   -- Recursive newtypes
   | Just (rep_ty, co) <- splitNewTypeRepCo_maybe result_ty
   = do (maybe_ty, wrapper) <- resultWrapper rep_ty
-       return (maybe_ty, \e -> mkCoerce (mkSymCo co) (wrapper e))
+       return (maybe_ty, \e -> mkCast (wrapper e) (mkSymCo co))
 
   -- The type might contain foralls (eg. for dummy type arguments,
   -- referring to 'Ptr a' is legal).

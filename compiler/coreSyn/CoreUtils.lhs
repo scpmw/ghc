@@ -8,11 +8,11 @@ Utility functions on @Core@ syntax
 \begin{code}
 -- | Commonly useful utilites for manipulating the Core language
 module CoreUtils (
-
         -- * Constructing expressions
-        mkCoerce, mkTick,
+        mkCast,
+        mkTick, mkTickNoHNF,
         bindNonRec, needsCaseBinding,
-        mkAltExpr, mkPiType, mkPiTypes,
+        mkAltExpr,
 
         -- * Taking expressions apart
         findDefault, findAlt, isDefaultAlt, mergeAlts, trimConArgs,
@@ -68,6 +68,7 @@ import Util
 import Pair
 import Data.Word
 import Data.Bits
+import Data.List ( mapAccumL )
 \end{code}
 
 
@@ -137,20 +138,6 @@ Various possibilities suggest themselves:
    we are doing here.  It's not too expensive, I think.
 
 \begin{code}
-mkPiType  :: Var -> Type -> Type
--- ^ Makes a @(->)@ type or a forall type, depending
--- on whether it is given a type variable or a term variable.
-mkPiTypes :: [Var] -> Type -> Type
--- ^ 'mkPiType' for multiple type or value arguments
-
-mkPiType v ty
-   | isId v    = mkFunTy (idType v) ty
-   | otherwise = mkForAllTy v ty
-
-mkPiTypes vs ty = foldr mkPiType ty vs
-\end{code}
-
-\begin{code}
 applyTypeToArg :: Type -> CoreExpr -> Type
 -- ^ Determines the type resulting from applying an expression to a function with the given type
 applyTypeToArg fun_ty (Type arg_ty) = applyTy fun_ty arg_ty
@@ -190,15 +177,27 @@ panic_msg e op_ty = pprCoreExpr e $$ ppr op_ty
 \begin{code}
 -- | Wrap the given expression in the coercion safely, dropping
 -- identity coercions and coalescing nested coercions
-mkCoerce :: Coercion -> CoreExpr -> CoreExpr
-mkCoerce co e | isReflCo co = e
-mkCoerce co (Cast expr co2)
+mkCast :: CoreExpr -> Coercion -> CoreExpr
+mkCast e co | isReflCo co = e
+
+mkCast (Coercion e_co) co 
+  = Coercion new_co
+  where
+       -- g :: (s1 ~# s2) ~# (t1 ~#  t2)
+       -- g1 :: s1 ~# t1
+       -- g2 :: s2 ~# t2
+       new_co = mkSymCo g1 `mkTransCo` e_co `mkTransCo` g2
+       [_reflk, g1, g2] = decomposeCo 3 co
+            -- Remember, (~#) :: forall k. k -> k -> *
+            -- so it takes *three* arguments, not two
+
+mkCast (Cast expr co2) co
   = ASSERT(let { Pair  from_ty  _to_ty  = coercionKind co;
                  Pair _from_ty2  to_ty2 = coercionKind co2} in
            from_ty `eqType` to_ty2 )
-    mkCoerce (mkTransCo co2 co) expr
+    mkCast expr (mkTransCo co2 co)
 
-mkCoerce co expr
+mkCast expr co
   = let Pair from_ty _to_ty = coercionKind co in
 --    if to_ty `eqType` from_ty
 --    then expr
@@ -212,29 +211,66 @@ mkCoerce co expr
 -- annotation if possible.
 mkTick :: Tickish Id -> CoreExpr -> CoreExpr
 
-  -- Nested duplicate ticks can be squashed.  ToDo: we could also
-  -- squash two ProfNotes for the same CostCentre if either none is
-  -- counting, or only one is counting (and we keep the counting one).
-  --
-  -- Later: I'm not sure if we need this, I added it because I was seeing
-  -- duplicate scc annotations but that turned out to be due to a bug, so
-  -- I'm keeping this turned off to catch further bugs of the same kind.
---mkTick t (Tick t' e)
---  | t == t' && not (tickishCounts t)
---  = Tick t' e
+mkTick t (Var x)
+  | isFunTy (idType x) = Tick t (Var x)
+  | otherwise
+  = if tickishCounts t
+       then if tickishScoped t && tickishCanSplit t
+               then Tick (mkNoScope t) (Var x)
+               else Tick t (Var x)
+       else Var x
 
 mkTick t (Cast e co)
   = Cast (mkTick t e) co -- Move tick inside cast
 
-mkTick t expr
-  | tickishCounts t
-  = if tickishScoped t && (exprIsTrivial expr || exprIsHNF expr)
-       then Tick (mkNoScope t) expr -- drop the scoping around an HNF / triv
-       else Tick t expr
-  | otherwise
-  = if exprIsTrivial expr || exprIsHNF expr
-       then expr  -- drop a scoping annotation on HNF / triv
-       else Tick t expr
+mkTick t (Lit l)
+  | not (tickishCounts t) = Lit l
+
+mkTick t expr@(App f arg)
+  | not (isRuntimeArg arg) = App (mkTick t f) arg
+  | isSaturatedConApp expr
+    = if not (tickishCounts t)
+         then tickHNFArgs t expr
+         else if tickishScoped t && tickishCanSplit t
+                 then Tick (mkNoScope t) (tickHNFArgs (mkNoTick t) expr)
+                 else Tick t expr
+
+mkTick t (Lam x e)
+     -- if this is a type lambda, or the tick does not count entries,
+     -- then we can push the tick inside:
+  | not (isRuntimeVar x) || not (tickishCounts t) = Lam x (mkTick t e)
+     -- if it is both counting and scoped, we split the tick into its
+     -- two components, keep the counting tick on the outside of the lambda
+     -- and push the scoped tick inside.  The point of this is that the
+     -- counting tick can probably be floated, and the lambda may then be
+     -- in a position to be beta-reduced.
+  | tickishScoped t && tickishCanSplit t
+         = Tick (mkNoScope t) (Lam x (mkTick (mkNoTick t) e))
+     -- just a counting tick: leave it on the outside
+  | otherwise        = Tick t (Lam x e)
+
+mkTick t other = Tick t other
+
+isSaturatedConApp :: CoreExpr -> Bool
+isSaturatedConApp e = go e []
+  where go (App f a) as = go f (a:as)
+        go (Var fun) args
+           = isConLikeId fun && idArity fun == valArgCount args
+        go (Cast f _) as = go f as
+        go _ _ = False
+
+mkTickNoHNF :: Tickish Id -> CoreExpr -> CoreExpr
+mkTickNoHNF t e
+  | exprIsHNF e = tickHNFArgs t e
+  | otherwise   = mkTick t e
+
+-- push a tick into the arguments of a HNF (call or constructor app)
+tickHNFArgs :: Tickish Id -> CoreExpr -> CoreExpr
+tickHNFArgs t e = push t e
+ where
+  push t (App f (Type u)) = App (push t f) (Type u)
+  push t (App f arg) = App (push t f) (mkTick t arg)
+  push _t e = e
 \end{code}
 
 %************************************************************************
@@ -679,6 +715,7 @@ it's applied only to dictionaries.
 %************************************************************************
 
 \begin{code}
+-----------------------------
 -- | 'exprOkForSpeculation' returns True of an expression that is:
 --
 --  * Safe to evaluate even if normal order eval might not
@@ -719,12 +756,8 @@ exprOkForSpeculation :: Expr b -> Bool
 exprOkForSpeculation (Lit _)      = True
 exprOkForSpeculation (Type _)     = True
 exprOkForSpeculation (Coercion _) = True
-
-exprOkForSpeculation (Var v)     
-   =  isUnLiftedType (idType v)         -- c.f. the Var case of exprIsHNF
-   || isDataConWorkId v                 -- Nullary constructors
-   || idArity v > 0                     -- Functions
-   || isEvaldUnfolding (idUnfolding v)  -- Let-bound values
+exprOkForSpeculation (Var v)      = appOkForSpeculation v []
+exprOkForSpeculation (Cast e _)   = exprOkForSpeculation e
 
 -- Tick annotations that *tick* cannot be speculated, because these
 -- are meant to identify whether or not (and how often) the particular
@@ -733,8 +766,6 @@ exprOkForSpeculation (Tick tickish e)
    | tickishCounts tickish = False
    | otherwise             = exprOkForSpeculation e
 
-exprOkForSpeculation (Cast e _)  = exprOkForSpeculation e
-
 exprOkForSpeculation (Case e _ _ alts)
   =  exprOkForSpeculation e  -- Note [exprOkForSpeculation: case expressions]
   && all (\(_,_,rhs) -> exprOkForSpeculation rhs) alts
@@ -742,37 +773,46 @@ exprOkForSpeculation (Case e _ _ alts)
 
 exprOkForSpeculation other_expr
   = case collectArgs other_expr of
-        (Var f, args) -> spec_ok (idDetails f) args
+        (Var f, args) -> appOkForSpeculation f args
         _             -> False
 
-  where
-    spec_ok (DataConWorkId _) _
-      = True    -- The strictness of the constructor has already
+-----------------------------
+appOkForSpeculation :: Id -> [Expr b] -> Bool
+appOkForSpeculation fun args
+  = case idDetails fun of
+      DFunId new_type ->  not new_type
+         -- DFuns terminate, unless the dict is implemented 
+         -- with a newtype in which case they may not
+
+      DataConWorkId {} -> True
+                -- The strictness of the constructor has already
                 -- been expressed by its "wrapper", so we don't need
                 -- to take the arguments into account
 
-    spec_ok (PrimOpId op) args
-      | isDivOp op,             -- Special case for dividing operations that fail
-        [arg1, Lit lit] <- args -- only if the divisor is zero
-      = not (isZeroLit lit) && exprOkForSpeculation arg1
-                -- Often there is a literal divisor, and this
-                -- can get rid of a thunk in an inner looop
+      PrimOpId op
+        | isDivOp op              -- Special case for dividing operations that fail
+        , [arg1, Lit lit] <- args -- only if the divisor is zero
+        -> not (isZeroLit lit) && exprOkForSpeculation arg1
+                  -- Often there is a literal divisor, and this
+                  -- can get rid of a thunk in an inner looop
 
-      | DataToTagOp <- op      -- See Note [dataToTag speculation]
-      = True
+        | DataToTagOp <- op      -- See Note [dataToTag speculation]
+        -> True
 
-      | otherwise
-      = primOpOkForSpeculation op &&
-        all exprOkForSpeculation args
-                                -- A bit conservative: we don't really need
-                                -- to care about lazy arguments, but this is easy
+        | otherwise
+        -> primOpOkForSpeculation op &&
+           all exprOkForSpeculation args
+                                  -- A bit conservative: we don't really need
+                                  -- to care about lazy arguments, but this is easy
 
-    spec_ok (DFunId new_type) _ = not new_type
-         -- DFuns terminate, unless the dict is implemented with a newtype
-         -- in which case they may not
+      _other -> isUnLiftedType (idType fun)          -- c.f. the Var case of exprIsHNF
+             || idArity fun > n_val_args             -- Partial apps
+             || (n_val_args ==0 && 
+                 isEvaldUnfolding (idUnfolding fun)) -- Let-bound values
+             where
+               n_val_args = valArgCount args
 
-    spec_ok _ _ = False
-
+-----------------------------
 altsAreExhaustive :: [Alt b] -> Bool
 -- True  <=> the case alterantives are definiely exhaustive
 -- False <=> they may or may not be
@@ -941,19 +981,19 @@ exprIsHNFlike is_con is_con_unf = is_hnf_like
         -- we could get an infinite loop
 
     is_hnf_like (Lit _)          = True
-    is_hnf_like (Type _)        = True       -- Types are honorary Values;
+    is_hnf_like (Type _)         = True       -- Types are honorary Values;
                                               -- we don't mind copying them
     is_hnf_like (Coercion _)     = True       -- Same for coercions
     is_hnf_like (Lam b e)        = isRuntimeVar b || is_hnf_like e
     is_hnf_like (Tick tickish e) = not (tickishCounts tickish)
                                       && is_hnf_like e
                                       -- See Note [exprIsHNF Tick]
-    is_hnf_like (Cast e _)       = is_hnf_like e
-    is_hnf_like (App e (Type _))    = is_hnf_like e
+    is_hnf_like (Cast e _)           = is_hnf_like e
+    is_hnf_like (App e (Type _))     = is_hnf_like e
     is_hnf_like (App e (Coercion _)) = is_hnf_like e
-    is_hnf_like (App e a)        = app_is_value e [a]
-    is_hnf_like (Let _ e)        = is_hnf_like e  -- Lazy let(rec)s don't affect us
-    is_hnf_like _                = False
+    is_hnf_like (App e a)            = app_is_value e [a]
+    is_hnf_like (Let _ e)            = is_hnf_like e  -- Lazy let(rec)s don't affect us
+    is_hnf_like _                    = False
 
     -- There is at least one value argument
     app_is_value :: CoreExpr -> [CoreArg] -> Bool
@@ -1029,9 +1069,10 @@ dataConInstPat :: [FastString]          -- A long enough list of FSs to use for 
 --
 --  where the double-primed variables are created with the FastStrings and
 --  Uniques given as fss and us
-dataConInstPat fss uniqs con inst_tys
-  = (ex_bndrs, arg_ids)
-  where
+dataConInstPat fss uniqs con inst_tys 
+  = ASSERT( univ_tvs `equalLength` inst_tys )
+    (ex_bndrs, arg_ids)
+  where 
     univ_tvs = dataConUnivTyVars con
     ex_tvs   = dataConExTyVars con
     arg_tys  = dataConRepArgTys con
@@ -1042,19 +1083,25 @@ dataConInstPat fss uniqs con inst_tys
     (ex_uniqs, id_uniqs) = splitAt n_ex uniqs
     (ex_fss,   id_fss)   = splitAt n_ex fss
 
-      -- Make existential type variables
-    ex_bndrs = zipWith3 mk_ex_var ex_uniqs ex_fss ex_tvs
-    mk_ex_var uniq fs var = mkTyVar new_name kind
-      where
-        new_name = mkSysTvName uniq fs
-        kind     = tyVarKind var
+      -- Make the instantiating substitution for universals
+    univ_subst = zipOpenTvSubst univ_tvs inst_tys
 
-      -- Make the instantiating substitution
-    subst = zipOpenTvSubst (univ_tvs ++ ex_tvs) (inst_tys ++ map mkTyVarTy ex_bndrs)
+      -- Make existential type variables, applyingn and extending the substitution
+    (full_subst, ex_bndrs) = mapAccumL mk_ex_var univ_subst 
+                                       (zip3 ex_tvs ex_fss ex_uniqs)
+
+    mk_ex_var :: TvSubst -> (TyVar, FastString, Unique) -> (TvSubst, TyVar)
+    mk_ex_var subst (tv, fs, uniq) = (Type.extendTvSubst subst tv (mkTyVarTy new_tv)
+                                     , new_tv)
+      where
+        new_tv   = mkTyVar new_name kind
+        new_name = mkSysTvName uniq fs
+        kind     = Type.substTy subst (tyVarKind tv)
 
       -- Make value vars, instantiating types
-    mk_id_var uniq fs ty = mkUserLocal (mkVarOccFS fs) uniq (Type.substTy subst ty) noSrcSpan
     arg_ids = zipWith3 mk_id_var id_uniqs id_fss arg_tys
+    mk_id_var uniq fs ty = mkUserLocal (mkVarOccFS fs) uniq 
+                                       (Type.substTy full_subst ty) noSrcSpan
 \end{code}
 
 %************************************************************************
@@ -1456,7 +1503,7 @@ tryEtaReduce bndrs body
     -- See Note [Eta reduction with casted arguments]
     -- for why we have an accumulating coercion
     go [] fun co
-      | ok_fun fun = Just (mkCoerce co fun)
+      | ok_fun fun = Just (mkCast fun co)
 
     go (b : bs) (App fun arg) co
       | Just co' <- ok_arg b arg co

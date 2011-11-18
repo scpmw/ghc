@@ -1,10 +1,7 @@
-{-# OPTIONS_GHC -XNoMonoLocalBinds #-}
-
--- Vectorise a modules type environment, the structure containing all type things defined in a
--- module.
+-- Vectorise a modules type and class declarations.
 --
--- This extends the type environment with vectorised variants of data types and produces value
--- bindings for worker functions and the like.
+-- This produces new type constructors and family instances top be included in the module toplevel
+-- as well as bindings for worker functions, dfuns, and the like.
 
 module Vectorise.Type.Env ( 
   vectTypeEnv,
@@ -18,10 +15,10 @@ import Vectorise.Monad
 import Vectorise.Builtins
 import Vectorise.Type.TyConDecl
 import Vectorise.Type.Classify
-import Vectorise.Type.PADict
-import Vectorise.Type.PData
-import Vectorise.Type.PRepr
-import Vectorise.Type.Repr
+import Vectorise.Generic.PADict
+import Vectorise.Generic.PAMethods
+import Vectorise.Generic.PData
+import Vectorise.Generic.Description
 import Vectorise.Utils
 
 import CoreSyn
@@ -42,7 +39,6 @@ import FastString
 import MonadUtils
 import Control.Monad
 import Data.List
-
 
 -- Note [Pragmas to vectorise tycons]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -90,15 +86,48 @@ import Data.List
 --     by the vectoriser).
 --
 --     Type constructors declared with {-# VECTORISE type T = T' #-} are treated in this manner.
-
--- |Vectorise a type environment.
 --
-vectTypeEnv :: [TyCon]                  -- TyCons defined in this module
+-- In addition, we have also got a single pragma form for type classes: {-# VECTORISE class C #-}.
+-- It implies that the class type constructor may be used in vectorised code together with its data
+-- constructor.  We generally produce a vectorised version of the data type and data constructor.
+-- We do not generate 'PData' and 'PRepr' instances for class type constructors.  This pragma is the
+-- default for all type classes declared in this module, but the pragma can also be used explitly on
+-- imported classes.
+
+-- Note [Vectorising classes]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~
+--
+-- We vectorise classes essentially by just vectorising their desugared Core representation, but we
+-- do generate a 'Class' structure along the way (see 'Vectorise.Type.TyConDecl.vectTyConDecl').
+--
+-- Here is an example illustrating the mapping — assume
+--
+--   class Num a where
+--     (+) :: a -> a -> a
+--
+-- It desugars to
+--
+--   data Num a = D:Num { (+) :: a -> a -> a }
+--
+-- which we vectorise to
+--
+--  data V:Num a = D:V:Num { ($v+) :: PArray a :-> PArray a :-> PArray a }
+--
+-- while adding the following entries to the vectorisation map:
+--
+--   tycon  : Num   --> V:Num
+--   datacon: D:Num --> D:V:Num
+--   var    : (+) --> ($v+)
+
+-- |Vectorise type constructor including class type constructors.
+--
+vectTypeEnv :: [TyCon]                  -- Type constructors defined in this module
             -> [CoreVect]               -- All 'VECTORISE [SCALAR] type' declarations in this module
+            -> [CoreVect]               -- All 'VECTORISE class' declarations in this module
             -> VM ( [TyCon]             -- old TyCons ++ new TyCons
                   , [FamInst]           -- New type family instances.
                   , [(Var, CoreExpr)])  -- New top level bindings.
-vectTypeEnv tycons vectTypeDecls
+vectTypeEnv tycons vectTypeDecls vectClassDecls
   = do { traceVt "** vectTypeEnv" $ ppr tycons
 
          -- Build a map containing all vectorised type constructor.  If they are scalar, they are
@@ -113,7 +142,8 @@ vectTypeEnv tycons vectTypeDecls
              localScalarTyCons      = [tycon | VectType True  tycon Nothing <- vectTypeDecls]
 
                -- {-# VECTORISE type T -#} (ONLY the imported tycons)
-             impVectTyCons          = [tycon | VectType False tycon Nothing <- vectTypeDecls]
+             impVectTyCons          = (   [tycon | VectType False tycon Nothing <- vectTypeDecls]
+                                       ++ [tycon | VectClass tycon              <- vectClassDecls])
                                       \\ tycons
 
                -- {-# VECTORISE type T = ty -#} (imported and local tycons)
@@ -131,14 +161,24 @@ vectTypeEnv tycons vectTypeDecls
            -- appear in vectorised code.  (We also drop the local type constructors appearing in a
            -- VECTORISE SCALAR pragma or a VECTORISE pragma with an explicit right-hand side, as
            -- these are being handled separately.)
-       ; let maybeVectoriseTyCons   = filter notLocalScalarTyCon tycons ++ impVectTyCons
-             (conv_tcs, keep_tcs)   = classifyTyCons vectTyConFlavour maybeVectoriseTyCons
-             orig_tcs               = keep_tcs ++ conv_tcs
+           -- Furthermore, 'drop_tcs' are those type constructors that we cannot vectorise.
+       ; let maybeVectoriseTyCons           = filter notLocalScalarTyCon tycons ++ impVectTyCons
+             (conv_tcs, keep_tcs, drop_tcs) = classifyTyCons vectTyConFlavour maybeVectoriseTyCons
+             orig_tcs                       = keep_tcs ++ conv_tcs
              
        ; traceVt " VECT SCALAR    : " $ ppr localScalarTyCons
+       ; traceVt " VECT [class]   : " $ ppr impVectTyCons
        ; traceVt " VECT with rhs  : " $ ppr (map fst vectTyConsWithRHS)
+       ; traceVt " -- after classification (local and VECT [class] tycons) --" empty
        ; traceVt " reuse          : " $ ppr keep_tcs
        ; traceVt " convert        : " $ ppr conv_tcs
+       
+           -- warn the user about unvectorised type constructors
+       ; let explanation = ptext (sLit "(They use unsupported language extensions") $$
+                           ptext (sLit "or depend on type constructors that are not vectorised)")
+       ; unless (null drop_tcs) $
+           emitVt "Warning: cannot vectorise these type constructors:" $ 
+             pprQuotedList drop_tcs $$ explanation
 
        ; let defTyConDataCons origTyCon vectTyCon
                = do { defTyCon origTyCon vectTyCon
@@ -159,7 +199,8 @@ vectTypeEnv tycons vectTypeDecls
            -- "Note [Pragmas to vectorise tycons]".
        ; mapM_ (uncurry defTyConDataCons) vectTyConsWithRHS
 
-           -- Vectorise all the data type declarations that we can and must vectorise.
+           -- Vectorise all the data type declarations that we can and must vectorise (enter the
+           -- type and data constructors into the vectorisation map on-the-fly.)
        ; new_tcs <- vectTyConDecls conv_tcs
 
            -- We don't need new representation types for dictionary constructors. The constructors
@@ -170,10 +211,12 @@ vectTypeEnv tycons vectTypeDecls
 
            -- Build 'PRepr' and 'PData' instance type constructors and family instances for all
            -- type constructors with vectorised representations.
-       ; reprs     <- mapM tyConRepr vect_tcs
-       ; repr_tcs  <- zipWith3M buildPReprTyCon orig_tcs vect_tcs reprs
-       ; pdata_tcs <- zipWith3M buildPDataTyCon orig_tcs vect_tcs reprs
-       ; let inst_tcs  = repr_tcs ++ pdata_tcs
+       ; reprs      <- mapM tyConRepr vect_tcs
+       ; repr_tcs   <- zipWith3M buildPReprTyCon  orig_tcs vect_tcs reprs
+       ; pdata_tcs  <- zipWith3M buildPDataTyCon  orig_tcs vect_tcs reprs
+       ; pdatas_tcs <- zipWith3M buildPDatasTyCon orig_tcs vect_tcs reprs
+
+       ; let inst_tcs  = repr_tcs ++ pdata_tcs ++ pdatas_tcs
              fam_insts = map mkLocalFamInst inst_tcs
        ; updGEnv $ extendFamEnv fam_insts
 
@@ -183,32 +226,30 @@ vectTypeEnv tycons vectTypeDecls
        ; (_, binds) <- fixV $ \ ~(dfuns, _) ->
            do { defTyConPAs (zipLazy vect_tcs dfuns)
               ; dfuns <- sequence 
-                      $  zipWith4 buildTyConBindings
+                      $  zipWith5 buildTyConBindings
                                   orig_tcs
                                   vect_tcs
                                   repr_tcs
                                   pdata_tcs
+                                  pdatas_tcs
 
               ; binds <- takeHoisted
               ; return (dfuns, binds)
               }
 
-           -- We return: (1) the vectorised type constructors, (2)
-           -- their 'PRepr' & 'PData' instance constructors two.
-       ; let new_tycons = tycons ++ new_tcs ++ inst_tcs
-
-       ; return (new_tycons, fam_insts, binds)
+           -- Return the vectorised variants of type constructors as well as the generated instance
+           -- type constructors, family instances, and dfun bindings.
+       ; return (new_tcs ++ inst_tcs, fam_insts, binds)
        }
 
 
--- Helpers -------------------
-
-buildTyConBindings :: TyCon -> TyCon -> TyCon -> TyCon -> VM Var
-buildTyConBindings orig_tc vect_tc prepr_tc pdata_tc
- = do { vectDataConWorkers orig_tc vect_tc pdata_tc
-      ; repr <- tyConRepr vect_tc
-      ; buildPADict vect_tc prepr_tc pdata_tc repr
-      }
+-- Helpers --------------------------------------------------------------------
+buildTyConBindings :: TyCon -> TyCon -> TyCon -> TyCon -> TyCon -> VM Var
+buildTyConBindings orig_tc vect_tc prepr_tc pdata_tc pdatas_tc
+ = do   vectDataConWorkers orig_tc vect_tc pdata_tc
+        repr <- tyConRepr vect_tc
+        buildPADict vect_tc prepr_tc pdata_tc pdatas_tc repr
+      
 
 vectDataConWorkers :: TyCon -> TyCon -> TyCon -> VM ()
 vectDataConWorkers orig_tc vect_tc arr_tc
@@ -267,7 +308,7 @@ vectDataConWorkers orig_tc vect_tc arr_tc
                 . inBind orig_worker
                 . polyAbstract tyvars $ \args ->
                   liftM (mkLams (tyvars ++ args) . vectorised)
-                $ buildClosures tyvars [] arg_tys res_ty mk_body
+                $ buildClosures tyvars [] [] arg_tys res_ty mk_body
 
           raw_worker <- mkVectId orig_worker (exprType body)
           let vect_worker = raw_worker `setIdUnfolding`

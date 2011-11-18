@@ -8,6 +8,13 @@ Utilities for desugaring
 This module exports some utility functions of no great interest.
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 -- | Utility functions for constructing Core syntax, principally for desugaring
 module DsUtils (
 	EquationInfo(..), 
@@ -70,6 +77,8 @@ import SrcLoc
 import Util
 import ListSetOps
 import FastString
+
+import Control.Monad    ( zipWithM )
 \end{code}
 
 
@@ -282,7 +291,7 @@ mkGuardedMatchResult pred_expr (MatchResult _ body_fn)
 mkCoPrimCaseMatchResult :: Id				-- Scrutinee
                     -> Type                             -- Type of the case
 		    -> [(Literal, MatchResult)]		-- Alternatives
-		    -> MatchResult
+		    -> MatchResult			-- Literals are all unlifted
 mkCoPrimCaseMatchResult var ty match_alts
   = MatchResult CanFail mk_case
   where
@@ -291,8 +300,10 @@ mkCoPrimCaseMatchResult var ty match_alts
         return (Case (Var var) var ty ((DEFAULT, [], fail) : alts))
 
     sorted_alts = sortWith fst match_alts	-- Right order for a Case
-    mk_alt fail (lit, MatchResult _ body_fn) = do body <- body_fn fail
-                                                  return (LitAlt lit, [], body)
+    mk_alt fail (lit, MatchResult _ body_fn)
+       = ASSERT( not (litIsLifted lit) )
+         do body <- body_fn fail
+            return (LitAlt lit, [], body)
 
 
 mkCoAlgCaseMatchResult 
@@ -380,7 +391,7 @@ mkCoAlgCaseMatchResult var ty match_alts
     isPArrFakeAlts [] = panic "DsUtils: unexpectedly found an empty list of PArr fake alternatives"
     --
     mk_parrCase fail = do
-      lengthP <- dsLookupDPHId lengthPName
+      lengthP <- dsDPHBuiltin lengthPVar
       alt <- unboxAlt
       return (mkWildCase (len lengthP) intTy ty [alt])
       where
@@ -392,7 +403,7 @@ mkCoAlgCaseMatchResult var ty match_alts
 	--
 	unboxAlt = do
 	  l      <- newSysLocalDs intPrimTy
-	  indexP <- dsLookupDPHId indexPName
+	  indexP <- dsDPHBuiltin indexPVar
 	  alts   <- mapM (mkAlt indexP) sorted_alts
 	  return (DataAlt intDataCon, [l], mkWildCase (Var l) intPrimTy ty (dft : alts))
           where
@@ -567,14 +578,17 @@ cases like
      (p,q) = e
 
 \begin{code}
-mkSelectorBinds :: LPat Id	-- The pattern
+mkSelectorBinds :: [Maybe (Tickish Id)]  -- ticks to add, possibly
+                -> LPat Id      -- The pattern
 		-> CoreExpr	-- Expression to which the pattern is bound
 		-> DsM [(Id,CoreExpr)]
 
-mkSelectorBinds (L _ (VarPat v)) val_expr
-  = return [(v, val_expr)]
+mkSelectorBinds ticks (L _ (VarPat v)) val_expr
+  = return [(v, case ticks of
+                  [t] -> mkOptTickBox t val_expr
+                  _   -> val_expr)]
 
-mkSelectorBinds pat val_expr
+mkSelectorBinds ticks pat val_expr
   | null binders 
   = return []
 
@@ -598,7 +612,7 @@ mkSelectorBinds pat val_expr
         -- But we need it at different types... so we use coerce for that
        ; err_expr <- mkErrorAppDs iRREFUT_PAT_ERROR_ID  unitTy (ppr pat)
        ; err_var <- newSysLocalDs unitTy
-       ; binds <- mapM (mk_bind val_var err_var) binders
+       ; binds <- zipWithM (mk_bind val_var err_var) ticks' binders
        ; return ( (val_var, val_expr) : 
                   (err_var, err_expr) :
                   binds ) }
@@ -607,24 +621,28 @@ mkSelectorBinds pat val_expr
   = do { error_expr <- mkErrorAppDs iRREFUT_PAT_ERROR_ID   tuple_ty (ppr pat)
        ; tuple_expr <- matchSimply val_expr PatBindRhs pat local_tuple error_expr
        ; tuple_var <- newSysLocalDs tuple_ty
-       ; let mk_tup_bind binder
-              = (binder, mkTupleSelector local_binders binder tuple_var (Var tuple_var))
-       ; return ( (tuple_var, tuple_expr) : map mk_tup_bind binders ) }
+       ; let mk_tup_bind tick binder
+              = (binder, mkOptTickBox tick $
+                            mkTupleSelector local_binders binder
+                                            tuple_var (Var tuple_var))
+       ; return ( (tuple_var, tuple_expr) : zipWith mk_tup_bind ticks' binders ) }
   where
     binders       = collectPatBinders pat
-    local_binders = map localiseId binders	-- See Note [Localise pattern binders]
+    ticks'        = ticks ++ repeat Nothing
+
+    local_binders = map localiseId binders      -- See Note [Localise pattern binders]
     local_tuple   = mkBigCoreVarTup binders
     tuple_ty      = exprType local_tuple
 
-    mk_bind scrut_var err_var bndr_var = do
+    mk_bind scrut_var err_var tick bndr_var = do
     -- (mk_bind sv err_var) generates
     --          bv = case sv of { pat -> bv; other -> coerce (type-of-bv) err_var }
     -- Remember, pat binds bv
         rhs_expr <- matchSimply (Var scrut_var) PatBindRhs pat
                                 (Var bndr_var) error_expr
-        return (bndr_var, rhs_expr)
+        return (bndr_var, mkOptTickBox tick rhs_expr)
       where
-        error_expr = mkCoerce co (Var err_var)
+        error_expr = mkCast (Var err_var) co
         co         = mkUnsafeCo (exprType (Var err_var)) (idType bndr_var)
 
     is_simple_lpat p = is_simple_pat (unLoc p)
@@ -766,9 +784,9 @@ CPR-friendly.  This matters a lot: if you don't get it right, you lose
 the tail call property.  For example, see Trac #3403.
 
 \begin{code}
-mkOptTickBox :: Maybe (Tickish Id) -> CoreExpr -> DsM CoreExpr
-mkOptTickBox Nothing e        = return e
-mkOptTickBox (Just tickish) e = return (Tick tickish e)
+mkOptTickBox :: Maybe (Tickish Id) -> CoreExpr -> CoreExpr
+mkOptTickBox Nothing e        = e
+mkOptTickBox (Just tickish) e = Tick tickish e
 
 mkBinaryTickBox :: Int -> Int -> CoreExpr -> DsM CoreExpr
 mkBinaryTickBox ixT ixF e = do

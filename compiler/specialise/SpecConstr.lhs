@@ -9,10 +9,11 @@ ToDo [Nov 2010]
 \section[SpecConstr]{Specialise over constructors}
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
--- While working on this module you are encouraged to remove it and fix
--- any warnings in the module. See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#Warnings
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
 module SpecConstr(
@@ -30,6 +31,7 @@ import CoreUtils
 import CoreUnfold	( couldBeSmallEnoughToInline )
 import CoreFVs 		( exprsFreeVars )
 import CoreMonad
+import Literal		( litIsLifted )
 import HscTypes         ( ModGuts(..) )
 import WwLib		( mkWorkerArgs )
 import DataCon
@@ -1713,7 +1715,8 @@ argsToPats env in_scope val_env args occs
 \begin{code}
 isValue :: ValueEnv -> CoreExpr -> Maybe Value
 isValue _env (Lit lit)
-  = Just (ConVal (LitAlt lit) [])
+  | litIsLifted lit = Nothing
+  | otherwise       = Just (ConVal (LitAlt lit) [])
 
 isValue env (Var v)
   | Just stuff <- lookupVarEnv env v

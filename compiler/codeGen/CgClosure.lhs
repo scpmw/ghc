@@ -9,6 +9,13 @@ with {\em closures} on the RHSs of let(rec)s.  See also
 @CgCon@, which deals with constructors.
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module CgClosure ( cgTopRhsClosure, 
 		   cgStdRhsClosure, 
 		   cgRhsClosure,
@@ -45,7 +52,6 @@ import Util
 import BasicTypes
 import StaticFlags
 import DynFlags
-import Constants
 import Outputable
 import FastString
 
@@ -303,7 +309,7 @@ mkFunEntryCode :: ClosureInfo
 	       -> StgExpr
 	       -> Code
 -- The main entry code for the closure
-mkFunEntryCode cl_info _cc reg_args stk_args sp_top reg_save_code body = do
+mkFunEntryCode cl_info cc reg_args stk_args sp_top reg_save_code body = do
   { 	-- Bind args to regs/stack as appropriate,
 	-- and record expected position of sps
   ; bindArgsToRegs  reg_args
@@ -313,7 +319,11 @@ mkFunEntryCode cl_info _cc reg_args stk_args sp_top reg_save_code body = do
         -- Do the business
   ; funWrapper cl_info reg_args reg_save_code $ do
 	{ tickyEnterFun cl_info
-	; cgExpr body }
+        ; enterCostCentreFun cc $
+              CmmMachOp mo_wordSub [ CmmReg nodeReg
+                                   , CmmLit (mkIntCLit (funTag cl_info)) ]
+
+        ; cgExpr body }
   }
 \end{code}
 
@@ -568,27 +578,26 @@ link_caf cl_info _is_upd = do
 	-- so that the garbage collector can find them
 	-- This must be done *before* the info table pointer is overwritten, 
 	-- because the old info table ptr is needed for reversion
-  ; emitRtsCallWithVols rtsPackageId (fsLit "newCAF")
+  ; ret <- newTemp bWord
+  ; emitRtsCallGen [CmmHinted ret NoHint] rtsPackageId (fsLit "newCAF")
       [ CmmHinted (CmmReg (CmmGlobal BaseReg)) AddrHint,
-        CmmHinted (CmmReg nodeReg) AddrHint ]
-      [node] False
+        CmmHinted (CmmReg nodeReg) AddrHint,
+        CmmHinted hp_rel AddrHint ]
+      (Just [node]) False
 	-- node is live, so save it.
 
-	-- Overwrite the closure with a (static) indirection 
-	-- to the newly-allocated black hole
-  ; stmtsC [ CmmStore (cmmRegOffW nodeReg off_indirectee) hp_rel
-	   , CmmStore (CmmReg nodeReg) ind_static_info ]
+  -- see Note [atomic CAF entry] in rts/sm/Storage.c
+  ; emitIf (CmmMachOp mo_wordEq [ CmmReg (CmmLocal ret), CmmLit zeroCLit]) $
+        -- re-enter R1.  Doing this directly is slightly dodgy; we're
+        -- assuming lots of things, like the stack pointer hasn't
+        -- moved since we entered the CAF.
+        let target = entryCode (closureInfoPtr (CmmReg nodeReg)) in
+        stmtC (CmmJump target [])
 
   ; returnFC hp_rel }
   where
     bh_cl_info :: ClosureInfo
     bh_cl_info = cafBlackHoleClosureInfo cl_info
-
-    ind_static_info :: CmmExpr
-    ind_static_info = mkLblExpr mkIndStaticInfoLabel
-
-    off_indirectee :: WordOff
-    off_indirectee = fixedHdrSize + oFFSET_StgInd_indirectee*wORD_SIZE
 \end{code}
 
 

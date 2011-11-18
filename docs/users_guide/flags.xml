@@ -797,10 +797,10 @@
 	      <entry><option>-XNoTypeFamilies</option></entry>
 	    </row>
 	    <row>
-	      <entry><option>-XConstraintKind</option></entry>
+	      <entry><option>-XConstraintKinds</option></entry>
 	      <entry>Enable a <link linkend="constraint-kind">kind of constraints</link>.</entry>
 	      <entry>dynamic</entry>
-	      <entry><option>-XNoConstraintKind</option></entry>
+	      <entry><option>-XNoConstraintKinds</option></entry>
 	    </row>
 	    <row>
 	      <entry><option>-XScopedTypeVariables</option></entry>
@@ -1538,6 +1538,15 @@
 	    </row>
 
 	    <row>
+	      <entry><option>-fpedantic-bottoms</option></entry>
+	      <entry>Make GHC be more precise about its treatment of bottom (but see also
+                     <option>-fno-state-hack</option>). In particular, GHC will not
+                     eta-expand through a case expression.</entry>
+	      <entry>dynamic</entry>
+	      <entry><option>-fno-pedantic-bottoms</option></entry>
+	    </row>
+
+	    <row>
 	      <entry><option>-fomit-interface-pragmas</option></entry>
 	      <entry>Don't generate interface pragmas</entry>
 	      <entry>dynamic</entry>
@@ -1668,32 +1677,45 @@ phase <replaceable>n</replaceable></entry>
 	  </thead>
 	  <tbody>
 	    <row>
-	      <entry><option>-auto</option></entry>
-	      <entry>Auto-add <literal>_scc_</literal>s to all
-	      exported functions not marked INLINE</entry>
-	      <entry>dynamic</entry>
-	      <entry><option>-no-auto</option></entry>
-	    </row>
-	    <row>
-	      <entry><option>-auto-all</option></entry>
-	      <entry>Auto-add <literal>_scc_</literal>s to all
-	      top-level functions not marked INLINE</entry>
-	      <entry>dynamic</entry>
-	      <entry><option>-no-auto-all</option></entry>
-	    </row>
-	    <row>
-	      <entry><option>-caf-all</option></entry>
-	      <entry>Auto-add <literal>_scc_</literal>s to all CAFs</entry>
-	      <entry>dynamic</entry>
-	      <entry><option>-no-caf-all</option></entry>
-	    </row>
-	    <row>
 	      <entry><option>-prof</option></entry>
 	      <entry>Turn on profiling</entry>
 	      <entry>static</entry>
 	      <entry>-</entry>
 	    </row>
 	    <row>
+              <entry><option>-fprof-auto</option></entry>
+              <entry>Auto-add <literal>SCC</literal>s to all bindings
+              not marked INLINE</entry>
+	      <entry>dynamic</entry>
+              <entry><option>-fno-prof-auto</option></entry>
+	    </row>
+	    <row>
+              <entry><option>-fprof-auto-top</option></entry>
+              <entry>Auto-add <literal>SCC</literal>s to all top-level
+              bindings not marked INLINE</entry>
+              <entry>dynamic</entry>
+              <entry><option>-fno-prof-auto</option></entry>
+	    </row>
+	    <row>
+              <entry><option>-fprof-auto-exported</option></entry>
+              <entry>Auto-add <literal>SCC</literal>s to all exported
+              bindings not marked INLINE</entry>
+              <entry>dynamic</entry>
+              <entry><option>-fno-prof-auto</option></entry>
+	    </row>
+	    <row>
+              <entry><option>-fprof-cafs</option></entry>
+              <entry>Auto-add <literal>SCC</literal>s to all CAFs</entry>
+	      <entry>dynamic</entry>
+              <entry><option>-fno-prof-cafs</option></entry>
+	    </row>
+	    <row>
+              <entry><option>-fno-prof-count-entries</option></entry>
+              <entry>Do not collect entry counts</entry>
+	      <entry>dynamic</entry>
+              <entry><option>-fprof-count-entries</option></entry>
+	    </row>
+            <row>
 	      <entry><option>-ticky</option></entry>
 	      <entry><link linkend="ticky-ticky">Turn on ticky-ticky profiling</link></entry>
 	      <entry>static</entry>

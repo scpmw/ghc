@@ -6,6 +6,13 @@
 --
 -----------------------------------------------------------------------------
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module SPARC.Ppr (
 	pprNatCmmDecl,
 	pprBasicBlock,
@@ -64,28 +71,28 @@ pprNatCmmDecl platform (CmmProc Nothing lbl (ListGraph blocks)) =
 pprNatCmmDecl platform (CmmProc (Just (Statics info_lbl info)) _entry_lbl (ListGraph blocks)) =
   pprSectionHeader Text $$
   (
-#if HAVE_SUBSECTIONS_VIA_SYMBOLS
-       pprCLabel_asm platform (mkDeadStripPreventer info_lbl)
-           <> char ':' $$
-#endif
+       (if platformHasSubsectionsViaSymbols platform
+        then pprCLabel_asm platform (mkDeadStripPreventer info_lbl) <> char ':'
+        else empty) $$
        vcat (map (pprData platform) info) $$
        pprLabel platform info_lbl
   ) $$
-  vcat (map (pprBasicBlock platform) blocks)
+  vcat (map (pprBasicBlock platform) blocks) $$
      -- above: Even the first block gets a label, because with branch-chain
      -- elimination, it might be the target of a goto.
-#if HAVE_SUBSECTIONS_VIA_SYMBOLS
-        -- If we are using the .subsections_via_symbols directive
-        -- (available on recent versions of Darwin),
-        -- we have to make sure that there is some kind of reference
-        -- from the entry code to a label on the _top_ of of the info table,
-        -- so that the linker will not think it is unreferenced and dead-strip
-        -- it. That's why the label is called a DeadStripPreventer (_dsp).
-  $$ text "\t.long "
-	<+> pprCLabel_asm platform info_lbl
-	<+> char '-'
-	<+> pprCLabel_asm platform (mkDeadStripPreventer info_lbl)
-#endif
+        (if platformHasSubsectionsViaSymbols platform
+         then
+         -- If we are using the .subsections_via_symbols directive
+         -- (available on recent versions of Darwin),
+         -- we have to make sure that there is some kind of reference
+         -- from the entry code to a label on the _top_ of of the info table,
+         -- so that the linker will not think it is unreferenced and dead-strip
+         -- it. That's why the label is called a DeadStripPreventer (_dsp).
+                  text "\t.long "
+              <+> pprCLabel_asm platform info_lbl
+              <+> char '-'
+              <+> pprCLabel_asm platform (mkDeadStripPreventer info_lbl)
+         else empty)
 
 
 pprBasicBlock :: Platform -> NatBasicBlock Instr -> Doc
@@ -108,15 +115,11 @@ pprGloblDecl platform lbl
   | otherwise = ptext (sLit ".global ") <> pprCLabel_asm platform lbl
 
 pprTypeAndSizeDecl :: Platform -> CLabel -> Doc
-#if linux_TARGET_OS
 pprTypeAndSizeDecl platform lbl
-  | not (externallyVisibleCLabel lbl) = empty
-  | otherwise = ptext (sLit ".type ") <>
-                pprCLabel_asm platform lbl <> ptext (sLit ", @object")
-#else
-pprTypeAndSizeDecl _ _
-  = empty
-#endif
+ | platformOS platform == OSLinux && externallyVisibleCLabel lbl
+    = ptext (sLit ".type ") <>
+      pprCLabel_asm platform lbl <> ptext (sLit ", @object")
+ | otherwise = empty
 
 pprLabel :: Platform -> CLabel -> Doc
 pprLabel platform lbl = pprGloblDecl platform lbl

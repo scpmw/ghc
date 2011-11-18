@@ -254,8 +254,6 @@ structures or passed to polymorphic functions.
 <para>
 No variable can have an unboxed tuple type, nor may a constructor or function
 argument have an unboxed tuple type.  The following are all illegal:
-
-
 <programlisting>
   data Foo = Foo (# Int, Int #)
 
@@ -266,6 +264,14 @@ argument have an unboxed tuple type.  The following are all illegal:
   g (# a,b #) = a
 
   h x = let y = (# x,x #) in ...
+</programlisting>
+</para>
+</listitem>
+<listitem>
+<para>
+Unboxed tuples may not be nested. So this is illegal:
+<programlisting>
+f :: (# Int, (# Int, Int #), Bool #)
 </programlisting>
 </para>
 </listitem>
@@ -1081,7 +1087,7 @@ employees = [ ("Simon", "MS", 80)
 
 output = [ (the dept, sum salary)
 | (name, dept, salary) &lt;- employees
-, then group by dept
+, then group by dept using groupWith
 , then sortWith by (sum salary)
 , then take 5 ]
 </programlisting>
@@ -1093,8 +1099,8 @@ In this example, the list <literal>output</literal> would take on
 </programlisting>
 </para>
 <para>There are three new keywords: <literal>group</literal>, <literal>by</literal>, and <literal>using</literal>.
-(The function <literal>sortWith</literal> is not a keyword; it is an ordinary
-function that is exported by <literal>GHC.Exts</literal>.)</para>
+(The functions <literal>sortWith</literal> and <literal>groupWith</literal> are not keywords; they are ordinary
+functions that are exported by <literal>GHC.Exts</literal>.)</para>
 
 <para>There are five new forms of comprehension qualifier,
 all introduced by the (existing) keyword <literal>then</literal>:
@@ -1169,21 +1175,6 @@ output = [ (the x, y)
     unchanged from the list form introduced by the grouping.</para>
 
     </listitem>
-
-    <listitem>
-
-<programlisting>
-then group by e
-</programlisting>
-
-    <para>This form of grouping is essentially the same as the one described above. However,
-    since no function to use for the grouping has been supplied it will fall back on the
-    <literal>groupWith</literal> function defined in
-    <ulink url="&libraryBaseLocation;/GHC-Exts.html"><literal>GHC.Exts</literal></ulink>. This
-    is the form of the group statement that we made use of in the opening example.</para>
-
-    </listitem>
-
 
     <listitem>
 
@@ -1299,33 +1290,9 @@ do (x,y) &lt;- take 2 (do x &lt;- [1..10]
             </para>
 
 <programlisting>
-[ x | x &lt;- [1,1,2,2,3], then group by x ]
 [ x | x &lt;- [1,1,2,2,3], then group by x using GHC.Exts.groupWith ]
 [ x | x &lt;- [1,1,2,2,3], then group using myGroup ]
 </programlisting>
-
-            <para>
-                The basic <literal>then group by e</literal> statement is
-                translated using the <literal>mgroupWith</literal> function, which
-                requires a <literal>MonadGroup</literal> instance, defined in
-                <ulink url="&libraryBaseLocation;/Control-Monad-Group.html"><literal>Control.Monad.Group</literal></ulink>:
-            </para>
-
-<programlisting>
-do x &lt;- mgroupWith (do x &lt;- [1,1,2,2,3]
-                       return x)
-   return x
-</programlisting>
-
-            <para>
-                Note that the type of <literal>x</literal> is changed by the
-                grouping statement.
-            </para>
-
-            <para>
-                The grouping function can also be defined with the
-                <literal>using</literal> keyword.
-            </para>
 
         </listitem>
         <listitem>
@@ -1384,7 +1351,7 @@ Lists of qualifiers: Q,R,S
 
 -- Basic forms
 D[ e | ]               = return e
-D[ e | p &lt;- e, Q ]     = e &gt;&gt;= \p -&gt; D[ e | Q ]
+D[ e | p &lt;- e, Q ]  = e &gt;&gt;= \p -&gt; D[ e | Q ]
 D[ e | e, Q ]          = guard e &gt;&gt; \p -&gt; D[ e | Q ]
 D[ e | let d, Q ]      = let d in D[ e | Q ]
 
@@ -1400,8 +1367,6 @@ D[ e | Q then group using f, R ]      = f D[ Qv | Q ] &gt;&gt;= \ys -&gt;
                                         case (fmap selQv1 ys, ..., fmap selQvn ys) of
                                  	     Qv -&gt; D[ e | R ]
 
-D[ e | Q then group by b, R ]         = D[ e | Q then group by b using mgroupWith, R ]
-
 D[ e | Q then group by b using f, R ] = f (\Qv -&gt; b) D[ Qv | Q ] &gt;&gt;= \ys -&gt;
                                         case (fmap selQv1 ys, ..., fmap selQvn ys) of
                                            Qv -&gt; D[ e | R ]
@@ -1416,7 +1381,6 @@ return       GHC.Base               t1 -&gt; m t2
 (&gt;&gt;)         GHC.Base               m1 t1 -&gt; m2 t2         -&gt; m3 t3
 guard        Control.Monad          t1 -&gt; m t2
 fmap         GHC.Base               forall a b. (a-&gt;b) -&gt; n a -&gt; n b
-mgroupWith   Control.Monad.Group    forall a. (a -&gt; t) -&gt; m1 a -&gt; m2 (n a)
 mzip         Control.Monad.Zip      forall a b. m a -&gt; m b -&gt; m (a,b)
 </programlisting>
 The comprehension should typecheck when its desugaring would typecheck.
@@ -3562,6 +3526,22 @@ Here, <literal>C</literal> is a superclass of <literal>D</literal>, but it's OK 
 class operation <literal>op</literal> of <literal>C</literal> to mention <literal>D</literal>.  (It
 would not be OK for <literal>D</literal> to be a superclass of <literal>C</literal>.)
 </para>
+<para>
+With the extension that adds a <link linkend="constraint-kind">kind of constraints</link>,
+you can write more exotic superclass definitions. The superclass cycle check is even more
+liberal in these case. For example, this is OK:
+
+<programlisting>
+  class A cls c where
+    meth :: cls c => c -> c
+  
+  class A B c => B c where
+</programlisting>
+
+A superclass context for a class <literal>C</literal> is allowed if, after expanding
+type synonyms to their right-hand-sides, and uses of classes (other than <literal>C</literal>)
+to their superclasses, <literal>C</literal> does not occur syntactically in the context.
+</para>
 </sect3>
 
 
@@ -4810,7 +4790,7 @@ type instance F t1 .. tn = t
 
 
 <sect2 id="assoc-decl">
-<title>Associated type families</title>
+<title>Associated data and type families</title>
 <para>
 A data or type synonym family can be declared as part of a type class, thus:
 <programlisting>
@@ -4887,9 +4867,13 @@ instance GMapKey Flob where
         the free indexed parameter is of a kind with a finite number of alternatives
         (unlike <literal>*</literal>).
       </para>
+    </sect3>
+
+    <sect3 id="assoc-decl-defs">
+    <title>Associated type synonym defaults</title>
       <para>
-      	It is possible for the class defining the associated type to specify a default for
-      	associated type instances. So for example, this is OK:
+        It is possible for the class defining the associated type to specify a 
+        default for associated type instances. So for example, this is OK:
 <programlisting>
 class IsBoolMap v where
   type Key v
@@ -4900,8 +4884,20 @@ class IsBoolMap v where
 instance IsBoolMap [(Int, Bool)] where
   lookupKey = lookup
 </programlisting>
+
+There can also be multiple defaults for a single type, as long as they do not
+overlap:
+<programlisting>
+class C a where
+  type F a b
+  type F a Int  = Bool
+  type F a Bool = Int
+</programlisting>
+
+A default declaration is not permitted for an associated
+<emphasis>data</emphasis> type.
       </para>
-	</sect3>
+    </sect3>
 
     <sect3 id="scoping-class-params">
       <title>Scoping of class parameters</title>
@@ -5183,7 +5179,7 @@ class (F a ~ b) => C a b where
 </para>
 
 <para>
-	With the <option>-XConstraintKind</option> flag, GHC becomes more liberal in
+	With the <option>-XConstraintKinds</option> flag, GHC becomes more liberal in
 	what it accepts as constraints in your program. To be precise, with this flag any
 	<emphasis>type</emphasis> of the new kind <literal>Constraint</literal> can be used as a constraint.
 	The following things have kind <literal>Constraint</literal>:
@@ -7309,9 +7305,9 @@ The basic idea is that a command defines an arrow from environments to values.
 These environments assign values to the free local variables of the command.
 Thus combinators that produce arrows from arrows
 may also be used to build commands from commands.
-For example, the <literal>ArrowChoice</literal> class includes a combinator
+For example, the <literal>ArrowPlus</literal> class includes a combinator
 <programlisting>
-ArrowChoice a => (&lt;+>) :: a e c -> a e c -> a e c
+ArrowPlus a => (&lt;+>) :: a e c -> a e c -> a e c
 </programlisting>
 so we can use it to build commands:
 <programlisting>
@@ -8306,12 +8302,21 @@ happen.
 </programlisting>
 
       <para>A <literal>SPECIALIZE</literal> pragma for a function can
-      be put anywhere its type signature could be put.</para>
+      be put anywhere its type signature could be put.  Moreover, you 
+      can also <literal>SPECIALIZE</literal> an <emphasis>imported</emphasis>
+		function provided it was given an <literal>INLINABLE</literal> pragma at
+		its definition site (<xref linkend="inlinable-pragma"/>).</para>
 
       <para>A <literal>SPECIALIZE</literal> has the effect of generating
       (a) a specialised version of the function and (b) a rewrite rule
-      (see <xref linkend="rewrite-rules"/>) that rewrites a call to the
-      un-specialised function into a call to the specialised one.</para>
+      (see <xref linkend="rewrite-rules"/>) that rewrites a call to
+      the un-specialised function into a call to the specialised one.
+      Moreover, given a <literal>SPECIALIZE</literal> pragma for a
+      function <literal>f</literal>, GHC will automatically create
+      specialisations for any type-class-overloaded functions called
+      by <literal>f</literal>, if they are in the same module as
+      the <literal>SPECIALIZE</literal> pragma, or if they are
+      <literal>INLINABLE</literal>; and so on, transitively.</para>
 
       <para>The type in a SPECIALIZE pragma can be any type that is less
 	polymorphic than the type of the original function.  In concrete terms,
@@ -8535,6 +8540,26 @@ data S = S {-# UNPACK #-} !Int {-# UNPACK #-} !Int
       which essentially has the effect of adding
       <literal>{-#&nbsp;UNPACK&nbsp;#-}</literal> to every strict
       constructor field.</para>
+    </sect2>
+
+    <sect2 id="nounpack-pragma">
+      <title>NOUNPACK pragma</title>
+
+      <indexterm><primary>NOUNPACK</primary></indexterm>
+
+      <para>The <literal>NOUNPACK</literal> pragma indicates to the compiler
+      that it should not unpack the contents of a constructor field.
+      Example:
+      </para>
+<programlisting>
+data T = T {-# NOUNPACK #-} !(Int,Int)
+</programlisting>
+      <para>
+        Even with the flags
+        <option>-funbox-strict-fields</option> and <option>-O</option>,
+        the field of the constructor <function>T</function> is not
+        unpacked.
+      </para>
     </sect2>
 
     <sect2 id="source-pragma">

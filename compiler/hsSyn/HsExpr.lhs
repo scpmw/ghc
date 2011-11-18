@@ -3,6 +3,13 @@
 % (c) The GRASP/AQUA Project, Glasgow University, 1992-1998
 %
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 {-# LANGUAGE DeriveDataTypeable, ScopedTypeVariables #-}
 
 -- | Abstract Haskell syntax for expressions.
@@ -936,12 +943,8 @@ data StmtLR idL idR
   deriving (Data, Typeable)
 
 data TransForm	 -- The 'f' below is the 'using' function, 'e' is the by function
-  = ThenForm	 -- then f          or    then f by e        (depending on trS_by)
-  | GroupFormU	 -- group using f   or    group using f by e (depending on trS_by)
-  | GroupFormB   -- group by e  
-      -- In the GroupByFormB, trS_using is filled in with
-      --    'groupWith' (list comprehensions) or 
-      --    'groupM' (monad comprehensions)
+  = ThenForm     -- then f               or    then f by e             (depending on trS_by)
+  | GroupForm	   -- then group using f   or    then group by e using f (depending on trS_by)
   deriving (Data, Typeable)
 \end{code}
 
@@ -1071,12 +1074,7 @@ expressions:
    =>
   guard exp >> [ body | stmts ]
 
-Grouping/parallel statements require the 'Control.Monad.Group.groupM' and
-'Control.Monad.Zip.mzip' functions:
-
-  [ body | stmts, then group by e, rest]
-   =>
-  groupM [ body | stmts ] >>= \bndrs -> [ body | rest ]
+Parallel statements require the 'Control.Monad.Zip.mzip' function:
 
   [ body | stmts1 | stmts2 | .. ]
    =>
@@ -1119,9 +1117,7 @@ pprTransStmt :: OutputableBndr id => Maybe (LHsExpr id)
 				  -> SDoc
 pprTransStmt by using ThenForm
   = sep [ ptext (sLit "then"), nest 2 (ppr using), nest 2 (pprBy by)]
-pprTransStmt by _ GroupFormB
-  = sep [ ptext (sLit "then group"), nest 2 (pprBy by) ]
-pprTransStmt by using GroupFormU
+pprTransStmt by using GroupForm
   = sep [ ptext (sLit "then group"), nest 2 (pprBy by), nest 2 (ptext (sLit "using") <+> ppr using)]
 
 pprBy :: OutputableBndr id => Maybe (LHsExpr id) -> SDoc
@@ -1190,7 +1186,8 @@ data HsBracket id = ExpBr (LHsExpr id)   -- [|  expr  |]
                   | DecBrL [LHsDecl id]	 -- [d| decls |]; result of parser
                   | DecBrG (HsGroup id)  -- [d| decls |]; result of renamer
                   | TypBr (LHsType id)   -- [t| type  |]
-                  | VarBr id             -- 'x, ''T
+                  | VarBr Bool id        -- True: 'x, False: ''T
+                                         -- (The Bool flag is used only in pprHsBracket)
   deriving (Data, Typeable)
 
 instance OutputableBndr id => Outputable (HsBracket id) where
@@ -1203,11 +1200,8 @@ pprHsBracket (PatBr p) 	 = thBrackets (char 'p') (ppr p)
 pprHsBracket (DecBrG gp) = thBrackets (char 'd') (ppr gp)
 pprHsBracket (DecBrL ds) = thBrackets (char 'd') (vcat (map ppr ds))
 pprHsBracket (TypBr t) 	 = thBrackets (char 't') (ppr t)
-pprHsBracket (VarBr n) 	 = char '\'' <> ppr n
--- Infelicity: can't show ' vs '', because
--- we can't ask n what its OccName is, because the
--- pretty-printer for HsExpr doesn't ask for NamedThings
--- But the pretty-printer for names will show the OccName class
+pprHsBracket (VarBr True n)  = char '\''         <> ppr n
+pprHsBracket (VarBr False n) = ptext (sLit "''") <> ppr n
 
 thBrackets :: SDoc -> SDoc -> SDoc
 thBrackets pp_kind pp_body = char '[' <> pp_kind <> char '|' <+>

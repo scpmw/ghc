@@ -135,8 +135,10 @@ $ ./prog -f +RTS -H32m -S -RTS -h foo bar
         <para>
           GHC lets you change the default RTS options for a program at
           compile time, using the <literal>-with-rtsopts</literal>
-          flag (<xref linkend="options-linker" />). For example, to
-          set <literal>-H128m -K64m</literal>, link
+          flag (<xref linkend="options-linker" />).  A common use for this is
+          to give your program a default heap and/or stack size that is
+          greater than the default.  For example, to set <literal>-H128m
+            -K64m</literal>, link
           with <literal>-with-rtsopts="-H128m -K64m"</literal>.
         </para>
       </sect3>
@@ -187,37 +189,17 @@ $ ./prog -f +RTS -H32m -S -RTS -h foo bar
     <indexterm><primary>RTS hooks</primary></indexterm>
     <indexterm><primary>RTS behaviour, changing</primary></indexterm>
 
-    <para>GHC lets you exercise rudimentary control over the RTS
+    <para>GHC lets you exercise rudimentary control over certain RTS
     settings for any given program, by compiling in a
     &ldquo;hook&rdquo; that is called by the run-time system.  The RTS
-    contains stub definitions for all these hooks, but by writing your
+    contains stub definitions for these hooks, but by writing your
     own version and linking it on the GHC command line, you can
     override the defaults.</para>
 
     <para>Owing to the vagaries of DLL linking, these hooks don't work
     under Windows when the program is built dynamically.</para>
 
-    <para>The hook <literal>ghc_rts_opts</literal><indexterm><primary><literal>ghc_rts_opts</literal></primary>
-      </indexterm>lets you set RTS
-    options permanently for a given program, in the same way as the
-    newer <option>-with-rtsopts</option> linker option does.  A common use for this is
-    to give your program a default heap and/or stack size that is
-    greater than the default.  For example, to set <literal>-H128m
-    -K1m</literal>, place the following definition in a C source
-    file:</para>
-
-<programlisting>
-char *ghc_rts_opts = "-H128m -K1m";
-</programlisting>
-
-    <para>Compile the C file, and include the object file on the
-    command line when you link your Haskell program.</para>
-
-    <para>These flags are interpreted first, before any RTS flags from
-    the <literal>GHCRTS</literal> environment variable and any flags
-    on the command line.</para>
-
-    <para>You can also change the messages printed when the runtime
+    <para>You can change the messages printed when the runtime
     system &ldquo;blows up,&rdquo; e.g., on stack overflow.  The hooks
     for these are as follows:</para>
 
@@ -254,11 +236,6 @@ char *ghc_rts_opts = "-H128m -K1m";
 	</listitem>
       </varlistentry>
     </variablelist>
-
-    <para>For examples of the use of these hooks, see GHC's own
-    versions in the file
-    <filename>ghc/compiler/parser/hschooks.c</filename> in a GHC
-    source tree.</para>
   </sect3>
 
     </sect2>
@@ -1068,7 +1045,7 @@ char *ghc_rts_opts = "-H128m -K1m";
               option</secondary></indexterm>
         </term>
         <listitem>
-          <para>Generates a basic heap profile, in the
+          <para>(can be shortened to <option>-h</option>.) Generates a basic heap profile, in the
             file <literal><replaceable>prog</replaceable>.hp</literal>.
             To produce the heap profile graph,
             use <command>hp2ps</command> (see <xref linkend="hp2ps"
@@ -1101,7 +1078,7 @@ char *ghc_rts_opts = "-H128m -K1m";
         <para>
           In binary format to a file for later analysis by a
           variety of tools.  One such tool
-          is <ulink url="http://hackage.haskell.org/package/ThreadScope">ThreadScope</ulink><indexterm><primary>ThreadScope</primary></indexterm>,
+          is <ulink url="http://www.haskell.org/haskellwiki/ThreadScope">ThreadScope</ulink><indexterm><primary>ThreadScope</primary></indexterm>,
           which interprets the event log to produce a visual parallel
           execution profile of the program.
         </para>
@@ -1314,33 +1291,53 @@ char *ghc_rts_opts = "-H128m -K1m";
 	  <para>(Only available when the program is compiled for
 	  profiling.)  When an exception is raised in the program,
 	  this option causes the current cost-centre-stack to be
-	  dumped to <literal>stderr</literal>.</para>
+          dumped to <literal>stderr</literal>.</para>
 
 	  <para>This can be particularly useful for debugging: if your
 	  program is complaining about a <literal>head []</literal>
 	  error and you haven't got a clue which bit of code is
 	  causing it, compiling with <literal>-prof
-	  -auto-all</literal> and running with <literal>+RTS -xc
+          -fprof-auto</literal> and running with <literal>+RTS -xc
 	  -RTS</literal> will tell you exactly the call stack at the
 	  point the error was raised.</para>
 
-	  <para>The output contains one line for each exception raised
-	  in the program (the program might raise and catch several
-	  exceptions during its execution), where each line is of the
-	  form:</para>
+          <para>The output contains one report for each exception
+          raised in the program (the program might raise and catch
+          several exceptions during its execution), where each report
+          looks something like this:
+          </para>
 
 <screen>
-&lt; cc<subscript>1</subscript>, ..., cc<subscript>n</subscript> &gt;
+*** Exception raised (reporting due to +RTS -xc), stack trace:
+  GHC.List.CAF
+  --> evaluated by: Main.polynomial.table_search,
+  called from Main.polynomial.theta_index,
+  called from Main.polynomial,
+  called from Main.zonal_pressure,
+  called from Main.make_pressure.p,
+  called from Main.make_pressure,
+  called from Main.compute_initial_state.p,
+  called from Main.compute_initial_state,
+  called from Main.CAF
+  ...
 </screen>
-	  <para>each <literal>cc</literal><subscript>i</subscript> is
-	  a cost centre in the program (see <xref
-	  linkend="cost-centres"/>), and the sequence represents the
-	  &ldquo;call stack&rdquo; at the point the exception was
-	  raised.  The leftmost item is the innermost function in the
-	  call stack, and the rightmost item is the outermost
-	  function.</para>
+          <para>The stack trace may often begin with something
+          uninformative like <literal>GHC.List.CAF</literal>; this is
+          an artifact of GHC's optimiser, which lifts out exceptions
+          to the top-level where the profiling system assigns them to
+          the cost centre "CAF".  However, <literal>+RTS -xc</literal>
+          doesn't just print the current stack, it looks deeper and
+          reports the stack at the time the CAF was evaluated, and it
+          may report further stacks until a non-CAF stack is found.  In
+          the example above, the next stack (after <literal>-->
+          evaluated by</literal>) contains plenty of information about
+          what the program was doing when it evaluated <literal>head
+          []</literal>.</para>
 
-	</listitem>
+          <para>Implementation details aside, the function names in
+          the stack should hopefully give you enough clues to track
+          down the bug.</para>
+        </listitem>
       </varlistentry>
 
       <varlistentry>

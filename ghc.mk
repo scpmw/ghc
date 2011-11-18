@@ -257,7 +257,7 @@ include rules/tags-package.mk
 include rules/extra-packages.mk
 
 # -----------------------------------------------------------------------------
-# Registering hand-written package descriptions (used in libffi and rts)
+# Registering hand-written package descriptions (used in rts)
 
 include rules/manual-package-config.mk
 
@@ -313,9 +313,12 @@ endif
 # Packages that are built but not installed
 PKGS_THAT_ARE_INTREE_ONLY := haskeline mtl terminfo utf8-string xhtml
 
-PKGS_THAT_ARE_DPH := dph/dph-base dph/dph-prim-interface dph/dph-prim-seq \
-                dph/dph-common dph/dph-prim-par dph/dph-par dph/dph-seq \
-                vector primitive random
+PKGS_THAT_ARE_DPH := \
+    dph/dph-base \
+    dph/dph-prim-interface dph/dph-prim-seq dph/dph-prim-par \
+    dph/dph-lifted-base \
+    dph/dph-lifted-boxed dph/dph-lifted-copy dph/dph-lifted-vseg \
+    vector primitive random
 
 # Packages that, if present, must be built by the stage2 compiler,
 # because they use TH and/or annotations, or depend on other stage2
@@ -332,11 +335,7 @@ PKGS_THAT_USE_TH := $(PKGS_THAT_ARE_DPH)
 #
 # We assume that the stage0 compiler has a suitable bytestring package,
 # so we don't have to include it below.
-PKGS_THAT_BUILD_WITH_STAGE0 = Cabal/cabal hpc extensible-exceptions binary bin-package-db hoopl
-
-# These packages are installed, but are installed hidden
-# Why install them at all?  Because the 'ghc' package depends on them
-PKGS_THAT_ARE_HIDDEN = binary
+PKGS_THAT_BUILD_WITH_STAGE0 = Cabal/Cabal hpc extensible-exceptions binary bin-package-db hoopl
 
 # $(EXTRA_PACKAGES)  is another classification, of packages built but
 #                    not installed
@@ -417,7 +416,7 @@ $(eval $(call addPackage,haskell2010))
 $(eval $(call addPackage,hpc))
 $(eval $(call addPackage,pretty))
 $(eval $(call addPackage,template-haskell))
-$(eval $(call addPackage,Cabal/cabal))
+$(eval $(call addPackage,Cabal/Cabal))
 $(eval $(call addPackage,binary))
 $(eval $(call addPackage,bin-package-db))
 $(eval $(call addPackage,hoopl))
@@ -471,10 +470,8 @@ utils/hsc2hs/dist-install/package-data.mk: compiler/stage2/package-data.mk
 utils/compare_sizes/dist-install/package-data.mk: compiler/stage2/package-data.mk
 utils/runghc/dist-install/package-data.mk: compiler/stage2/package-data.mk
 
-# add the final two package.conf dependencies: ghc-prim depends on RTS,
-# and RTS depends on libffi.
+# add the final package.conf dependency: ghc-prim depends on RTS
 libraries/ghc-prim/dist-install/package-data.mk : rts/package.conf.inplace
-rts/package.conf.inplace : libffi/package.conf.inplace
 endif
 
 # --------------------------------
@@ -491,11 +488,6 @@ ifeq "$(BuildSharedLibs)" "YES"
 ALL_STAGE1_LIBS += $(foreach lib,$(PACKAGES_STAGE1),$(libraries/$(lib)_dist-install_dyn_LIB))
 endif
 BOOT_LIBS = $(foreach lib,$(PACKAGES_STAGE0),$(libraries/$(lib)_dist-boot_v_LIB))
-
-OTHER_LIBS = libffi/dist-install/build/libHSffi$(v_libsuf) libffi/dist-install/build/HSffi.o
-ifeq "$(BuildSharedLibs)" "YES"
-OTHER_LIBS  += libffi/dist-install/build/libHSffi$(dyn_libsuf)
-endif
 
 # ----------------------------------------
 # Special magic for the ghc-prim package
@@ -550,8 +542,6 @@ endif
 # these cases, so we just skip checking them.
 # NB. these must come before we include the ghc.mk files below, because
 # they disable the relevant rules.
-CHECKED_libraries/dph/dph-seq = YES
-CHECKED_libraries/dph/dph-par = YES
 # In compiler's case, include-dirs points outside of the source tree
 CHECKED_compiler = YES
 
@@ -890,11 +880,10 @@ INSTALL_DISTDIR_compiler = stage2
 
 # Now we can do the installation
 install_packages: install_libexecs
-install_packages: libffi/package.conf.install rts/package.conf.install
+install_packages: rts/package.conf.install
 	$(call INSTALL_DIR,"$(DESTDIR)$(topdir)")
 	"$(RM)" $(RM_OPTS_REC) "$(INSTALLED_PACKAGE_CONF)"
 	$(call INSTALL_DIR,"$(INSTALLED_PACKAGE_CONF)")
-	"$(INSTALLED_GHC_PKG_REAL)" --force --global-conf "$(INSTALLED_PACKAGE_CONF)" update libffi/package.conf.install
 	"$(INSTALLED_GHC_PKG_REAL)" --force --global-conf "$(INSTALLED_PACKAGE_CONF)" update rts/package.conf.install
 	$(foreach p, $(INSTALLED_PKG_DIRS),                           \
 	    $(call make-command,                                      \
@@ -909,10 +898,6 @@ install_packages: libffi/package.conf.install rts/package.conf.install
 	                                  '$(ghclibdir)'              \
 	                                  '$(docdir)/html/libraries'  \
 	                                  $(RelocatableBuild)))
-	$(foreach p, $(PKGS_THAT_ARE_HIDDEN),                              \
-	    $(call make-command,                                           \
-	           "$(INSTALLED_GHC_PKG_REAL)"                             \
-	               --global-conf "$(INSTALLED_PACKAGE_CONF)" hide $p))
 # when we install the packages above, ghc-pkg obeys umask when creating
 # the package.conf files, but for everything else we specify the
 # permissions. We therefore now fix the permissions of package.cache.
@@ -1219,7 +1204,6 @@ maintainer-clean : distclean
 .PHONY: all_libraries
 
 .PHONY: bootstrapping-files
-bootstrapping-files: $(OTHER_LIBS)
 bootstrapping-files: includes/ghcautoconf.h
 bootstrapping-files: includes/DerivedConstants.h
 bootstrapping-files: includes/GHCConstants.h

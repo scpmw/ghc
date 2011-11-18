@@ -6,6 +6,13 @@
 --
 -- -----------------------------------------------------------------------------
 
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module InteractiveEval (
 #ifdef GHCI
         RunResult(..), Status(..), Resume(..), History(..),
@@ -51,7 +58,6 @@ import Name             hiding ( varName )
 import NameSet
 import Avail
 import RdrName
-import PrelNames (pRELUDE)
 import VarSet
 import VarEnv
 import ByteCodeInstr
@@ -804,17 +810,17 @@ fromListBL bound l = BL (length l) bound l []
 setContext :: GhcMonad m => [InteractiveImport] -> m ()
 setContext imports
   = do { hsc_env <- getSession
-       ; let old_ic = hsc_IC hsc_env
        ; all_env <- liftIO $ findGlobalRdrEnv hsc_env imports
-       ; let final_rdr_env = ic_tythings old_ic `icPlusGblRdrEnv` all_env
+       ; let old_ic        = hsc_IC hsc_env
+             final_rdr_env = ic_tythings old_ic `icPlusGblRdrEnv` all_env
        ; modifySession $ \_ ->
-         hsc_env{ hsc_IC = old_ic { ic_imports      = imports
-                                  , ic_rn_gbl_env   = final_rdr_env }}}
+         hsc_env{ hsc_IC = old_ic { ic_imports    = imports
+                                  , ic_rn_gbl_env = final_rdr_env }}}
 
 findGlobalRdrEnv :: HscEnv -> [InteractiveImport] -> IO GlobalRdrEnv
 -- Compute the GlobalRdrEnv for the interactive context
 findGlobalRdrEnv hsc_env imports
-  = do { idecls_env <- hscRnImportDecls hsc_env this_mod idecls
+  = do { idecls_env <- hscRnImportDecls hsc_env idecls
        	 	    -- This call also loads any orphan modules
        ; imods_env  <- mapM (mkTopLevEnv (hsc_HPT hsc_env)) imods
        ; return (foldr plusGlobalRdrEnv idecls_env imods_env) }
@@ -824,10 +830,6 @@ findGlobalRdrEnv hsc_env imports
 
     imods :: [Module]
     imods = [m | IIModule m <- imports]
-
-    this_mod = case imods of 
-                 []    -> pRELUDE
-                 (m:_) -> m
 
 availsToGlobalRdrEnv :: ModuleName -> [AvailInfo] -> GlobalRdrEnv
 availsToGlobalRdrEnv mod_name avails

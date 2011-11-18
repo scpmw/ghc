@@ -137,7 +137,6 @@ lookupDataCon :: DataCon -> VM (Maybe DataCon)
 lookupDataCon dc
   | isTupleTyCon (dataConTyCon dc) 
   = return (Just dc)
-
   | otherwise 
   = readGEnv $ \env -> lookupNameEnv (global_datacons env) (dataConName dc)
 
@@ -169,5 +168,3 @@ defTyConPAs ps = updGEnv $ \env ->
 
 lookupTyConPR :: TyCon -> VM (Maybe Var)
 lookupTyConPR tc = readGEnv $ \env -> lookupNameEnv (global_pr_funs env) (tyConName tc)
-
-

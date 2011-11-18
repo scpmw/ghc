@@ -10,8 +10,15 @@ in that the @Rec@/@NonRec@/etc structure is thrown away (whereas at
 lower levels it is preserved with @let@/@letrec@s).
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module DsBinds ( dsTopLHsBinds, dsLHsBinds, decomposeRuleLhs, dsSpec,
-		 dsHsWrapper, dsTcEvBinds, dsEvBinds
+                 dsHsWrapper, dsTcEvBinds, dsEvBinds,
   ) where
 
 #include "HsVersions.h"
@@ -99,16 +106,17 @@ dsHsBind (FunBind { fun_id = L _ fun, fun_matches = matches
                   , fun_co_fn = co_fn, fun_tick = tick
                   , fun_infix = inf })
  = do	{ (args, body) <- matchWrapper (FunRhs (idName fun) inf) matches
-	; body'    <- mkOptTickBox tick body
+        ; let body' = mkOptTickBox tick body
         ; wrap_fn' <- dsHsWrapper co_fn
         ; let rhs = wrap_fn' (mkLams args body')
-        ; return (unitOL (makeCorePair fun False 0 rhs)) }
+        ; {- pprTrace "dsHsBind" (ppr fun <+> ppr (idInlinePragma fun)) $ -}
+           return (unitOL (makeCorePair fun False 0 rhs)) }
 
 dsHsBind (PatBind { pat_lhs = pat, pat_rhs = grhss, pat_rhs_ty = ty
-                  , pat_tick = tick })
+                  , pat_ticks = (rhs_tick, var_ticks) })
   = do	{ body_expr <- dsGuarded grhss ty
-        ; body'     <- mkOptTickBox tick body_expr
-        ; sel_binds <- mkSelectorBinds pat body'
+        ; let body' = mkOptTickBox rhs_tick body_expr
+        ; sel_binds <- mkSelectorBinds var_ticks pat body'
 	  -- We silently ignore inline pragmas; no makeCorePair
 	  -- Not so cool, but really doesn't matter
     ; return (toOL sel_binds) }
@@ -122,12 +130,11 @@ dsHsBind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dicts
                    , abs_ev_binds = ev_binds, abs_binds = binds })
   | ABE { abe_wrap = wrap, abe_poly = global
         , abe_mono = local, abe_prags = prags } <- export
-  = do	{ bind_prs    <- ds_lhs_binds binds
+  = do  { bind_prs    <- ds_lhs_binds binds
         ; ds_ev_binds <- dsTcEvBinds ev_binds
         ; wrap_fn <- dsHsWrapper wrap
 	; let	core_bind = Rec (fromOL bind_prs)
-	        rhs       =
-			    wrap_fn $  -- Usually the identity
+                rhs       = wrap_fn $  -- Usually the identity
 			    mkLams tyvars $ mkLams dicts $ 
 	                    mkCoreLets ds_ev_binds $
                             Let core_bind $
@@ -144,10 +151,9 @@ dsHsBind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dicts
 dsHsBind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dicts
                    , abs_exports = exports, abs_ev_binds = ev_binds
                    , abs_binds = binds })
-  = do	{ bind_prs    <- ds_lhs_binds binds
+  = do  { bind_prs    <- ds_lhs_binds binds
         ; ds_ev_binds <- dsTcEvBinds ev_binds
-	; let do_one (lcl_id,rhs) = (lcl_id, rhs)	       
-	      core_bind = Rec (map do_one (fromOL bind_prs))
+        ; let core_bind = Rec (fromOL bind_prs)
 	      	-- Monomorphic recursion possible, hence Rec
 
 	      tup_expr     = mkBigCoreVarTup locals
@@ -172,7 +178,7 @@ dsHsBind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dicts
 		     ; let global' = addIdSpecialisations global rules
 		     ; return ((global', rhs) `consOL` spec_binds) }
 
-	; export_binds_s <- mapM mk_bind exports
+        ; export_binds_s <- mapM mk_bind exports
 
 	; return ((poly_tup_id, poly_tup_rhs) `consOL` 
 		    concatOL export_binds_s) }
@@ -180,10 +186,14 @@ dsHsBind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dicts
 --------------------------------------
 dsTcEvBinds :: TcEvBinds -> DsM [CoreBind]
 dsTcEvBinds (TcEvBinds {}) = panic "dsEvBinds"	-- Zonker has got rid of this
-dsTcEvBinds (EvBinds bs)   = dsEvBinds bs
+dsTcEvBinds (EvBinds bs)   = -- pprTrace "EvBinds bs = "  (ppr bs) $ 
+                             dsEvBinds bs
 
 dsEvBinds :: Bag EvBind -> DsM [CoreBind]
-dsEvBinds bs = return (map dsEvGroup sccs)
+dsEvBinds bs = do { let core_binds = map dsEvSCC sccs 
+--                   ; pprTrace "dsEvBinds, result = " (vcat (map ppr core_binds)) $ 
+                  ; return core_binds }
+--                   ; return (map dsEvGroup sccs)
   where
     sccs :: [SCC EvBind]
     sccs = stronglyConnCompFromEdgedVertices edges
@@ -196,19 +206,19 @@ dsEvBinds bs = return (map dsEvGroup sccs)
 
     free_vars_of :: EvTerm -> [EvVar]
     free_vars_of (EvId v)           = [v]
-    free_vars_of (EvCast v co)      = v : varSetElems (tyCoVarsOfCo co)
-    free_vars_of (EvCoercionBox co) = varSetElems (tyCoVarsOfCo co)
+    free_vars_of (EvCast v co)      = v : varSetElems (coVarsOfCo co)
+    free_vars_of (EvCoercionBox co) = varSetElems (coVarsOfCo co)
     free_vars_of (EvDFunApp _ _ vs) = vs
     free_vars_of (EvTupleSel v _)   = [v]
     free_vars_of (EvTupleMk vs)     = vs
     free_vars_of (EvSuperClass d _) = [d]
 
-dsEvGroup :: SCC EvBind -> CoreBind
+dsEvSCC :: SCC EvBind -> CoreBind
 
-dsEvGroup (AcyclicSCC (EvBind v r))
+dsEvSCC (AcyclicSCC (EvBind v r))
   = NonRec v (dsEvTerm r)
 
-dsEvGroup (CyclicSCC bs)
+dsEvSCC (CyclicSCC bs)
   = Rec (map ds_pair bs)
   where
     ds_pair (EvBind v r) = (v, dsEvTerm r)
@@ -245,8 +255,12 @@ dsLCoercion co k
 
 ---------------------------------------
 dsEvTerm :: EvTerm -> CoreExpr
-dsEvTerm (EvId v)                = Var v
-dsEvTerm (EvCast v co)           = dsLCoercion co $ Cast (Var v)
+dsEvTerm (EvId v) = Var v
+
+dsEvTerm (EvCast v co) 
+  = dsLCoercion co $ mkCast (Var v) -- 'v' is always a lifted evidence variable so it is
+                                    -- unnecessary to call varToCoreExpr v here.
+
 dsEvTerm (EvDFunApp df tys vars) = Var df `mkTyApps` tys `mkVarApps` vars
 dsEvTerm (EvCoercionBox co)      = dsLCoercion co mkEqBox
 dsEvTerm (EvTupleSel v n)
@@ -300,7 +314,6 @@ makeCorePair gbl_id is_default_method dict_arity rhs
 dictArity :: [Var] -> Arity
 -- Don't count coercion variables in arity
 dictArity dicts = count isId dicts
-
 \end{code}
 
 Note [Rules and inlining]
@@ -681,12 +694,13 @@ dsHsWrapper :: HsWrapper -> DsM (CoreExpr -> CoreExpr)
 dsHsWrapper WpHole 	      = return (\e -> e)
 dsHsWrapper (WpTyApp ty)      = return (\e -> App e (Type ty))
 dsHsWrapper (WpLet ev_binds)  = do { ds_ev_binds <- dsTcEvBinds ev_binds
+--                                   ; pprTrace "Desugared core bindings = " (vcat (map ppr ds_ev_binds)) $ 
                                    ; return (mkCoreLets ds_ev_binds) }
 dsHsWrapper (WpCompose c1 c2) = do { k1 <- dsHsWrapper c1 
                                    ; k2 <- dsHsWrapper c2
                                    ; return (k1 . k2) }
 dsHsWrapper (WpCast co)
-  = return (\e -> dsLCoercion co (Cast e)) 
+  = return (\e -> dsLCoercion co (mkCast e)) 
 dsHsWrapper (WpEvLam ev)      = return (\e -> Lam ev e) 
 dsHsWrapper (WpTyLam tv)      = return (\e -> Lam tv e) 
 dsHsWrapper (WpEvApp evtrm)

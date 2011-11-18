@@ -12,6 +12,13 @@ have a standard form, namely:
 - primitive operations
 
 \begin{code}
+{-# OPTIONS -fno-warn-tabs #-}
+-- The above warning supression flag is a temporary kludge.
+-- While working on this module you are encouraged to remove it and
+-- detab the module (please do the detabbing in a separate patch). See
+--     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
+-- for details
+
 module MkId (
         mkDictFunId, mkDictFunTy, mkDictSelId,
 
@@ -41,7 +48,7 @@ import Type
 import Coercion
 import TcType
 import MkCore
-import CoreUtils	( exprType, mkCoerce )
+import CoreUtils	( exprType, mkCast )
 import CoreUnfold
 import Literal
 import TyCon
@@ -676,7 +683,7 @@ wrapNewTypeBody :: TyCon -> [Type] -> CoreExpr -> CoreExpr
 wrapNewTypeBody tycon args result_expr
   = ASSERT( isNewTyCon tycon )
     wrapFamInstBody tycon args $
-    mkCoerce (mkSymCo co) result_expr
+    mkCast result_expr (mkSymCo co)
   where
     co = mkAxInstCo (newTyConCo tycon) args
 
@@ -688,7 +695,7 @@ wrapNewTypeBody tycon args result_expr
 unwrapNewTypeBody :: TyCon -> [Type] -> CoreExpr -> CoreExpr
 unwrapNewTypeBody tycon args result_expr
   = ASSERT( isNewTyCon tycon )
-    mkCoerce (mkAxInstCo (newTyConCo tycon) args) result_expr
+    mkCast result_expr (mkAxInstCo (newTyConCo tycon) args)
 
 -- If the type constructor is a representation type of a data instance, wrap
 -- the expression into a cast adjusting the expression type, which is an
@@ -698,14 +705,14 @@ unwrapNewTypeBody tycon args result_expr
 wrapFamInstBody :: TyCon -> [Type] -> CoreExpr -> CoreExpr
 wrapFamInstBody tycon args body
   | Just co_con <- tyConFamilyCoercion_maybe tycon
-  = mkCoerce (mkSymCo (mkAxInstCo co_con args)) body
+  = mkCast body (mkSymCo (mkAxInstCo co_con args))
   | otherwise
   = body
 
 unwrapFamInstScrut :: TyCon -> [Type] -> CoreExpr -> CoreExpr
 unwrapFamInstScrut tycon args scrut
   | Just co_con <- tyConFamilyCoercion_maybe tycon
-  = mkCoerce (mkAxInstCo co_con args) scrut
+  = mkCast scrut (mkAxInstCo co_con args)
   | otherwise
   = scrut
 \end{code}
@@ -1017,7 +1024,7 @@ voidArgId       -- :: State# RealWorld
 coercionTokenId :: Id 	      -- :: () ~ ()
 coercionTokenId -- Used to replace Coercion terms when we go to STG
   = pcMiscPrelId coercionTokenName 
-                 (mkTyConApp eqPrimTyCon [unitTy, unitTy])
+                 (mkTyConApp eqPrimTyCon [liftedTypeKind, unitTy, unitTy])
                  noCafIdInfo
 \end{code}
 
