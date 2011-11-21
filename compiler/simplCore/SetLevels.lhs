@@ -454,9 +454,22 @@ lvlMFE _ _ env (_, AnnType ty)
 -- If we do we'll transform  lvl = e |> co 
 --			 to  lvl' = e; lvl = lvl' |> co
 -- and then inline lvl.  Better just to float out the payload.
-lvlMFE strict_ctxt ctxt_lvl env (_, AnnTick t e)
-  = do { e' <- lvlMFE strict_ctxt ctxt_lvl env e
-       ; return (Tick t e') }
+
+-- Disabled for now for ticks, as doing
+--
+--    ... tick<...> (let x = ... in x)
+--
+-- would *ideally* lead to
+--
+--    let x = tick<...> ... in ... tick<...> x
+--
+-- with an annotation hanging on a lone identifier. I'm not sure I
+-- understand the above comment, but have not seen any ill effects so
+-- far... -- PMW
+
+--lvlMFE strict_ctxt ctxt_lvl env (_, AnnTick t e)
+--  = do { e' <- lvlMFE strict_ctxt ctxt_lvl env e
+--       ; return (Tick t e') }
 
 lvlMFE strict_ctxt ctxt_lvl env (_, AnnCast e (_, co))
   = do	{ e' <- lvlMFE strict_ctxt ctxt_lvl env e
