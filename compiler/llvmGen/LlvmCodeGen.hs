@@ -37,8 +37,8 @@ import System.IO
 -- -----------------------------------------------------------------------------
 -- | Top-level of the LLVM Code generator
 --
-llvmCodeGen :: DynFlags -> Module -> ModLocation -> Handle -> UniqSupply -> [RawCmmGroup] -> TickMap -> IO ()
-llvmCodeGen dflags mod location h us cmms tick_map
+llvmCodeGen :: DynFlags -> ModLocation -> Handle -> UniqSupply -> [RawCmmGroup] -> TickMap -> IO ()
+llvmCodeGen dflags location h us cmms tick_map
   = let cmm = concat cmms
         (cdata,env) = foldr split ([],initLlvmEnv (targetPlatform dflags)) cmm
         split (CmmData s d' ) (d,e) = ((s,d'):d,e)
@@ -56,8 +56,8 @@ llvmCodeGen dflags mod location h us cmms tick_map
         ver  <- (fromMaybe defaultLlvmVersion) `fmap` figureLlvmVersion dflags
         env' <- cmmDataLlvmGens dflags render (setLlvmVer ver env) cdata []
         env'' <- cmmProcLlvmGens dflags render us env' cmm tick_map 1 []
-        cmmMetaLlvmGens dflags mod location render tick_map env'' cmm
-        cmmDebugLlvmGens dflags mod location render tick_map env'' cmm
+        cmmMetaLlvmGens dflags location render tick_map env'' cmm
+        cmmDebugLlvmGens dflags location render tick_map env'' cmm
 
         bFlush bufh
         return  ()

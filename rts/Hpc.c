@@ -48,12 +48,6 @@ HpcModuleInfo *modules = 0;
 
 static char *tixFilename = NULL;
 
-#ifdef TRACING
-static void traceUnitData(char *unit_name, void *data);
-static void traceAllUnaccountedProcs(void);
-static void traceUnaccountedProcs(DwarfUnit *unit, StgBool put_module);
-#endif
-
 static void GNU_ATTRIBUTE(__noreturn__)
 failure(char *msg) {
   debugTrace(DEBUG_hpc,"hpc failure: %s\n",msg);
@@ -217,14 +211,6 @@ startupHpc(void)
 
   debugTrace(DEBUG_hpc,"startupHpc");
 
-#ifdef USE_DWARF
-#ifdef TRACING
-  // Load DWARF information
-  if (RtsFlags.TraceFlags.tracing)
-      dwarf_load();
-#endif
-#endif
-
   // Go through modules
   HpcModuleInfo *mod = modules;
   StgBool have_tix = 0;
@@ -239,17 +225,15 @@ startupHpc(void)
       traceModule(mod->modName,
                   mod->tickCount,
                   mod->hashNo);
-      traceUnitData(mod->modSource, mod->debugData);
 #endif
   }
 
 #ifdef USE_DWARF
 #ifdef TRACING
+  // If tracing is active, load then write out debuging information
   if (RtsFlags.TraceFlags.tracing) {
-
-      // Trace out all information that we haven't yet written to the event log
-      traceAllUnaccountedProcs();
-
+      dwarf_load();
+      dwarf_trace_debug_data();
       dwarf_free();
   }
 #endif
@@ -307,8 +291,7 @@ hs_hpc_module(char *modName,
               char *modSource,
               StgWord32 modCount,
               StgWord32 modHashNo,
-              StgWord64 *tixArr,
-              void *debugData)
+              StgWord64 *tixArr)
 {
   HpcModuleInfo *tmpModule;
   nat i;
@@ -364,9 +347,6 @@ hs_hpc_module(char *modName,
       }
       tmpModule->from_file = rtsFalse;
   }
-
-  // Set profiling data
-  tmpModule->debugData = debugData;
 
 }
 
@@ -463,100 +443,3 @@ exitHpc(void) {
 HpcModuleInfo *hs_hpc_rootModule(void) {
   return modules;
 }
-
-#ifdef TRACING
-
-// Writes debug data to the event log, enriching it with DWARF
-// debugging information where possible
-
-void traceUnitData(char *unit_name, void *data) {
-	// Dump all entries in debug data
-	StgWord8 *dbg = (StgWord8 *)data;
-#ifdef USE_DWARF
-	DwarfUnit *unit = dwarf_get_unit(unit_name);
-#endif
-	while(dbg && *dbg) {
-
-		// Get event type and size.
-		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
-		StgWord16 size = *(StgWord16 *)dbg; dbg += sizeof(StgWord16);
-
-#ifdef USE_DWARF
-		// Follow data
-		char *proc_name = 0;
-		DwarfProc *proc = 0;
-		switch (num) {
-
-		case EVENT_DEBUG_PROCEDURE:
-			if (!unit) break;
-			proc_name = (char *)dbg + sizeof(StgWord16) + sizeof(StgWord16);
-			proc = dwarf_get_proc(unit, proc_name);
-			break;
-
-		default: break;
-		}
-#endif
-
-		// Post data
-		traceDebugData(num, size, dbg);
-		dbg += size;
-
-#ifdef USE_DWARF
-		// Post additional data about procedure. Note we might have
-		// multiple ranges per procedure!
-		while (proc && !strcmp(proc_name, proc->name)) {
-			traceProcPtrRange(proc->low_pc, proc->high_pc);
-			proc->copied = 1;
-			proc = proc->next;
-		}
- #endif
-	}
-
-#ifdef USE_DWARF
-	// Add extra procedures
-	if (unit)
-		traceUnaccountedProcs(unit, 0);
-#endif
-
-}
-
-#ifdef USE_DWARF
-
-// Writes out information about all procedures that we don't have
-// entries in the debugging info for - but still know something
-// interesting about, like their procedure name is and where the code
-// was coming from. This will, for example, catch libraries without
-// debug info as well as RTS stuff.
-
-void traceAllUnaccountedProcs() {
-	DwarfUnit *unit;
-
-	for (unit = dwarf_units; unit; unit = unit->next) {
-		traceUnaccountedProcs(unit, 1);
-	}
-}
-
-void traceUnaccountedProcs(DwarfUnit *unit, StgBool put_module) {
-	DwarfProc *proc;
-
-	for (proc = unit->procs; proc; proc = proc->next)
-		if (!proc->copied) {
-
-			// Need to put module header?
-			if (put_module) {
-				traceModule(unit->name, 0, 0);
-				traceDebugModule(unit->name);
-				put_module = 0;
-			}
-
-			// Print everything we know about the procedure
-			traceDebugProc(proc->name);
-			traceProcPtrRange(proc->low_pc, proc->high_pc);
-			proc->copied = 1;
-
-		}
-}
-
-#endif // USE_DWARF
-
-#endif // TRACING

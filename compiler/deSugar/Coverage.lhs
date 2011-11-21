@@ -1114,15 +1114,13 @@ hpcInitCode dflags this_mod mod_loc hpc_info
     , text "static void hpc_init_" <> ppr this_mod <> text "(void)"
     , braces (vcat [
         tickboxes_decl,
-        debug_data_decl,
         ptext (sLit "hs_hpc_module") <>
           parens (hcat (punctuate comma [
               doubleQuotes full_name_str,
               doubleQuotes mod_loc_str,
               int tickCount, -- really StgWord32
               int hashNo,    -- really StgWord32
-              if opt_Hpc then tickboxes else int 0,
-              if has_debug_data then debug_data else int 0
+              if opt_Hpc then tickboxes else int 0
             ])) <> semi
        ])
     ]
@@ -1140,12 +1138,6 @@ hpcInitCode dflags this_mod mod_loc hpc_info
     tickboxes_decl
       | opt_Hpc   = ptext (sLit "extern StgWord64 ") <> tickboxes <> ptext (sLit "[]") <> semi
       | otherwise = empty
-
-    has_debug_data = hscTarget dflags == HscLlvm
-    debug_data = pprCLabel platform (mkHpcDebugData this_mod)
-    debug_data_decl
-      | has_debug_data = ptext (sLit "extern char ") <> debug_data <> ptext (sLit "[]") <> semi
-      | otherwise      = empty
 
     module_name  = hcat (map (text.charToC) $
                          bytesFS (moduleNameFS (Module.moduleName this_mod)))

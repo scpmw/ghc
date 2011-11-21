@@ -9,6 +9,7 @@
 #include "RtsUtils.h"
 
 #include "Dwarf.h"
+#include "Trace.h"
 
 #include "dwarf.h"
 #include "libdwarf.h"
@@ -45,7 +46,14 @@
 // Global compilation unit list
 DwarfUnit *dwarf_units = 0;
 
+// Debugging data
+size_t dwarf_ghc_debug_data_size = 0;
+void *dwarf_ghc_debug_data = 0;
+
+#define GHC_DEBUG_DATA_SECTION ".debug_ghc"
+
 static void *dwarf_get_code_offset(Elf *elf, void *seg_start);
+static void dwarf_load_ghc_debug_data(Elf *elf);
 static void dwarf_load_symbols(char *file, Elf *elf, void *seg_start);
 
 static void dwarf_load_file(char *module_path, void *seg_start);
@@ -56,10 +64,18 @@ static DwarfUnit *dwarf_new_unit(char *name, char *comp_dir);
 static DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name, void *low_pc, void *high_pc,
                                  DwarfSource source, DwarfProc *after);
 
+#ifdef TRACING
+static void dwarf_trace_all_unaccounted(void);
+static void dwarf_trace_unaccounted(DwarfUnit *unit, StgBool put_module);
+#endif // TRACING
+
 #ifndef USE_DL_ITERATE_PHDR
 
 void dwarf_load()
 {
+	// Clear previous data, if any
+	dwarf_free();
+
 	// Initialize ELF library
 	if (elf_version(EV_CURRENT) == EV_NONE) {
 		barf("libelf version too old!");
@@ -95,8 +111,6 @@ void dwarf_load()
 	}
 
 	fclose(map_file);
-
-	// dwarf_stats();
 }
 
 #else // USE_DL_ITERATE_PHDR
@@ -175,7 +189,8 @@ int dwarf_load_by_phdr(struct dl_phdr_info *info, size_t size, void *data)
 
 #endif // USE_DL_ITERATE_PHDR
 
-void dwarf_load_file(char *module_path, void *seg_start) {
+void dwarf_load_file(char *module_path, void *seg_start)
+{
 
 	// Open the module
 	int fd = open(module_path, O_RDONLY);
@@ -190,6 +205,9 @@ void dwarf_load_file(char *module_path, void *seg_start) {
 		barf("Could not open ELF file: %s", elf_errmsg(elf_errno()));
 		return;
 	}
+
+	// Load debug data
+	dwarf_load_ghc_debug_data(elf);
 
 	// Load symbols
 	dwarf_load_symbols(module_path, elf, seg_start);
@@ -273,13 +291,6 @@ void dwarf_load_file(char *module_path, void *seg_start) {
 void *dwarf_get_code_offset(Elf *elf, void *seg_start)
 {
 
-	// Get file header
-	GElf_Ehdr ehdr;
-	if (!gelf_getehdr(elf, &ehdr)) {
-		barf("DWARF: Cannot read ELF file header!");
-		return 0;
-	}
-
 	// Go through sections
 	Elf_Scn *scn = 0;
 	while ((scn = elf_nextscn(elf, scn))) {
@@ -308,6 +319,48 @@ void *dwarf_get_code_offset(Elf *elf, void *seg_start)
 	return 0;
 }
 
+void dwarf_load_ghc_debug_data(Elf *elf)
+{
+
+	// Get section header string table index
+	size_t shdrstrndx;
+	if (elf_getshdrstrndx(elf, &shdrstrndx))
+		return;
+
+	// Iterate over all sections
+	Elf_Scn *scn = 0;
+	while ((scn = elf_nextscn(elf, scn))) {
+
+		// Get section header
+		GElf_Shdr hdr;
+		if (!gelf_getshdr(scn, &hdr))
+			return;
+
+		// Right name?
+		char *name = elf_strptr(elf, shdrstrndx, hdr.sh_name);
+		if (!name || strcmp(name, GHC_DEBUG_DATA_SECTION))
+			continue;
+
+		// Copy section contents to memory
+		Elf_Data *data = 0;
+		while ((data = elf_getdata(scn, data))) {
+			if (!data->d_buf)
+				continue;
+			// Enlarge buffer, append data block
+			dwarf_ghc_debug_data =
+			    stgReallocBytes(dwarf_ghc_debug_data,
+			                    dwarf_ghc_debug_data_size + data->d_size,
+			                    "dwarf_load_ghc_debug_data");
+			memcpy(((char *)dwarf_ghc_debug_data) + dwarf_ghc_debug_data_size,
+			       data->d_buf,
+			       data->d_size);
+			dwarf_ghc_debug_data_size += data->d_size;
+		}
+
+		return;
+	}
+
+}
 
 // Use "FILE" type annotations in symbol table to find out which files
 // the symbols originally came from. Sadly, this is not very useful
@@ -334,13 +387,6 @@ void *dwarf_get_code_offset(Elf *elf, void *seg_start)
 
 void dwarf_load_symbols(char *file, Elf *elf, void *seg_start)
 {
-
-	// Get file header
-	GElf_Ehdr ehdr;
-	if (!gelf_getehdr(elf, &ehdr)) {
-		barf("DWARF: Cannot read ELF file header!");
-		return;
-	}
 
 	// Locate symbol table section
 	Elf_Scn *scn = 0; GElf_Shdr hdr;
@@ -589,6 +635,113 @@ void dwarf_free()
 		free(unit->comp_dir);
 		free(unit);
 	}
+	free(dwarf_ghc_debug_data);
+	dwarf_ghc_debug_data = 0;
 }
+
+#ifdef TRACING
+
+// Writes debug data to the event log, enriching it with DWARF
+// debugging information where possible
+
+void dwarf_trace_debug_data()
+{
+	// Go through available debugging data
+	StgWord8 *dbg = (StgWord8 *)dwarf_ghc_debug_data;
+	DwarfUnit *unit = 0;
+	while (dbg && dbg < (StgWord8 *)dwarf_ghc_debug_data + dwarf_ghc_debug_data_size) {
+
+		// Ignore zeroes
+		if (!*dbg) {
+			dbg++;
+			continue;
+		}
+
+		// Get event type and size.
+		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
+		StgWord16 size = *(StgWord16 *)dbg; dbg += sizeof(StgWord16);
+
+		// Follow data
+		char *proc_name = 0;
+		DwarfProc *proc = 0;
+		switch (num) {
+
+		case EVENT_DEBUG_MODULE: // name, ...
+
+			// If we had a unit before: Trace all data we didn't see a
+			// matching proc for
+			if (unit) dwarf_trace_unaccounted(unit, 0);
+
+			// Get unit (with minimal added security)
+			if (strlen((char *)dbg) >= size) break;
+			unit = dwarf_get_unit((char *)dbg);
+			break;
+
+		case EVENT_DEBUG_PROCEDURE: // instr, parent, name, ...
+			if (!unit) break;
+			proc_name = (char *)dbg + sizeof(StgWord16) + sizeof(StgWord16);
+			proc = dwarf_get_proc(unit, proc_name);
+			break;
+
+		default: break;
+		}
+
+		// Post data
+		traceDebugData(num, size, dbg);
+		dbg += size;
+
+		// Post additional data about procedure. Note we might have
+		// multiple ranges per procedure!
+		while (proc && !strcmp(proc_name, proc->name)) {
+			traceProcPtrRange(proc->low_pc, proc->high_pc);
+			proc->copied = 1;
+			proc = proc->next;
+		}
+	}
+
+	// Add all left-over debug info
+	if (unit)
+		dwarf_trace_unaccounted(unit, 0);
+	dwarf_trace_all_unaccounted();
+}
+
+// Writes out information about all procedures that we don't have
+// entries in the debugging info for - but still know something
+// interesting about, like their procedure name is and where the code
+// was coming from. This will, for example, catch libraries without
+// debug info as well as RTS stuff.
+
+void dwarf_trace_all_unaccounted()
+{
+	DwarfUnit *unit;
+
+	for (unit = dwarf_units; unit; unit = unit->next) {
+		dwarf_trace_unaccounted(unit, 1);
+	}
+}
+
+void dwarf_trace_unaccounted(DwarfUnit *unit, StgBool put_module)
+{
+	DwarfProc *proc;
+
+	for (proc = unit->procs; proc; proc = proc->next)
+		if (!proc->copied) {
+
+			// Need to put module header?
+			if (put_module) {
+				traceModule(unit->name, 0, 0);
+				traceDebugModule(unit->name);
+				put_module = 0;
+			}
+
+			// Print everything we know about the procedure
+			traceDebugProc(proc->name);
+			traceProcPtrRange(proc->low_pc, proc->high_pc);
+			proc->copied = 1;
+
+		}
+}
+
+#endif /* TRACING */
 
 #endif /* USE_DWARF */

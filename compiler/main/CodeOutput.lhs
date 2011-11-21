@@ -85,7 +85,7 @@ codeOutput dflags this_mod location foreign_stubs pkg_deps flat_abstractC tick_m
              HscInterpreted -> return ();
              HscAsm         -> outputAsm dflags filenm flat_abstractC;
              HscC           -> outputC dflags filenm flat_abstractC pkg_deps;
-             HscLlvm        -> outputLlvm dflags this_mod location filenm flat_abstractC tick_map;
+             HscLlvm        -> outputLlvm dflags location filenm flat_abstractC tick_map;
              HscNothing     -> panic "codeOutput: HscNothing"
 	  }
 	; return stubs_exist
@@ -164,10 +164,10 @@ outputAsm dflags filenm flat_absC
 %************************************************************************
 
 \begin{code}
-outputLlvm :: DynFlags -> Module -> ModLocation -> FilePath -> [RawCmmGroup] -> TickMap -> IO ()
-outputLlvm dflags mod location filenm flat_absC tick_map
+outputLlvm :: DynFlags -> ModLocation -> FilePath -> [RawCmmGroup] -> TickMap -> IO ()
+outputLlvm dflags location filenm flat_absC tick_map
   = do ncg_uniqs <- mkSplitUniqSupply 'n'
-       doOutput filenm $ \f -> llvmCodeGen dflags mod location f ncg_uniqs flat_absC tick_map
+       doOutput filenm $ \f -> llvmCodeGen dflags location f ncg_uniqs flat_absC tick_map
 \end{code}
 
 

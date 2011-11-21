@@ -59,9 +59,9 @@ dW_LANG_Haskell  = 0x8042 -- Chosen arbitrarily
 pprMeta :: Int -> LlvmStatic -> SDoc
 pprMeta n val = pprLlvmData ([LMGlobal (LMMetaVar n) (Just val)], [])
 
-cmmMetaLlvmGens :: DynFlags -> Module -> ModLocation ->
+cmmMetaLlvmGens :: DynFlags -> ModLocation ->
                    (SDoc -> IO ()) -> TickMap -> LlvmEnv -> [RawCmmDecl] -> IO ()
-cmmMetaLlvmGens dflags _mod location render tiMap env cmm = do
+cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
 
   -- We need to be able to find ticks by ID
   let idLabelMap :: Map Int CLabel
@@ -77,7 +77,7 @@ cmmMetaLlvmGens dflags _mod location render tiMap env cmm = do
 
   -- Emit compile unit information.
   srcPath <- getCurrentDirectory
-  let srcFile  = fromMaybe "" (ml_hs_file location)
+  let srcFile  = fromMaybe "" (ml_hs_file mod_loc)
       producerName = cProjectName ++ " " ++ cProjectVersion
   unitId <- freshId
   render $ pprMeta unitId $ LMMeta
@@ -130,7 +130,7 @@ cmmMetaLlvmGens dflags _mod location render tiMap env cmm = do
   -- the compilation unit. This will be used to annotate all
   -- procedures which have otherwise no associated debug data (so they
   -- won't simply get discarded)
-  let unitFile = fromMaybe "** no source file **" (ml_hs_file location)
+  let unitFile = fromMaybe "** no source file **" (ml_hs_file mod_loc)
   defaultFileId <- case Map.lookup (fsLit unitFile) fileMap of
     Just fileId -> return fileId
     Nothing     -> do
@@ -306,10 +306,10 @@ mkEvent id cts
                    , cts]
   where size = (llvmWidthInBits (getStatType cts) + 7) `div` 8
 
-mkModuleEvent :: Module -> ModLocation -> LlvmStatic
-mkModuleEvent _mod loc
+mkModuleEvent :: ModLocation -> LlvmStatic
+mkModuleEvent mod_loc
   = mkEvent EVENT_DEBUG_MODULE $ mkStaticStruct
-      [ mkStaticString $ case ml_hs_file loc of
+      [ mkStaticString $ case ml_hs_file mod_loc of
            Just file -> file
            _         -> "??"
       ]
@@ -345,11 +345,11 @@ mkAnnotEvent bnds (CoreNote lbl (ExprPtr core))
       ]]
 mkAnnotEvent _ _ = []
 
-mkEvents :: Platform -> Set Var -> Module ->
+mkEvents :: Platform -> Set Var ->
             ModLocation -> TickMap -> [RawCmmDecl] -> LlvmStatic
-mkEvents platform bnds mod loc tick_map cmm
+mkEvents platform bnds mod_loc tick_map cmm
   = mkStaticStruct $
-      [ mkModuleEvent mod loc ] ++
+      [ mkModuleEvent mod_loc ] ++
       concat [ mkProcedureEvent platform tim (proc_lbl i l)
                : concatMap (mkAnnotEvent bnds) (timTicks tim)
              | CmmProc i l _ <- cmm
@@ -362,21 +362,21 @@ collectBinds :: Tickish () -> [Var]
 collectBinds (CoreNote bnd _) = [bnd]
 collectBinds _                = []
 
-cmmDebugLlvmGens :: DynFlags -> Module -> ModLocation ->
+cmmDebugLlvmGens :: DynFlags -> ModLocation ->
                     (SDoc -> IO ()) -> TickMap -> LlvmEnv ->
                     [RawCmmDecl] -> IO ()
-cmmDebugLlvmGens dflags mod loc render tick_map _env cmm = do
+cmmDebugLlvmGens dflags mod_loc render tick_map _env cmm = do
 
   let collect tim = concatMap collectBinds $ timTicks tim
       binds =  Set.fromList $ concatMap collect $ elems tick_map
 
   let platform = targetPlatform dflags
 
-  let events     = flattenStruct $ mkEvents platform binds mod loc tick_map cmm
+  let events     = flattenStruct $ mkEvents platform binds mod_loc tick_map cmm
       ty         = getStatType events
-      debug_sym  = fsLit $ renderWithStyle (pprCLabel platform (mkHpcDebugData mod)) (mkCodeStyle CStyle)
-      sectName   = Just $ fsLit ".__ghc_debug"
-      lmDebugVar = LMGlobalVar debug_sym ty ExternallyVisible sectName Nothing False
+      debug_sym  = fsLit "__debug_ghc"
+      sectName   = Just $ fsLit ".debug_ghc"
+      lmDebugVar = LMGlobalVar debug_sym ty Internal sectName Nothing False
       lmDebug    = LMGlobal lmDebugVar (Just events)
 
   render $ pprLlvmData ([lmDebug], [])
