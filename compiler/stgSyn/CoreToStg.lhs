@@ -585,6 +585,12 @@ coreToStgArgs (Coercion _ : args)  -- Coercion argument; replace with place hold
   = do { (args', fvs) <- coreToStgArgs args
        ; return (StgVarArg coercionTokenId : args', fvs) }
 
+coreToStgArgs (Tick t e : args)
+  = ASSERT ( not (tickishIsCode t)) coreToStgArgs (e : args)
+
+coreToStgArgs (Cast e _ : args) -- I have a feeling this shouldn't happen somehow.
+  = coreToStgArgs (e : args)
+
 coreToStgArgs (arg : args) = do         -- Non-type argument
     (stg_args, args_fvs) <- coreToStgArgs args
     (arg', arg_fvs, _escs) <- coreToStgExpr arg
@@ -1145,7 +1151,9 @@ myCollectArgs expr
   where
     go (Var v)          as = (v, as)
     go (App f a) as        = go f (a:as)
-    go (Tick _ _)     _  = pprPanic "CoreToStg.myCollectArgs" (ppr expr)
+    go (Tick t e)       as
+       | tickishIsCode t   = pprPanic "CoreToStg.myCollectArgs" (ppr expr)
+       | otherwise         = go e as
     go (Cast e _)       as = go e as
     go (Lam b e)        as
        | isTyVar b         = go e as  -- Note [Collect args]
