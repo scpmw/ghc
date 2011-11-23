@@ -125,8 +125,7 @@ deSugar hsc_env
                           ; ds_rules <- mapMaybeM dsRule rules
                           ; ds_vects <- mapM dsVect vects
                           ; let hpc_init
-                                  | opt_Hpc || hscTarget dflags == HscLlvm
-                                              = hpcInitCode dflags mod mod_loc ds_hpc_info
+                                  | opt_Hpc   = hpcInitCode dflags mod mod_loc ds_hpc_info
                                   | otherwise = empty
                           ; return ( ds_ev_binds
                                    , foreign_prs `appOL` core_prs `appOL` spec_prs
