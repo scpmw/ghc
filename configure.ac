@@ -420,6 +420,10 @@ dnl     If gcc, make sure it's at least 2.1
 dnl
 FP_GCC_VERSION
 
+dnl ** look to see if we have a C compiler using an llvm back end.
+dnl
+FP_CC_LLVM_BACKEND
+
 CONF_GCC_LINKER_OPTS_STAGE1=$LDFLAGS
 CONF_GCC_LINKER_OPTS_STAGE2=$LDFLAGS
 

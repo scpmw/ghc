@@ -329,8 +329,8 @@ link' dflags batch_attempt_linking hpt
                    return Succeeded
            else do
 
-        debugTraceMsg dflags 1 (ptext (sLit "Linking") <+> text exe_file
-                                 <+> text "...")
+        compilationProgressMsg dflags $ showSDoc $
+            (ptext (sLit "Linking") <+> text exe_file <+> text "...")
 
         -- Don't showPass in Batch mode; doLink will do that for us.
         let link = case ghcLink dflags of
@@ -1172,7 +1172,21 @@ runPhase SplitMangle input_fn dflags
 
 runPhase As input_fn dflags
   = do
-        let as_opts =  getOpts dflags opt_a
+        -- LLVM from version 3.0 onwards doesn't support the OS X system
+        -- assembler, so we use clang as the assembler instead. (#5636)
+        let whichAsProg | hscTarget dflags == HscLlvm &&
+                          platformOS (targetPlatform dflags) == OSDarwin
+                        = do
+                            llvmVer <- io $ figureLlvmVersion dflags
+                            return $ case llvmVer of
+                                Just n | n >= 30 -> SysTools.runClang
+                                _                -> SysTools.runAs
+
+                        | otherwise
+                        = return SysTools.runAs
+
+        as_prog <- whichAsProg
+        let as_opts = getOpts dflags opt_a
         let cmdline_include_paths = includePaths dflags
 
         next_phase <- maybeMergeStub
@@ -1182,7 +1196,7 @@ runPhase As input_fn dflags
         -- might be a hierarchical module.
         io $ createDirectoryHierarchy (takeDirectory output_fn)
 
-        io $ SysTools.runAs dflags
+        io $ as_prog dflags
                        (map SysTools.Option as_opts
                        ++ [ SysTools.Option ("-I" ++ p) | p <- cmdline_include_paths ]
 
@@ -2057,13 +2071,18 @@ joinObjectFiles dflags o_files output_fn = do
                                 else [])
                          ++ [
                             SysTools.Option ld_build_id,
-                            SysTools.Option ld_x_flag,
+                            -- SysTools.Option ld_x_flag,
                             SysTools.Option "-o",
                             SysTools.FileOption "" output_fn ]
                          ++ args)
 
-      ld_x_flag | null cLD_X = ""
-                | otherwise  = "-Wl,-x"
+      -- Do *not* add the -x flag to ld, because we want to keep those
+      -- local symbols around for the benefit of external tools. e.g.
+      -- the 'perf report' output is much less useful if all the local
+      -- symbols have been stripped out.
+      --
+      -- ld_x_flag | null cLD_X = ""
+      --           | otherwise  = "-Wl,-x"
 
       -- suppress the generation of the .note.gnu.build-id section,
       -- which we don't need and sometimes causes ld to emit a

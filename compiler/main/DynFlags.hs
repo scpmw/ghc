@@ -448,6 +448,7 @@ data DynFlags = DynFlags {
   ghcMode               :: GhcMode,
   ghcLink               :: GhcLink,
   hscTarget             :: HscTarget,
+  settings              :: Settings,
   hscOutName            :: String,      -- ^ Name of the output file
   extCoreName           :: String,      -- ^ Name of the .hcr output file
   verbosity             :: Int,         -- ^ Verbosity level: see Note [Verbosity levels]
@@ -486,6 +487,7 @@ data DynFlags = DynFlags {
   dylibInstallName      :: Maybe String,
   hiDir                 :: Maybe String,
   stubDir               :: Maybe String,
+  dumpDir               :: Maybe String,
 
   objectSuf             :: String,
   hcSuf                 :: String,
@@ -516,8 +518,6 @@ data DynFlags = DynFlags {
   -- Plugins
   pluginModNames        :: [ModuleName],
   pluginModNameOpts     :: [(ModuleName,String)],
-
-  settings              :: Settings,
 
   --  For ghc -M
   depMakefile           :: FilePath,
@@ -851,6 +851,7 @@ defaultDynFlags mySettings =
         dylibInstallName        = Nothing,
         hiDir                   = Nothing,
         stubDir                 = Nothing,
+        dumpDir                 = Nothing,
 
         objectSuf               = phaseInputExt StopLn,
         hcSuf                   = phaseInputExt HCc,
@@ -1105,7 +1106,8 @@ getVerbFlags dflags
   | verbosity dflags >= 4 = ["-v"]
   | otherwise             = []
 
-setObjectDir, setHiDir, setStubDir, setOutputDir, setDylibInstallName,
+setObjectDir, setHiDir, setStubDir, setDumpDir, setOutputDir,
+         setDylibInstallName,
          setObjectSuf, setHiSuf, setHcSuf, parseDynLibLoaderMode,
          setPgmP, addOptl, addOptP,
          addCmdlineFramework, addHaddockOpts
@@ -1119,7 +1121,8 @@ setStubDir    f d = d{ stubDir    = Just f, includePaths = f : includePaths d }
   -- -stubdir D adds an implicit -I D, so that gcc can find the _stub.h file
   -- \#included from the .hc file when compiling via C (i.e. unregisterised
   -- builds).
-setOutputDir  f = setObjectDir f . setHiDir f . setStubDir f
+setDumpDir    f d = d{ dumpDir    = Just f}
+setOutputDir  f = setObjectDir f . setHiDir f . setStubDir f . setDumpDir f
 setDylibInstallName  f d = d{ dylibInstallName = Just f}
 
 setObjectSuf  f d = d{ objectSuf  = f}
@@ -1435,6 +1438,7 @@ dynamic_flags = [
   , Flag "hidir"             (hasArg setHiDir)
   , Flag "tmpdir"            (hasArg setTmpDir)
   , Flag "stubdir"           (hasArg setStubDir)
+  , Flag "dumpdir"           (hasArg setDumpDir)
   , Flag "outputdir"         (hasArg setOutputDir)
   , Flag "ddump-file-prefix" (hasArg (setDumpPrefixForce . Just))
 
@@ -1446,8 +1450,10 @@ dynamic_flags = [
   , Flag "keep-s-files"     (NoArg (setDynFlag Opt_KeepSFiles))
   , Flag "keep-raw-s-file"  (NoArg (addWarn "The -keep-raw-s-file flag does nothing; it will be removed in a future GHC release"))
   , Flag "keep-raw-s-files" (NoArg (addWarn "The -keep-raw-s-files flag does nothing; it will be removed in a future GHC release"))
-  , Flag "keep-llvm-file"   (NoArg (setDynFlag Opt_KeepLlvmFiles))
-  , Flag "keep-llvm-files"  (NoArg (setDynFlag Opt_KeepLlvmFiles))
+  , Flag "keep-llvm-file"   (NoArg (do setObjTarget HscLlvm
+                                       setDynFlag Opt_KeepLlvmFiles))
+  , Flag "keep-llvm-files"  (NoArg (do setObjTarget HscLlvm
+                                       setDynFlag Opt_KeepLlvmFiles))
      -- This only makes sense as plural
   , Flag "keep-tmp-files"   (NoArg (setDynFlag Opt_KeepTmpFiles))
 

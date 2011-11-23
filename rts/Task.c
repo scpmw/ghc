@@ -51,6 +51,9 @@ __thread Task *my_task;
 # else
 ThreadLocalKey currentTaskKey;
 # endif
+#ifdef llvm_CC_FLAVOR
+ThreadLocalKey gctKey;
+#endif
 #else
 Task *my_task;
 #endif
@@ -68,6 +71,9 @@ initTaskManager (void)
 #if defined(THREADED_RTS)
 #if !defined(MYTASK_USE_TLV)
 	newThreadLocalKey(&currentTaskKey);
+#endif
+#if defined(llvm_CC_FLAVOR)
+	newThreadLocalKey(&gctKey);
 #endif
         initMutex(&all_tasks_mutex);
 #endif
@@ -98,9 +104,14 @@ freeTaskManager (void)
 
     RELEASE_LOCK(&all_tasks_mutex);
 
-#if defined(THREADED_RTS) && !defined(MYTASK_USE_TLV)
+#if defined(THREADED_RTS)
     closeMutex(&all_tasks_mutex); 
+#if !defined(MYTASK_USE_TLV)
     freeThreadLocalKey(&currentTaskKey);
+#endif
+#if defined(llvm_CC_FLAVOR)
+    freeThreadLocalKey(&gctKey);
+#endif
 #endif
 
     tasksInitialized = 0;
