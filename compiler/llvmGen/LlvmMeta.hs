@@ -145,7 +145,7 @@ cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
     let procTick = findGoodSourceTick lbl tiMap idLabelMap
         (line, col) = case fmap sourceSpan procTick of
           Just span -> (srcSpanStartLine span, srcSpanStartCol span)
-          _         -> (0, 0)
+          _         -> (1, 0)
 
     -- Find procedure in CMM data
     let myProc (CmmProc _ l _)  = l == lbl
@@ -375,7 +375,7 @@ cmmDebugLlvmGens dflags mod_loc render tick_map _env cmm = do
   let events     = flattenStruct $ mkEvents platform binds mod_loc tick_map cmm
       ty         = getStatType events
       debug_sym  = fsLit "__debug_ghc"
-      sectName   = Just $ fsLit ".debug_ghc"
+      sectName   = Just $ fsLit "__DWARF,debug_ghc"
       lmDebugVar = LMGlobalVar debug_sym ty Internal sectName Nothing False
       lmDebug    = LMGlobal lmDebugVar (Just events)
 
