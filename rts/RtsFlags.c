@@ -763,6 +763,7 @@ error = rtsTrue;
 #ifdef USE_PERF_EVENT
 #ifdef TRACING
 			case 'E':
+				OPTION_UNSAFE;
 				RtsFlags.PerfEventFlags.sampleType = 1;
 				break;
 #endif
