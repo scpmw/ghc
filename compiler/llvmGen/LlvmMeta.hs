@@ -145,7 +145,7 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
     let procTick = findGoodSourceTick lbl tiMap idLabelMap
         (line, col) = case fmap sourceSpan procTick of
           Just span -> (srcSpanStartLine span, srcSpanStartCol span)
-          _         -> (0, 0)
+          _         -> (1, 0)
 
     -- Find procedure in CMM data
     let myProc (CmmProc _ l _)  = l == lbl
@@ -375,7 +375,10 @@ cmmDebugLlvmGens dflags mod_loc tick_map cmm = do
 
   -- Names for symbol / section
   let debug_sym  = fsLit $ "__debug_ghc"
-      sectName   = Just $ fsLit ".debug_ghc"
+      sectPrefix = case platformOS platform of
+        OSDarwin -> "__DWARF,"
+        _        -> "."
+      sectName   = Just $ fsLit (sectPrefix ++ "debug_ghc")
       lmDebugVar = LMGlobalVar debug_sym (getStatType events) Internal sectName Nothing False
       lmDebug    = LMGlobal lmDebugVar (Just events)
 
