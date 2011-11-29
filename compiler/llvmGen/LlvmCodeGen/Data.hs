@@ -37,10 +37,10 @@ structStr = fsLit "_struct"
 -- complete this completely though as we need to pass all CmmStatic
 -- sections before all references can be resolved. This last step is
 -- done by 'resolveLlvmData'.
-genLlvmData :: LlvmEnv -> (Section, CmmStatics) -> LlvmUnresData
-genLlvmData env (sec, Statics lbl xs) =
+genLlvmData :: (Section, CmmStatics) -> LlvmM LlvmUnresData
+genLlvmData (sec, Statics lbl xs) = do
+    label <- strCLabel_llvm lbl
     let static  = map genData xs
-        label   = strCLabel_llvm env lbl
 
         types   = map getStatTypes static
         getStatTypes (Left  x) = cmmToLlvmType $ cmmLitType x
@@ -48,30 +48,30 @@ genLlvmData env (sec, Statics lbl xs) =
 
         strucTy = LMStruct types
         alias   = LMAlias ((label `appendFS` structStr), strucTy)
-    in (lbl, sec, alias, static)
+    return (lbl, sec, alias, static)
 
 
-resolveLlvmDatas ::  LlvmEnv -> [LlvmUnresData] -> [LlvmData]
-                 -> (LlvmEnv, [LlvmData])
-resolveLlvmDatas env [] ldata
-  = (env, ldata)
+resolveLlvmDatas :: [LlvmUnresData] -> [LlvmData]
+                 -> LlvmM [LlvmData]
+resolveLlvmDatas [] ldata
+  = return ldata
 
-resolveLlvmDatas env (udata : rest) ldata
-  = let (env', ndata) = resolveLlvmData env udata
-    in resolveLlvmDatas env' rest (ldata ++ [ndata])
+resolveLlvmDatas (udata : rest) ldata
+  = do ndata <- resolveLlvmData udata
+       resolveLlvmDatas rest (ldata ++ [ndata])
 
 -- | Fix up CLabel references now that we should have passed all CmmData.
-resolveLlvmData :: LlvmEnv -> LlvmUnresData -> (LlvmEnv, LlvmData)
-resolveLlvmData env (lbl, sec, alias, unres) =
-    let (env', static, refs) = resDatas env unres ([], [])
-        refs'          = catMaybes refs
+resolveLlvmData :: LlvmUnresData -> LlvmM LlvmData
+resolveLlvmData (lbl, sec, alias, unres) = do
+    label             <- strCLabel_llvm lbl
+    (static, refs)    <- resDatas unres ([], [])
+    let refs'          = catMaybes refs
         struct         = Just $ LMStaticStruc static alias
-        label          = strCLabel_llvm env lbl
         link           = if (externallyVisibleCLabel lbl)
                             then ExternallyVisible else Internal
         const          = isSecConstant sec
         glob           = LMGlobalVar label alias link Nothing Nothing const
-    in (env', (refs' ++ [LMGlobal glob struct], [alias]))
+    return (refs' ++ [LMGlobal glob struct], [alias])
 
 
 -- | Should a data in this section be considered constant
@@ -90,15 +90,15 @@ isSecConstant (OtherSection _)        = False
 --
 
 -- | Resolve data list
-resDatas :: LlvmEnv -> [UnresStatic] -> ([LlvmStatic], [Maybe LMGlobal])
-         -> (LlvmEnv, [LlvmStatic], [Maybe LMGlobal])
+resDatas :: [UnresStatic] -> ([LlvmStatic], [Maybe LMGlobal])
+         -> LlvmM ([LlvmStatic], [Maybe LMGlobal])
 
-resDatas env [] (stat, glob)
-  = (env, stat, glob)
+resDatas [] (stat, glob)
+  = return (stat, glob)
 
-resDatas env (cmm : rest) (stats, globs)
-  = let (env', nstat, nglob) = resData env cmm
-    in resDatas env' rest (stats ++ [nstat], globs ++ nglob)
+resDatas (cmm : rest) (stats, globs)
+  = do (nstat, nglob) <- resData cmm
+       resDatas rest (stats ++ [nstat], globs ++ nglob)
 
 -- | Resolve an individual static label if it needs to be.
 --
@@ -106,42 +106,42 @@ resDatas env (cmm : rest) (stats, globs)
 -- module. If it has we can retrieve its type and make a pointer, otherwise
 -- we introduce a generic external definition for the referenced label and
 -- then make a pointer.
-resData :: LlvmEnv -> UnresStatic -> (LlvmEnv, LlvmStatic, [Maybe LMGlobal])
+resData :: UnresStatic -> LlvmM (LlvmStatic, [Maybe LMGlobal])
 
-resData env (Right stat) = (env, stat, [Nothing])
+resData (Right stat) = return (stat, [Nothing])
 
-resData env (Left cmm@(CmmLabel l)) =
-    let label = strCLabel_llvm env l
-        ty = funLookup label env
-        lmty = cmmToLlvmType $ cmmLitType cmm
-    in case ty of
+resData (Left cmm@(CmmLabel l)) = do
+    label <- strCLabel_llvm l
+    ty <- funLookup label
+    let lmty = cmmToLlvmType $ cmmLitType cmm
+    case ty of
             -- Make generic external label defenition and then pointer to it
-            Nothing ->
+            Nothing -> do
                 let glob@(LMGlobal var _) = genStringLabelRef label
-                    env' =  funInsert label (pLower $ getVarType var) env
                     ptr  = LMStaticPointer var
-                in  (env', LMPtoI ptr lmty, [Just glob])
+                funInsert label (pLower $ getVarType var)
+                return (LMPtoI ptr lmty, [Just glob])
             -- Referenced data exists in this module, retrieve type and make
             -- pointer to it.
             Just ty' ->
                 let var = LMGlobalVar label (LMPointer ty')
                             ExternallyVisible Nothing Nothing False
                     ptr  = LMStaticPointer var
-                in (env, LMPtoI ptr lmty, [Nothing])
+                in return (LMPtoI ptr lmty, [Nothing])
 
-resData env (Left (CmmLabelOff label off)) =
-    let (env', var, glob) = resData env (Left (CmmLabel label))
+resData (Left (CmmLabelOff label off)) = do
+    (var, glob) <- resData (Left (CmmLabel label))
+    let offset = LMStaticLit $ LMIntLit (toInteger off) llvmWord
+    return (LMAdd var offset, glob)
+
+resData (Left (CmmLabelDiffOff l1 l2 off)) = do
+    (var1, glob1) <- resData (Left (CmmLabel l1))
+    (var2, glob2) <- resData (Left (CmmLabel l2))
+    let var = LMSub var1 var2
         offset = LMStaticLit $ LMIntLit (toInteger off) llvmWord
-    in (env', LMAdd var offset, glob)
+    return (LMAdd var offset, glob1 ++ glob2)
 
-resData env (Left (CmmLabelDiffOff l1 l2 off)) =
-    let (env1, var1, glob1) = resData env (Left (CmmLabel l1))
-        (env2, var2, glob2) = resData env1 (Left (CmmLabel l2))
-        var = LMSub var1 var2
-        offset = LMStaticLit $ LMIntLit (toInteger off) llvmWord
-    in (env2, LMAdd var offset, glob1 ++ glob2)
-
-resData _ _ = panic "resData: Non CLabel expr as left type!"
+resData _ = panic "resData: Non CLabel expr as left type!"
 
 -- ----------------------------------------------------------------------------
 -- * Generate static data

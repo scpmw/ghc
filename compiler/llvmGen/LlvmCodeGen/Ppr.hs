@@ -82,50 +82,51 @@ pprLlvmData (globals, types) =
 
 
 -- | Pretty print LLVM code
-pprLlvmCmmDecl :: LlvmEnv -> TickMap -> Int -> LlvmCmmDecl -> (SDoc, [LlvmVar])
-pprLlvmCmmDecl _ _ _ (CmmData _ lmdata)
-  = (vcat $ map pprLlvmData lmdata, [])
+pprLlvmCmmDecl :: TickMap -> Int -> LlvmCmmDecl -> LlvmM (SDoc, [LlvmVar])
+pprLlvmCmmDecl _ _ (CmmData _ lmdata)
+  = return (vcat $ map pprLlvmData lmdata, [])
 
-pprLlvmCmmDecl env tick_map count (CmmProc mb_info entry_lbl (ListGraph blks))
-  = let (idoc, ivar) = case mb_info of
-                        Nothing -> (empty, [])
+pprLlvmCmmDecl tick_map count (CmmProc mb_info entry_lbl (ListGraph blks))
+  = do (idoc, ivar) <- case mb_info of
+                        Nothing -> return (empty, [])
                         Just (Statics info_lbl dat)
-                         -> pprInfoTable env count info_lbl (Statics entry_lbl dat)
-    in (idoc $+$ (
-        let sec = mkLayoutSection (count + 1)
-            (lbl',sec') = case mb_info of
+                         -> pprInfoTable count info_lbl (Statics entry_lbl dat)
+
+       let sec = mkLayoutSection (count + 1)
+           (lbl',sec') = case mb_info of
                            Nothing                   -> (entry_lbl, Nothing)
                            Just (Statics info_lbl _) -> (info_lbl,  sec)
-            link = if externallyVisibleCLabel lbl'
+           link = if externallyVisibleCLabel lbl'
                       then ExternallyVisible
                       else Internal
-            lmblocks = map (\(BasicBlock id stmts) ->
+           lmblocks = map (\(BasicBlock id stmts) ->
                                 LlvmBlock (getUnique id) stmts) blks
-            instr = Map.lookup entry_lbl tick_map >>= timInstr
-            fun = mkLlvmFunc env lbl' link  sec' lmblocks instr
-        in ppLlvmFunction fun
-    ), ivar)
+           instr = Map.lookup entry_lbl tick_map >>= timInstr
+
+       fun <- mkLlvmFunc lbl' link  sec' lmblocks instr
+
+       return (idoc $+$ ppLlvmFunction fun, ivar)
 
 
 -- | Pretty print CmmStatic
-pprInfoTable :: LlvmEnv -> Int -> CLabel -> CmmStatics -> (SDoc, [LlvmVar])
-pprInfoTable env count info_lbl stat
-  = let unres = genLlvmData env (Text, stat)
-        (_, (ldata, ltypes)) = resolveLlvmData env unres
+pprInfoTable :: Int -> CLabel -> CmmStatics -> LlvmM (SDoc, [LlvmVar])
+pprInfoTable count info_lbl stat
+  = do unres <- genLlvmData (Text, stat)
+       (ldata, ltypes) <- resolveLlvmData unres
 
-        setSection (LMGlobal (LMGlobalVar _ ty l _ _ c) d)
-            = let sec = mkLayoutSection count
-                  ilabel = strCLabel_llvm env info_lbl
-                              `appendFS` fsLit iTableSuf
-                  gv = LMGlobalVar ilabel ty l sec llvmInfAlign c
-                  v = if l == Internal then [gv] else []
-              in (LMGlobal gv d, v)
-        setSection v = (v,[])
+       let setSection (LMGlobal (LMGlobalVar _ ty l _ _ c) d) = do
+             lbl <- strCLabel_llvm info_lbl
+             let sec = mkLayoutSection count
+                 ilabel = lbl `appendFS` fsLit iTableSuf
+                 gv = LMGlobalVar ilabel ty l sec llvmInfAlign c
+                 v = if l == Internal then [gv] else []
+             return (LMGlobal gv d, v)
+           setSection v = return (v,[])
 
-        (ldata', llvmUsed) = setSection (last ldata)
-    in if length ldata /= 1
+       (ldata', llvmUsed) <- setSection (last ldata)
+       if length ldata /= 1
           then Outputable.panic "LlvmCodeGen.Ppr: invalid info table!"
-          else (pprLlvmData ([ldata'], ltypes), llvmUsed)
+          else return (pprLlvmData ([ldata'], ltypes), llvmUsed)
 
 
 -- | We generate labels for info tables by converting them to the same label

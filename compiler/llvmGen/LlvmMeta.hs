@@ -28,6 +28,7 @@ import Platform
 import SrcLoc          (srcSpanFile,
                         srcSpanStartLine, srcSpanStartCol,
                         srcSpanEndLine, srcSpanEndCol)
+import MonadUtils      ( MonadIO(..) )
 
 import System.Directory(getCurrentDirectory)
 import Control.Monad   (forM, forM_)
@@ -59,9 +60,8 @@ dW_LANG_Haskell  = 0x8042 -- Chosen arbitrarily
 pprMeta :: Int -> LlvmStatic -> SDoc
 pprMeta n val = pprLlvmData ([LMGlobal (LMMetaVar n) (Just val)], [])
 
-cmmMetaLlvmGens :: DynFlags -> ModLocation ->
-                   (SDoc -> IO ()) -> TickMap -> LlvmEnv -> [RawCmmDecl] -> IO ()
-cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
+cmmMetaLlvmGens :: DynFlags -> ModLocation -> TickMap -> [RawCmmDecl] -> LlvmM ()
+cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
 
   -- We need to be able to find ticks by ID
   let idLabelMap :: Map Int CLabel
@@ -72,15 +72,15 @@ cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
 
   -- Allocate IDs. The instrumentation numbers will have been used for
   -- line annotations, so we make new IDs start right after them.
-  lastId <- newIORef $ fromMaybe 0 (maximum $ (Nothing:) $ map timInstr $ elems tiMap)
-  let freshId = modifyIORef lastId (+1) >> readIORef lastId
+  lastId <- liftIO $ newIORef $ fromMaybe 0 (maximum $ (Nothing:) $ map timInstr $ elems tiMap)
+  let freshId = liftIO (modifyIORef lastId (+1) >> readIORef lastId)
 
   -- Emit compile unit information.
-  srcPath <- getCurrentDirectory
+  srcPath <- liftIO $ getCurrentDirectory
   let srcFile  = fromMaybe "" (ml_hs_file mod_loc)
       producerName = cProjectName ++ " " ++ cProjectVersion
   unitId <- freshId
-  render $ pprMeta unitId $ LMMeta
+  renderLlvm $ pprMeta unitId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_compile_unit)
     , LMStaticLit (LMNullLit LMMetaType)         -- "unused"
     , LMStaticLit (mkI32 dW_LANG_Haskell)        -- DWARF language identifier
@@ -96,7 +96,7 @@ cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
 
   -- Subprogram type we use: void (*)()
   srtypeId <- freshId
-  render $ pprMeta srtypeId $ LMMeta
+  renderLlvm $ pprMeta srtypeId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_subroutine_type)
     , LMMetaRef unitId                           -- Context
     , LMMetaString (fsLit "")                    -- Name (anonymous)
@@ -123,7 +123,7 @@ cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
     -- TODO: Note that right this might come from other modules via
     -- inlining, so we might get bad mixing of base paths here.
     fileId <- freshId
-    emitFileMeta render fileId unitId (unpackFS file)
+    emitFileMeta fileId unitId (unpackFS file)
     return (file, fileId)
 
   -- Unless we already have one, emit a "default" file metadata for
@@ -135,7 +135,7 @@ cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
     Just fileId -> return fileId
     Nothing     -> do
       fileId <- freshId
-      emitFileMeta render fileId unitId unitFile
+      emitFileMeta fileId unitId unitFile
       return fileId
 
   -- Emit metadata for files and procedures
@@ -154,11 +154,11 @@ cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
       Just (CmmProc infos _ (ListGraph blocks)) | not (null blocks) -> do
 
         -- Generate metadata for procedure
-        let entryLabel = strCLabel_llvm env $ case infos of
+        entryLabel <- strCLabel_llvm $ case infos of
               Nothing               -> lbl
               Just (Statics lbl' _) -> lbl'
         procId <- freshId
-        emitProcMeta render procId unitId srtypeId entryLabel procTick defaultFileId (line, col) dflags fileMap
+        emitProcMeta procId unitId srtypeId entryLabel procTick defaultFileId (line, col) dflags fileMap
 
         -- Generate source annotation using the given ID (this is used to
         -- reference it from LLVM code). This information has little
@@ -169,7 +169,7 @@ cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
         -- instrumentation IDs weren't unique per procedure!
         case timInstr tim of
           Just i ->
-            render $ pprMeta i $ LMMeta $
+            renderLlvm $ pprMeta i $ LMMeta $
               [ LMStaticLit (mkI32 $ fromIntegral line) -- Source line (yes, no tag!)
               , LMStaticLit (mkI32 $ fromIntegral col)  -- Source column (ignored)
               , LMMetaRef procId
@@ -183,10 +183,10 @@ cmmMetaLlvmGens dflags mod_loc render tiMap env cmm = do
 
   return ()
 
-emitFileMeta :: (SDoc -> IO ()) -> Int -> Int -> FilePath -> IO ()
-emitFileMeta render fileId unitId filePath = do
-  srcPath <- getCurrentDirectory
-  render $ pprMeta fileId $ LMMeta
+emitFileMeta :: Int -> Int -> FilePath -> LlvmM ()
+emitFileMeta fileId unitId filePath = do
+  srcPath <- liftIO $ getCurrentDirectory
+  renderLlvm $ pprMeta fileId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_file_type)
     , LMMetaString (fsLit filePath)              -- Source file name
     , LMMetaString (fsLit srcPath)               -- Source file directory
@@ -194,16 +194,16 @@ emitFileMeta render fileId unitId filePath = do
     ]
 
 emitProcMeta ::
-  (SDoc -> IO ()) -> Int -> Int -> Int -> LMString -> Maybe (Tickish ()) -> Int
+  Int -> Int -> Int -> LMString -> Maybe (Tickish ()) -> Int
   -> (Int, Int) -> DynFlags -> Map FastString Int
-  -> IO ()
-emitProcMeta render procId unitId srtypeId entryLabel procTick defaultFileId (line, _) dflags fileMap = do
+  -> LlvmM ()
+emitProcMeta procId unitId srtypeId entryLabel procTick defaultFileId (line, _) dflags fileMap = do
 
   let srcFileLookup = flip Map.lookup fileMap . srcSpanFile . sourceSpan
       fileId = fromMaybe defaultFileId (procTick >>= srcFileLookup)
       funRef = LMGlobalVar entryLabel (LMPointer llvmFunTy) Internal Nothing Nothing True
 
-  render $ pprMeta procId $ LMMeta
+  renderLlvm $ pprMeta procId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_subprogram)
     , LMStaticLit (mkI32 0)                      -- "Unused"
     , LMMetaRef unitId                           -- Reference to compile unit
@@ -363,9 +363,8 @@ collectBinds (CoreNote bnd _) = [bnd]
 collectBinds _                = []
 
 cmmDebugLlvmGens :: DynFlags -> ModLocation ->
-                    (SDoc -> IO ()) -> TickMap -> LlvmEnv ->
-                    [RawCmmDecl] -> IO ()
-cmmDebugLlvmGens dflags mod_loc render tick_map _env cmm = do
+                    TickMap -> [RawCmmDecl] -> LlvmM ()
+cmmDebugLlvmGens dflags mod_loc tick_map cmm = do
 
   let collect tim = concatMap collectBinds $ timTicks tim
       binds =  Set.fromList $ concatMap collect $ elems tick_map
@@ -379,7 +378,7 @@ cmmDebugLlvmGens dflags mod_loc render tick_map _env cmm = do
       lmDebugVar = LMGlobalVar debug_sym ty Internal sectName Nothing False
       lmDebug    = LMGlobal lmDebugVar (Just events)
 
-  render $ pprLlvmData ([lmDebug], [])
+  renderLlvm $ pprLlvmData ([lmDebug], [])
 
 mkI8, mkI16, mkI32, mkI64 :: Integer -> LlvmLit
 mkI8 n = LMIntLit n (LMInt 8)
