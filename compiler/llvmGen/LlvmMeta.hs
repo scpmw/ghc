@@ -371,14 +371,16 @@ cmmDebugLlvmGens dflags mod_loc tick_map cmm = do
 
   let platform = targetPlatform dflags
 
-  let events     = flattenStruct $ mkEvents platform binds mod_loc tick_map cmm
-      ty         = getStatType events
-      debug_sym  = fsLit "__debug_ghc"
+  let events = flattenStruct $ mkEvents platform binds mod_loc tick_map cmm
+
+  -- Names for symbol / section
+  let debug_sym  = fsLit $ "__debug_ghc"
       sectName   = Just $ fsLit ".debug_ghc"
-      lmDebugVar = LMGlobalVar debug_sym ty Internal sectName Nothing False
+      lmDebugVar = LMGlobalVar debug_sym (getStatType events) Internal sectName Nothing False
       lmDebug    = LMGlobal lmDebugVar (Just events)
 
   renderLlvm $ pprLlvmData ([lmDebug], [])
+  markUsedVar lmDebugVar
 
 mkI8, mkI16, mkI32, mkI64 :: Integer -> LlvmLit
 mkI8 n = LMIntLit n (LMInt 8)
