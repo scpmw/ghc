@@ -218,7 +218,7 @@ We don't float lets inwards past an SCC.
 
 \begin{code}
 fiExpr to_drop (_, AnnTick tickish expr)
-  | tickishScoped tickish
+  | tickishScoped tickish && not (tickishLax tickish)
   =     -- Wimp out for now - we could push values in
     mkCoLets' to_drop (Tick tickish (fiExpr [] expr))
 

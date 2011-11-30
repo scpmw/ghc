@@ -44,7 +44,7 @@ module CoreSyn (
         isRuntimeArg, isRuntimeVar,
 
         tickishCounts, tickishScoped, tickishIsCode, mkNoTick, mkNoScope,
-        tickishCanSplit,
+        tickishCanSplit, tickishLax,
 
         -- * Unfolding data types
         Unfolding(..),  UnfoldingGuidance(..), UnfoldingSource(..),
@@ -447,6 +447,12 @@ tickishIsCode _tickish     = True  -- all the rest for now
 tickishCanSplit :: Tickish Id -> Bool
 tickishCanSplit Breakpoint{} = False
 tickishCanSplit _ = True
+
+-- | Return True if it is okay to float new code into the tick
+tickishLax :: Tickish id -> Bool
+tickishLax SourceNote{} = True
+tickishLax _tickish     = False  -- all the rest for now
+
 \end{code}
 
 
