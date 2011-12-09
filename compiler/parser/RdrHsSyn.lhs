@@ -54,6 +54,7 @@ import RdrName          ( RdrName, isRdrTyVar, isRdrTc, mkUnqual, rdrNameOcc,
 import Name             ( Name )
 import BasicTypes       ( maxPrecedence, Activation(..), RuleMatchInfo,
                           InlinePragma(..), InlineSpec(..) )
+import TcEvidence       ( idHsWrapper )
 import Lexer
 import TysWiredIn       ( unitTyCon )
 import ForeignCall
@@ -885,7 +886,8 @@ mk_rec_fields fs False = HsRecFields { rec_flds = fs, rec_dotdot = Nothing }
 mk_rec_fields fs True  = HsRecFields { rec_flds = fs, rec_dotdot = Just (length fs) }
 
 mkInlinePragma :: (InlineSpec, RuleMatchInfo) -> Maybe Activation -> InlinePragma
--- The Maybe is because the user can omit the activation spec (and usually does)
+-- The (Maybe Activation) is because the user can omit 
+-- the activation spec (and usually does)
 mkInlinePragma (inl, match_info) mb_act
   = InlinePragma { inl_inline = inl
                  , inl_sat    = Nothing

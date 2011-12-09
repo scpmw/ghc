@@ -15,8 +15,8 @@ module TcRnMonad(
 
 import TcRnTypes        -- Re-export all
 import IOEnv            -- Re-export all
+import TcEvidence
 
-import Coercion
 import HsSyn hiding (LIE)
 import HscTypes
 import Module
@@ -382,11 +382,6 @@ newSysLocalIds fs tys
   = do  { us <- newUniqueSupply
         ; return (zipWith (mkSysLocal fs) (uniqsFromSupply us) tys) }
 
-newCoVar :: TcType -> TcType -> TcRnIf gbl lcl EvVar
-newCoVar ty1 ty2
-  = do { uniq <- newUnique
-       ; return (mkLocalId (mkInternalName uniq (mkVarOccFS (fsLit "co")) noSrcSpan) (mkCoercionType ty1 ty2)) }
-
 newName :: OccName -> TcM Name
 newName occ
   = do { uniq <- newUnique
@@ -611,10 +606,15 @@ discardWarnings :: TcRn a -> TcRn a
 -- Ignore warnings inside the thing inside;
 -- used to ignore-unused-variable warnings inside derived code
 discardWarnings thing_inside
-  = do  { errs_var <- newTcRef emptyMessages
-        ; result <- setErrsVar errs_var thing_inside
-        ; (_warns, errs) <- readTcRef errs_var
-        ; addMessages (emptyBag, errs)
+  = do  { errs_var <- getErrsVar
+        ; (old_warns, _) <- readTcRef errs_var ;
+
+        ; result <- thing_inside
+
+        -- Revert warnings to old_warns
+        ; (_new_warns, new_errs) <- readTcRef errs_var
+        ; writeTcRef errs_var (old_warns, new_errs) 
+
         ; return result }
 \end{code}
 
@@ -627,7 +627,7 @@ discardWarnings thing_inside
 
 \begin{code}
 addReport :: Message -> Message -> TcRn ()
-addReport msg extra_info = do loc <- getSrcSpanM; addReportAt loc msg extra_info
+addReport msg extra_info = do { traceTc "addr" msg; loc <- getSrcSpanM; addReportAt loc msg extra_info }
 
 addReportAt :: SrcSpan -> Message -> Message -> TcRn ()
 addReportAt loc msg extra_info
@@ -1011,7 +1011,7 @@ emitWantedCts = mapBagM_ emit_wanted_ct
           | v <- cc_id ct 
           , Wanted loc <- cc_flavor ct 
           = emitFlat (EvVarX v loc)
-          | otherwise = panic "emitWantecCts: can't emit non-wanted!"
+          | otherwise = panic "emitWantedCts: can't emit non-wanted!"
 
 emitImplication :: Implication -> TcM ()
 emitImplication ct

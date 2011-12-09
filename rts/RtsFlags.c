@@ -113,7 +113,7 @@ void initRtsFlagsDefaults(void)
 #ifdef RTS_GTK_FRONTPANEL
     RtsFlags.GcFlags.frontpanel         = rtsFalse;
 #endif
-    RtsFlags.GcFlags.idleGCDelayTime    = 300; /* millisecs */
+    RtsFlags.GcFlags.idleGCDelayTime    = USToTime(300000); // 300ms
 
 #if osf3_HOST_OS
 /* ToDo: Perhaps by adjusting this value we can make linking without
@@ -150,7 +150,7 @@ void initRtsFlagsDefaults(void)
 #endif /* PROFILING */
 
     RtsFlags.ProfFlags.doHeapProfile      = rtsFalse;
-    RtsFlags.ProfFlags.profileInterval    = 100;
+    RtsFlags.ProfFlags. heapProfileInterval = USToTime(100000); // 100ms
 
 #ifdef PROFILING
     RtsFlags.ProfFlags.includeTSOs        = rtsFalse;
@@ -176,8 +176,13 @@ void initRtsFlagsDefaults(void)
     RtsFlags.TraceFlags.user          = rtsFalse;
 #endif
 
-    RtsFlags.MiscFlags.tickInterval	= 20;  /* In milliseconds */
-    RtsFlags.ConcFlags.ctxtSwitchTime	= 20;  /* In milliseconds */
+#ifdef PROFILING
+    // When profiling we want a lot more ticks
+    RtsFlags.MiscFlags.tickInterval     = USToTime(1000);  // 1ms
+#else
+    RtsFlags.MiscFlags.tickInterval     = DEFAULT_TICK_INTERVAL;
+#endif
+    RtsFlags.ConcFlags.ctxtSwitchTime   = USToTime(20000); // 20ms
 
     RtsFlags.MiscFlags.install_signal_handlers = rtsTrue;
     RtsFlags.MiscFlags.machineReadable = rtsFalse;
@@ -248,7 +253,7 @@ usage_text[] = {
 "  -I<sec>  Perform full GC after <sec> idle time (default: 0.3, 0 == off)",
 #endif
 "",
-"  -T         Collect GC statistics (useful for in-program statistics access)"
+"  -T         Collect GC statistics (useful for in-program statistics access)",
 "  -t[<file>] One-line GC statistics (if <file> omitted, uses stderr)",
 "  -s[<file>] Summary  GC statistics (if <file> omitted, uses stderr)",
 "  -S[<file>] Detailed GC statistics (if <file> omitted, uses stderr)",
@@ -316,9 +321,9 @@ usage_text[] = {
 
 #if !defined(PROFILING)
 "",
-"  -hT      Heap residency profile (output file <program>.hp)",
+"  -h       Heap residency profile (output file <program>.hp)",
 #endif
-"  -i<sec>  Time between heap samples (seconds, default: 0.1)",
+"  -i<sec>  Time between heap profile samples (seconds, default: 0.1)",
 "",
 #if defined(TICKY_TICKY)
 "  -r<file>  Produce ticky-ticky statistics (with -rstderr for stderr)",
@@ -326,10 +331,15 @@ usage_text[] = {
 #endif
 "  -C<secs>  Context-switch interval in seconds.",
 "            0 or no argument means switch as often as possible.",
-"            Default: 0.02 sec; resolution is set by -V below.",
-"  -V<secs>  Master tick interval in seconds (0 == disable timer).",
-"            This sets the resolution for -C and the profile timer -i.",
 "            Default: 0.02 sec.",
+"  -V<secs>  Master tick interval in seconds (0 == disable timer).",
+"            This sets the resolution for -C and the heap profile timer -i,",
+"            and is the frequence of time profile samples.",
+#ifdef PROFILING
+"            Default: 0.001 sec.",
+#else
+"            Default: 0.01 sec.",
+#endif
 "",
 #if defined(DEBUG)
 "  -Ds  DEBUG: scheduler",
@@ -932,11 +942,8 @@ error = rtsTrue;
 		if (rts_argv[arg][2] == '\0') {
 		  /* use default */
 		} else {
-		    I_ cst; /* tmp */
-
-		    /* Convert to millisecs */
-		    cst = (I_) ((atof(rts_argv[arg]+2) * 1000));
-		    RtsFlags.GcFlags.idleGCDelayTime = cst;
+                    RtsFlags.GcFlags.idleGCDelayTime =
+                        fsecondsToTime(atof(rts_argv[arg]+2));
 		}
 		break;
 
@@ -1138,12 +1145,9 @@ error = rtsTrue;
 		if (rts_argv[arg][2] == '\0') {
 		  /* use default */
 		} else {
-		    I_ cst; /* tmp */
-
-		    /* Convert to milliseconds */
-		    cst = (I_) ((atof(rts_argv[arg]+2) * 1000));
-		    RtsFlags.ProfFlags.profileInterval = cst;
-		}
+                    RtsFlags.ProfFlags.heapProfileInterval =
+                        fsecondsToTime(atof(rts_argv[arg]+2));
+                }
 		break;
 
 	      /* =========== CONCURRENT ========================= */
@@ -1152,12 +1156,9 @@ error = rtsTrue;
 		if (rts_argv[arg][2] == '\0')
     	    	    RtsFlags.ConcFlags.ctxtSwitchTime = 0;
 		else {
-		    I_ cst; /* tmp */
-
-		    /* Convert to milliseconds */
-		    cst = (I_) ((atof(rts_argv[arg]+2) * 1000));
-		    RtsFlags.ConcFlags.ctxtSwitchTime = cst;
-		}
+                    RtsFlags.ConcFlags.ctxtSwitchTime =
+                        fsecondsToTime(atof(rts_argv[arg]+2));
+                }
     	    	break;
 
               case 'V': /* master tick interval */
@@ -1166,11 +1167,8 @@ error = rtsTrue;
                     // turns off ticks completely
                     RtsFlags.MiscFlags.tickInterval = 0;
                 } else {
-                    I_ cst; /* tmp */
-
-                    /* Convert to milliseconds */
-                    cst = (I_) ((atof(rts_argv[arg]+2) * 1000));
-                    RtsFlags.MiscFlags.tickInterval = cst;
+                    RtsFlags.MiscFlags.tickInterval =
+                        fsecondsToTime(atof(rts_argv[arg]+2));
                 }
                 break;
 
@@ -1197,12 +1195,6 @@ error = rtsTrue;
                       errorBelch("Using large values for -N is not allowed by default. Link with -rtsopts to allow full control.");
                       stg_exit(EXIT_FAILURE);
                     }
-#if defined(PROFILING)
-                    if (nNodes > 1) {
-                        errorBelch("bad option %s: only -N1 is supported with profiling", rts_argv[arg]);
-		      error = rtsTrue;
-                    }
-#endif
                     RtsFlags.ParFlags.nNodes = (nat)nNodes;
 		}
 		) break;
@@ -1406,14 +1398,14 @@ error = rtsTrue;
 static void normaliseRtsOpts (void)
 {
     if (RtsFlags.MiscFlags.tickInterval < 0) {
-        RtsFlags.MiscFlags.tickInterval = 50;
+        RtsFlags.MiscFlags.tickInterval = DEFAULT_TICK_INTERVAL;
     }
 
     // If the master timer is disabled, turn off the other timers.
     if (RtsFlags.MiscFlags.tickInterval == 0) {
         RtsFlags.ConcFlags.ctxtSwitchTime  = 0;
         RtsFlags.GcFlags.idleGCDelayTime   = 0;
-        RtsFlags.ProfFlags.profileInterval = 0;
+        RtsFlags.ProfFlags.heapProfileInterval = 0;
     }
 
     // Determine what tick interval we should use for the RTS timer
@@ -1431,9 +1423,9 @@ static void normaliseRtsOpts (void)
                     RtsFlags.MiscFlags.tickInterval);
     }
 
-    if (RtsFlags.ProfFlags.profileInterval > 0) {
+    if (RtsFlags.ProfFlags.heapProfileInterval > 0) {
         RtsFlags.MiscFlags.tickInterval =
-            stg_min(RtsFlags.ProfFlags.profileInterval,
+            stg_min(RtsFlags.ProfFlags.heapProfileInterval,
                     RtsFlags.MiscFlags.tickInterval);
     }
 
@@ -1445,12 +1437,12 @@ static void normaliseRtsOpts (void)
         RtsFlags.ConcFlags.ctxtSwitchTicks = 0;
     }
 
-    if (RtsFlags.ProfFlags.profileInterval > 0) {
-        RtsFlags.ProfFlags.profileIntervalTicks =
-            RtsFlags.ProfFlags.profileInterval / 
+    if (RtsFlags.ProfFlags.heapProfileInterval > 0) {
+        RtsFlags.ProfFlags.heapProfileIntervalTicks =
+            RtsFlags.ProfFlags.heapProfileInterval / 
             RtsFlags.MiscFlags.tickInterval;
     } else {
-        RtsFlags.ProfFlags.profileIntervalTicks = 0;
+        RtsFlags.ProfFlags.heapProfileIntervalTicks = 0;
     }
 
     if (RtsFlags.GcFlags.stkChunkBufferSize >

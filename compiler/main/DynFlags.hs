@@ -129,6 +129,9 @@ import qualified Data.Set as Set
 import System.FilePath
 import System.IO        ( stderr, hPutChar )
 
+import Data.IntSet (IntSet)
+import qualified Data.IntSet as IntSet
+
 -- -----------------------------------------------------------------------------
 -- DynFlags
 
@@ -220,6 +223,7 @@ data DynFlag
    | Opt_DoStgLinting
    | Opt_DoCmmLinting
    | Opt_DoAsmLinting
+   | Opt_NoLlvmMangler
 
    | Opt_WarnIsError                    -- -Werror; makes warnings fatal
 
@@ -265,7 +269,6 @@ data DynFlag
    | Opt_SplitObjs
    | Opt_StgStats
    | Opt_HideAllPackages
-   | Opt_DistrustAllPackages
    | Opt_PrintBindResult
    | Opt_Haddock
    | Opt_HaddockOptions
@@ -301,9 +304,10 @@ data DynFlag
    | Opt_KeepLlvmFiles
 
    -- safe haskell flags
+   | Opt_DistrustAllPackages
    | Opt_PackageTrust
 
-   deriving (Eq, Show)
+   deriving (Eq, Show, Enum)
 
 data WarningFlag =
      Opt_WarnDuplicateExports
@@ -340,7 +344,7 @@ data WarningFlag =
    | Opt_WarnAlternativeLayoutRuleTransitional
    | Opt_WarnUnsafe
    | Opt_WarnSafe
-   deriving (Eq, Show)
+   deriving (Eq, Show, Enum)
 
 data Language = Haskell98 | Haskell2010
    deriving Enum
@@ -374,6 +378,7 @@ data ExtensionFlag
    | Opt_ForeignFunctionInterface
    | Opt_UnliftedFFITypes
    | Opt_InterruptibleFFI
+   | Opt_CApiFFI
    | Opt_GHCForeignImportPrim
    | Opt_ParallelArrays           -- Syntactic support for parallel arrays
    | Opt_Arrows                   -- Arrow-notation syntax
@@ -551,8 +556,8 @@ data DynFlags = DynFlags {
   generatedDumps        :: IORef (Set FilePath),
 
   -- hsc dynamic flags
-  flags                 :: [DynFlag],
-  warningFlags          :: [WarningFlag],
+  flags                 :: IntSet,
+  warningFlags          :: IntSet,
   -- Don't change this without updating extensionFlags:
   language              :: Maybe Language,
   -- | Safe Haskell mode
@@ -568,7 +573,7 @@ data DynFlags = DynFlags {
   extensions            :: [OnOff ExtensionFlag],
   -- extensionFlags should always be equal to
   --     flattenExtensionFlags language extensions
-  extensionFlags        :: [ExtensionFlag],
+  extensionFlags        :: IntSet,
 
   -- | Message output action: use "ErrUtils" instead of this if you can
   log_action            :: LogAction,
@@ -584,6 +589,7 @@ data ProfAuto
   | ProfAutoAll        -- ^ top-level and nested functions are annotated
   | ProfAutoTop        -- ^ top-level functions annotated only
   | ProfAutoExports    -- ^ exported functions annotated only
+  | ProfAutoCalls      -- ^ annotate call-sites
 
 data Settings = Settings {
   sTargetPlatform        :: Platform,    -- Filled in by SysTools
@@ -893,8 +899,8 @@ defaultDynFlags mySettings =
         dirsToClean    = panic "defaultDynFlags: No dirsToClean",
         generatedDumps = panic "defaultDynFlags: No generatedDumps",
         haddockOptions = Nothing,
-        flags = defaultFlags,
-        warningFlags = standardWarnings,
+        flags = IntSet.fromList (map fromEnum defaultFlags),
+        warningFlags = IntSet.fromList (map fromEnum standardWarnings),
         language = Nothing,
         safeHaskell = Sf_SafeInfered,
         thOnLoc = noSrcSpan,
@@ -937,12 +943,11 @@ data OnOff a = On a
 
 -- OnOffs accumulate in reverse order, so we use foldr in order to
 -- process them in the right order
-flattenExtensionFlags :: Maybe Language -> [OnOff ExtensionFlag]
-                      -> [ExtensionFlag]
+flattenExtensionFlags :: Maybe Language -> [OnOff ExtensionFlag] -> IntSet
 flattenExtensionFlags ml = foldr f defaultExtensionFlags
-    where f (On f)  flags = f : delete f flags
-          f (Off f) flags =     delete f flags
-          defaultExtensionFlags = languageExtensions ml
+    where f (On f)  flags = IntSet.insert (fromEnum f) flags
+          f (Off f) flags = IntSet.delete (fromEnum f) flags
+          defaultExtensionFlags = IntSet.fromList (map fromEnum (languageExtensions ml))
 
 languageExtensions :: Maybe Language -> [ExtensionFlag]
 
@@ -984,31 +989,31 @@ languageExtensions (Just Haskell2010)
 
 -- | Test whether a 'DynFlag' is set
 dopt :: DynFlag -> DynFlags -> Bool
-dopt f dflags  = f `elem` (flags dflags)
+dopt f dflags  = fromEnum f `IntSet.member` flags dflags
 
 -- | Set a 'DynFlag'
 dopt_set :: DynFlags -> DynFlag -> DynFlags
-dopt_set dfs f = dfs{ flags = f : flags dfs }
+dopt_set dfs f = dfs{ flags = IntSet.insert (fromEnum f) (flags dfs) }
 
 -- | Unset a 'DynFlag'
 dopt_unset :: DynFlags -> DynFlag -> DynFlags
-dopt_unset dfs f = dfs{ flags = filter (/= f) (flags dfs) }
+dopt_unset dfs f = dfs{ flags = IntSet.delete (fromEnum f) (flags dfs) }
 
 -- | Test whether a 'WarningFlag' is set
 wopt :: WarningFlag -> DynFlags -> Bool
-wopt f dflags  = f `elem` (warningFlags dflags)
+wopt f dflags  = fromEnum f `IntSet.member` warningFlags dflags
 
 -- | Set a 'WarningFlag'
 wopt_set :: DynFlags -> WarningFlag -> DynFlags
-wopt_set dfs f = dfs{ warningFlags = f : warningFlags dfs }
+wopt_set dfs f = dfs{ warningFlags = IntSet.insert (fromEnum f) (warningFlags dfs) }
 
 -- | Unset a 'WarningFlag'
 wopt_unset :: DynFlags -> WarningFlag -> DynFlags
-wopt_unset dfs f = dfs{ warningFlags = filter (/= f) (warningFlags dfs) }
+wopt_unset dfs f = dfs{ warningFlags = IntSet.delete (fromEnum f) (warningFlags dfs) }
 
 -- | Test whether a 'ExtensionFlag' is set
 xopt :: ExtensionFlag -> DynFlags -> Bool
-xopt f dflags = f `elem` extensionFlags dflags
+xopt f dflags = fromEnum f `IntSet.member` extensionFlags dflags
 
 -- | Set a 'ExtensionFlag'
 xopt_set :: DynFlags -> ExtensionFlag -> DynFlags
@@ -1573,6 +1578,7 @@ dynamic_flags = [
   , Flag "dshow-passes"            (NoArg (do forceRecompile
                                               setVerbosity $ Just 2))
   , Flag "dfaststring-stats"       (NoArg (setDynFlag Opt_D_faststring_stats))
+  , Flag "dno-llvm-mangler"        (NoArg (setDynFlag Opt_NoLlvmMangler))
 
         ------ Machine dependant (-m<blah>) stuff ---------------------------
 
@@ -1587,9 +1593,9 @@ dynamic_flags = [
   , Flag "Werror" (NoArg (setDynFlag           Opt_WarnIsError))
   , Flag "Wwarn"  (NoArg (unSetDynFlag         Opt_WarnIsError))
   , Flag "Wall"   (NoArg (mapM_ setWarningFlag minusWallOpts))
-  , Flag "Wnot"   (NoArg (do upd (\dfs -> dfs {warningFlags = []})
+  , Flag "Wnot"   (NoArg (do upd (\dfs -> dfs {warningFlags = IntSet.empty})
                              deprecate "Use -w instead"))
-  , Flag "w"      (NoArg (upd (\dfs -> dfs {warningFlags = []})))
+  , Flag "w"      (NoArg (upd (\dfs -> dfs {warningFlags = IntSet.empty})))
 
         ------ Plugin flags ------------------------------------------------
   , Flag "fplugin-opt" (hasArg addPluginModuleNameOption)
@@ -1632,6 +1638,7 @@ dynamic_flags = [
   , Flag "fprof-auto"             (noArg (\d -> d { profAuto = ProfAutoAll } ))
   , Flag "fprof-auto-top"         (noArg (\d -> d { profAuto = ProfAutoTop } ))
   , Flag "fprof-auto-exported"    (noArg (\d -> d { profAuto = ProfAutoExports } ))
+  , Flag "fprof-auto-calls"       (noArg (\d -> d { profAuto = ProfAutoCalls } ))
   , Flag "fno-prof-auto"          (noArg (\d -> d { profAuto = NoProfAuto } ))
 
         ------ Compiler flags -----------------------------------------------
@@ -1894,6 +1901,7 @@ xFlags = [
   ( "ForeignFunctionInterface",         Opt_ForeignFunctionInterface, nop ),
   ( "UnliftedFFITypes",                 Opt_UnliftedFFITypes, nop ),
   ( "InterruptibleFFI",                 Opt_InterruptibleFFI, nop ),
+  ( "CApiFFI",                          Opt_CApiFFI, nop ),
   ( "GHCForeignImportPrim",             Opt_GHCForeignImportPrim, nop ),
   ( "LiberalTypeSynonyms",              Opt_LiberalTypeSynonyms, nop ),
   ( "Rank2Types",                       Opt_Rank2Types, nop ),

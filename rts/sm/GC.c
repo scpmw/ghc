@@ -189,7 +189,7 @@ GarbageCollect (rtsBool force_major_gc,
 #endif
 
 #ifdef PROFILING
-  CostCentreStack *prev_CCS;
+  CostCentreStack *save_CCS[n_capabilities];
 #endif
 
   ACQUIRE_SM_LOCK;
@@ -221,8 +221,10 @@ GarbageCollect (rtsBool force_major_gc,
 
   // attribute any costs to CCS_GC 
 #ifdef PROFILING
-  prev_CCS = CCCS;
-  CCCS = CCS_GC;
+  for (n = 0; n < n_capabilities; n++) {
+      save_CCS[n] = capabilities[n].r.rCCCS;
+      capabilities[n].r.rCCCS = CCS_GC;
+  }
 #endif
 
   /* Approximate how much we allocated.  
@@ -626,10 +628,8 @@ GarbageCollect (rtsBool force_major_gc,
 #ifdef PROFILING
   // resetStaticObjectForRetainerProfiling() must be called before
   // zeroing below.
-  if (n_gc_threads > 1) {
-      barf("profiling is currently broken with multi-threaded GC");
-      // ToDo: fix the gct->scavenged_static_objects below
-  }
+
+  // ToDo: fix the gct->scavenged_static_objects below
   resetStaticObjectForRetainerProfiling(gct->scavenged_static_objects);
 #endif
 
@@ -704,7 +704,9 @@ GarbageCollect (rtsBool force_major_gc,
 
   // restore enclosing cost centre 
 #ifdef PROFILING
-  CCCS = prev_CCS;
+  for (n = 0; n < n_capabilities; n++) {
+      capabilities[n].r.rCCCS = save_CCS[n];
+  }
 #endif
 
 #ifdef DEBUG
@@ -1112,7 +1114,7 @@ waitForGcThreads (Capability *cap USED_IF_THREADS)
             for (i=0; i < n_threads; i++) {
                 if (i == me) continue;
                 write_barrier();
-                setContextSwitches();
+                interruptAllCapabilities();
                 if (gc_threads[i]->wakeup != GC_THREAD_STANDING_BY) {
                     retry = rtsTrue;
                 }

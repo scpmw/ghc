@@ -1997,6 +1997,11 @@ loadArchive( char *path )
                we could do better. */
 #if defined(USE_MMAP)
             image = mmapForLinker(memberSize, MAP_ANONYMOUS, -1);
+#elif defined(mingw32_HOST_OS)
+        // TODO: We would like to use allocateExec here, but allocateExec
+        //       cannot currently allocate blocks large enough.
+            image = VirtualAlloc(NULL, memberSize, MEM_RESERVE | MEM_COMMIT,
+                                 PAGE_EXECUTE_READWRITE);
 #elif defined(darwin_HOST_OS)
             /* See loadObj() */
             misalignment = machoGetMisalignment(f);
@@ -2817,7 +2822,7 @@ cstring_from_section_name (UChar* name, UChar* strtab)
         int strtab_offset = strtol((char*)name+1,NULL,10);
         int len = strlen(((char*)strtab) + strtab_offset);
 
-        newstr = stgMallocBytes(len, "cstring_from_section_symbol_name");
+        newstr = stgMallocBytes(len+1, "cstring_from_section_symbol_name");
         strcpy((char*)newstr, (char*)((UChar*)strtab) + strtab_offset);
         return newstr;
     }

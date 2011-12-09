@@ -32,6 +32,7 @@ import RdrHsSyn
 import HscTypes         ( IsBootInterface, WarningTxt(..) )
 import Lexer
 import RdrName
+import TcEvidence       ( emptyTcEvBinds )
 import TysPrim          ( liftedTypeKindTyConName, eqPrimTyCon )
 import TysWiredIn       ( unitTyCon, unitDataCon, tupleTyCon, tupleCon, nilDataCon,
                           unboxedSingletonTyCon, unboxedSingletonDataCon,
@@ -244,6 +245,7 @@ incorrect.
  'family'       { L _ ITfamily }
  'stdcall'      { L _ ITstdcallconv }
  'ccall'        { L _ ITccallconv }
+ 'capi'         { L _ ITcapiconv }
  'prim'         { L _ ITprimcallconv }
  'proc'         { L _ ITproc }          -- for arrow notation extension
  'rec'          { L _ ITrec }           -- for arrow notation extension
@@ -589,11 +591,12 @@ topdecl :: { OrdList (LHsDecl RdrName) }
         | '{-# VECTORISE' 'type' gtycon '=' gtycon '#-}'     
                                                 { unitOL $ LL $ 
                                                     VectD (HsVectTypeIn False $3 (Just $5)) }
+        | '{-# VECTORISE_SCALAR' 'type' gtycon '=' gtycon '#-}'     
+                                                { unitOL $ LL $ 
+                                                    VectD (HsVectTypeIn True $3 (Just $5)) }
         | '{-# VECTORISE' 'class' gtycon '#-}'  { unitOL $ LL $ VectD (HsVectClassIn $3) }
-        | '{-# VECTORISE' 'instance' type '#-}'     
-                                                { unitOL $ LL $ VectD (HsVectInstIn False $3) }
         | '{-# VECTORISE_SCALAR' 'instance' type '#-}'     
-                                                { unitOL $ LL $ VectD (HsVectInstIn True $3) }
+                                                { unitOL $ LL $ VectD (HsVectInstIn $3) }
         | annotation { unitOL $1 }
         | decl                                  { unLoc $1 }
 
@@ -921,6 +924,7 @@ fdecl : 'import' callconv safety fspec
 callconv :: { CCallConv }
           : 'stdcall'                   { StdCallConv }
           | 'ccall'                     { CCallConv   }
+          | 'capi'                      { CApiConv    }
           | 'prim'                      { PrimCallConv}
 
 safety :: { Safety }
@@ -1320,14 +1324,15 @@ sigdecl :: { Located (OrdList (LHsDecl RdrName)) }
                                 { LL $ toOL [ LL $ SigD (TypeSig ($1 : unLoc $3) $5) ] }
         | infix prec ops        { LL $ toOL [ LL $ SigD (FixSig (FixitySig n (Fixity $2 (unLoc $1))))
                                              | n <- unLoc $3 ] }
-        | '{-# INLINE'   activation qvar '#-}'        
+        | '{-# INLINE' activation qvar '#-}'        
                 { LL $ unitOL (LL $ SigD (InlineSig $3 (mkInlinePragma (getINLINE $1) $2))) }
-        | '{-# SPECIALISE' qvar '::' sigtypes1 '#-}'
-                { LL $ toOL [ LL $ SigD (SpecSig $2 t defaultInlinePragma) 
-                                            | t <- $4] }
+        | '{-# SPECIALISE' activation qvar '::' sigtypes1 '#-}'
+                { let inl_prag = mkInlinePragma (EmptyInlineSpec, FunLike) $2
+                  in LL $ toOL [ LL $ SigD (SpecSig $3 t inl_prag) 
+                               | t <- $5] }
         | '{-# SPECIALISE_INLINE' activation qvar '::' sigtypes1 '#-}'
                 { LL $ toOL [ LL $ SigD (SpecSig $3 t (mkInlinePragma (getSPEC_INLINE $1) $2))
-                                            | t <- $5] }
+                            | t <- $5] }
         | '{-# SPECIALISE' 'instance' inst_type '#-}'
                 { LL $ unitOL (LL $ SigD (SpecInstSig $3)) }
 
@@ -1392,6 +1397,7 @@ scc_annot :: { Located FastString }
         : '_scc_' STRING                        {% (addWarning Opt_WarnWarningsDeprecations (getLoc $1) (text "_scc_ is deprecated; use an SCC pragma instead")) >>= \_ ->
                                    ( do scc <- getSCC $2; return $ LL scc ) }
         | '{-# SCC' STRING '#-}'                {% do scc <- getSCC $2; return $ LL scc }
+        | '{-# SCC' VARID  '#-}'                { LL (getVARID $2) }
 
 hpc_annot :: { Located (FastString,(Int,Int),(Int,Int)) }
         : '{-# GENERATED' STRING INTEGER ':' INTEGER '-' INTEGER ':' INTEGER '#-}'
@@ -1942,6 +1948,7 @@ special_id
         | 'dynamic'             { L1 (fsLit "dynamic") }
         | 'stdcall'             { L1 (fsLit "stdcall") }
         | 'ccall'               { L1 (fsLit "ccall") }
+        | 'capi'                { L1 (fsLit "capi") }
         | 'prim'                { L1 (fsLit "prim") }
         | 'group'               { L1 (fsLit "group") }
 

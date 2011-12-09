@@ -18,9 +18,6 @@ import OldCmm
 import FastString
 import qualified Outputable
 
-import Data.Maybe
-
-
 -- ----------------------------------------------------------------------------
 -- * Constants
 --
@@ -51,37 +48,29 @@ genLlvmData (sec, Statics lbl xs) = do
     return (lbl, sec, alias, static)
 
 
-resolveLlvmDatas :: [LlvmUnresData] -> [LlvmData]
-                 -> LlvmM [LlvmData]
-resolveLlvmDatas [] ldata
-  = return ldata
-
-resolveLlvmDatas (udata : rest) ldata
-  = do ndata <- resolveLlvmData udata
-       resolveLlvmDatas rest (ldata ++ [ndata])
+resolveLlvmDatas :: [LlvmUnresData] -> LlvmM [LlvmData]
+resolveLlvmDatas = mapM resolveLlvmData
 
 -- | Fix up CLabel references now that we should have passed all CmmData.
 resolveLlvmData :: LlvmUnresData -> LlvmM LlvmData
 resolveLlvmData (lbl, sec, alias, unres) = do
     label             <- strCLabel_llvm lbl
-    (static, refs)    <- resDatas unres ([], [])
-    let refs'          = catMaybes refs
-        struct         = Just $ LMStaticStruc static alias
+    (static, refs)    <- resDatas unres
+    let struct         = Just $ LMStaticStruc static alias
         link           = if (externallyVisibleCLabel lbl)
                             then ExternallyVisible else Internal
         const          = isSecConstant sec
         glob           = LMGlobalVar label alias link Nothing Nothing const
-    return (refs' ++ [LMGlobal glob struct], [alias])
-
+    return (LMGlobal glob struct : refs, [alias])
 
 -- | Should a data in this section be considered constant
 isSecConstant :: Section -> Bool
 isSecConstant Text                    = True
-isSecConstant Data                    = False
 isSecConstant ReadOnlyData            = True
 isSecConstant RelocatableReadOnlyData = True
-isSecConstant UninitialisedData       = False
 isSecConstant ReadOnlyData16          = True
+isSecConstant Data                    = False
+isSecConstant UninitialisedData       = False
 isSecConstant (OtherSection _)        = False
 
 
@@ -90,15 +79,11 @@ isSecConstant (OtherSection _)        = False
 --
 
 -- | Resolve data list
-resDatas :: [UnresStatic] -> ([LlvmStatic], [Maybe LMGlobal])
-         -> LlvmM ([LlvmStatic], [Maybe LMGlobal])
+resDatas :: [UnresStatic] -> LlvmM ([LlvmStatic], [LMGlobal])
 
-resDatas [] (stat, glob)
-  = return (stat, glob)
-
-resDatas (cmm : rest) (stats, globs)
-  = do (nstat, nglob) <- resData cmm
-       resDatas rest (stats ++ [nstat], globs ++ nglob)
+resDatas cmms = do
+    (stats, globss) <- fmap unzip $ mapM resData cmms
+    return (stats, concat globss)
 
 -- | Resolve an individual static label if it needs to be.
 --
@@ -106,9 +91,9 @@ resDatas (cmm : rest) (stats, globs)
 -- module. If it has we can retrieve its type and make a pointer, otherwise
 -- we introduce a generic external definition for the referenced label and
 -- then make a pointer.
-resData :: UnresStatic -> LlvmM (LlvmStatic, [Maybe LMGlobal])
+resData :: UnresStatic -> LlvmM (LlvmStatic, [LMGlobal])
 
-resData (Right stat) = return (stat, [Nothing])
+resData (Right stat) = return (stat, [])
 
 resData (Left cmm@(CmmLabel l)) = do
     label <- strCLabel_llvm l
@@ -120,14 +105,14 @@ resData (Left cmm@(CmmLabel l)) = do
                 let glob@(LMGlobal var _) = genStringLabelRef label
                     ptr  = LMStaticPointer var
                 funInsert label (pLower $ getVarType var)
-                return (LMPtoI ptr lmty, [Just glob])
+                return (LMPtoI ptr lmty, [glob])
             -- Referenced data exists in this module, retrieve type and make
             -- pointer to it.
             Just ty' ->
                 let var = LMGlobalVar label (LMPointer ty')
                             ExternallyVisible Nothing Nothing False
                     ptr  = LMStaticPointer var
-                in return (LMPtoI ptr lmty, [Nothing])
+                in return (LMPtoI ptr lmty, [])
 
 resData (Left (CmmLabelOff label off)) = do
     (var, glob) <- resData (Left (CmmLabel label))
@@ -161,7 +146,6 @@ genData (CmmUninitialised bytes)
 genData (CmmStaticLit lit)
     = genStaticLit lit
 
-
 -- | Generate Llvm code for a static literal.
 --
 -- Will either generate the code or leave it unresolved if it is a 'CLabel'
@@ -182,7 +166,6 @@ genStaticLit (CmmBlock b) = Left $ CmmLabel $ infoTblLbl b
 
 genStaticLit (CmmHighStackMark)
     = panic "genStaticLit: CmmHighStackMark unsupported!"
-
 
 -- -----------------------------------------------------------------------------
 -- * Misc

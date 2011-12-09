@@ -135,7 +135,7 @@ stmtToInstrs stmt = do
         where ty = cmmExprType src
               size = cmmTypeSize ty
 
-    CmmCall target result_regs args _ _
+    CmmCall target result_regs args _
        -> genCCall target result_regs args
 
     CmmBranch id          -> genBranch id
@@ -853,6 +853,7 @@ genCCall target dest_regs argsAndHints
           OSMinGW32  -> panic "PPC.CodeGen.genCCall: not defined for this os"
           OSFreeBSD  -> panic "PPC.CodeGen.genCCall: not defined for this os"
           OSOpenBSD  -> panic "PPC.CodeGen.genCCall: not defined for this os"
+          OSNetBSD   -> panic "PPC.CodeGen.genCCall: not defined for this os"
           OSUnknown  -> panic "PPC.CodeGen.genCCall: not defined for this os"
 
 data GenCCallPlatform = GCPLinux | GCPDarwin
@@ -1146,9 +1147,10 @@ genCCall' gcp target dest_regs argsAndHints
 
                     MO_PopCnt w  -> (fsLit $ popCntLabel w, False)
 
-                    other -> pprPanic "genCCall(ppc): unknown callish op"
-                                    (pprCallishMachOp other)
-
+                    MO_WriteBarrier ->
+                        panic $ "outOfLineCmmOp: MO_WriteBarrier not supported"
+                    MO_Touch ->
+                        panic $ "outOfLineCmmOp: MO_Touch not supported"
 
 -- -----------------------------------------------------------------------------
 -- Generating a table-branch

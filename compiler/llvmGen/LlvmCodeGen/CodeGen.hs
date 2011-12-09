@@ -23,8 +23,8 @@ import ForeignCall
 import Outputable hiding ( panic, pprPanic )
 import qualified Outputable
 import Platform
-import Unique
 import UniqSupply
+import Unique
 import Util
 
 import Data.List ( partition )
@@ -56,8 +56,7 @@ basicBlocksCodeGen ([]) (blocks, tops)
   = do let (blocks', allocs) = mapAndUnzip dominateAllocs blocks
        let allocs' = concat allocs
        let ((BasicBlock id fstmts):rblks) = blocks'
-       fplog <- runUs funPrologue
-       let fblocks = (BasicBlock id (fplog ++  allocs' ++ fstmts)):rblks
+       let fblocks = (BasicBlock id $ funPrologue ++  allocs' ++ fstmts):rblks
        return (fblocks, tops)
 
 basicBlocksCodeGen (block:blocks) (lblocks', ltops')
@@ -121,7 +120,7 @@ stmtToInstrs stmt = case stmt of
     CmmSwitch arg ids    -> genSwitch arg ids
 
     -- Foreign Call
-    CmmCall target res args _ ret
+    CmmCall target res args ret
         -> genCall target res args ret
 
     -- Tail call
@@ -241,6 +240,7 @@ genCall target res args ret = do
                             ArchX86_64 -> CC_X86_Stdcc
                             _          -> CC_Ccc
             CCallConv    -> CC_Ccc
+            CApiConv     -> CC_Ccc
             PrimCallConv -> CC_Ccc
             CmmCallConv  -> panic "CmmCallConv not supported here!"
 
@@ -471,7 +471,10 @@ cmmPrimOpFunctions mop = do
 
     (MO_PopCnt w) -> fsLit $ "llvm.ctpop."  ++ showSDoc (ppr $ widthToLlvmInt w)
 
-    a -> panic $ "cmmPrimOpFunctions: Unknown callish op! (" ++ show a ++ ")"
+    MO_WriteBarrier ->
+        panic $ "cmmPrimOpFunctions: MO_WriteBarrier not supported here"
+    MO_Touch ->
+        panic $ "cmmPrimOpFunctions: MO_Touch not supported here"
 
 
 -- | Tail function calls
@@ -761,7 +764,46 @@ genMachOp _ op [x] = case op of
     MO_FF_Conv from to
         -> sameConv from (widthToLlvmFloat to) LM_Fptrunc LM_Fpext
 
-    a -> panic $ "genMachOp: unmatched unary CmmMachOp! (" ++ show a ++ ")"
+    -- Handle unsupported cases explicitly so we get a warning
+    -- of missing case when new MachOps added
+    MO_Add _          -> panicOp
+    MO_Mul _          -> panicOp
+    MO_Sub _          -> panicOp
+    MO_S_MulMayOflo _ -> panicOp
+    MO_S_Quot _       -> panicOp
+    MO_S_Rem _        -> panicOp
+    MO_U_MulMayOflo _ -> panicOp
+    MO_U_Quot _       -> panicOp
+    MO_U_Rem _        -> panicOp
+
+    MO_Eq  _          -> panicOp
+    MO_Ne  _          -> panicOp
+    MO_S_Ge _         -> panicOp
+    MO_S_Gt _         -> panicOp
+    MO_S_Le _         -> panicOp
+    MO_S_Lt _         -> panicOp
+    MO_U_Ge _         -> panicOp
+    MO_U_Gt _         -> panicOp
+    MO_U_Le _         -> panicOp
+    MO_U_Lt _         -> panicOp
+
+    MO_F_Add        _ -> panicOp
+    MO_F_Sub        _ -> panicOp
+    MO_F_Mul        _ -> panicOp
+    MO_F_Quot       _ -> panicOp
+    MO_F_Eq         _ -> panicOp
+    MO_F_Ne         _ -> panicOp
+    MO_F_Ge         _ -> panicOp
+    MO_F_Gt         _ -> panicOp
+    MO_F_Le         _ -> panicOp
+    MO_F_Lt         _ -> panicOp
+
+    MO_And          _ -> panicOp
+    MO_Or           _ -> panicOp
+    MO_Xor          _ -> panicOp
+    MO_Shl          _ -> panicOp
+    MO_U_Shr        _ -> panicOp
+    MO_S_Shr        _ -> panicOp
 
     where
         negate ty v2 negOp = do
@@ -786,6 +828,9 @@ genMachOp _ op [x] = case op of
                  w | w < toWidth -> sameConv' expand
                  w | w > toWidth -> sameConv' reduce
                  _w              -> return x'
+        
+        panicOp = panic $ "LLVM.CodeGen.genMachOp: non unary op encourntered"
+                       ++ "with one argument! (" ++ show op ++ ")"
 
 -- Handle GlobalRegs pointers
 genMachOp opt o@(MO_Add _) e@[(CmmReg (CmmGlobal r)), (CmmLit (CmmInt n _))]
@@ -870,7 +915,15 @@ genMachOp_slow opt op [x, y] = case op of
     MO_U_Shr _ -> genBinMach LM_MO_LShr
     MO_S_Shr _ -> genBinMach LM_MO_AShr
 
-    a -> panic $ "genMachOp: unmatched binary CmmMachOp! (" ++ show a ++ ")"
+    MO_Not _       -> panicOp
+    MO_S_Neg _     -> panicOp
+    MO_F_Neg _     -> panicOp
+
+    MO_SF_Conv _ _ -> panicOp
+    MO_FS_Conv _ _ -> panicOp
+    MO_SS_Conv _ _ -> panicOp
+    MO_UU_Conv _ _ -> panicOp
+    MO_FF_Conv _ _ -> panicOp
 
     where
         binLlvmOp ty binOp = do
@@ -883,8 +936,7 @@ genMachOp_slow opt op [x, y] = case op of
                             top1 ++ top2)
 
                 else do
-                    -- XXX: Error. Continue anyway so we can debug the generated
-                    -- ll file.
+                    -- Error. Continue anyway so we can debug the generated ll file.
                     platform <- getLlvmPlatform
                     let cmmToStr = lines . showSDoc . PprCmm.pprExpr platform
                     let dx = Comment $ map fsLit $ cmmToStr x
@@ -893,15 +945,6 @@ genMachOp_slow opt op [x, y] = case op of
                     let allStmts = stmts1 `appOL` stmts2 `snocOL` dx
                                     `snocOL` dy `snocOL` s1
                     return (v1, allStmts, top1 ++ top2)
-
-                    -- let o = case binOp vx vy of
-                    --         Compare op _ _ -> show op
-                    --         LlvmOp  op _ _ -> show op
-                    --         _              -> "unknown"
-                    -- panic $ "genMachOp: comparison between different types ("
-                    --         ++ o ++ " "++ show vx ++ ", " ++ show vy ++ ")"
-                    --         ++ "\ne1: " ++ (show.llvmSDoc.PprCmm.pprExpr platform $ x)
-                    --         ++ "\ne2: " ++ (show.llvmSDoc.PprCmm.pprExpr platform $ y)
 
         -- | Need to use EOption here as Cmm expects word size results from
         -- comparisons while LLVM return i1. Need to extend to llvmWord type
@@ -963,6 +1006,9 @@ genMachOp_slow opt op [x, y] = case op of
 
                 else
                     panic $ "isSMulOK: Not bit type! (" ++ showSDoc (ppr word) ++ ")"
+
+        panicOp = panic $ "LLVM.CodeGen.genMachOp_slow: unary op encourntered"
+                       ++ "with two arguments! (" ++ show op ++ ")"
 
 -- More then two expression, invalid!
 genMachOp_slow _ _ _ = panic "genMachOp: More then 2 expressions in MachOp!"
@@ -1152,13 +1198,13 @@ genLit CmmHighStackMark
 --
 
 -- | Function prologue. Load STG arguments into variables for function.
-funPrologue :: UniqSM [LlvmStatement]
-funPrologue = liftM concat $ mapM getReg activeStgRegs
+funPrologue :: [LlvmStatement]
+funPrologue = concat $ map getReg activeStgRegs
     where getReg rr =
-            let reg = lmGlobalRegVar rr
-                arg = lmGlobalRegArg rr
+            let reg   = lmGlobalRegVar rr
+                arg   = lmGlobalRegArg rr
                 alloc = Assignment reg $ Alloca (pLower $ getVarType reg) 1
-            in return [alloc, Store arg reg]
+            in [alloc, Store arg reg]
 
 
 -- | Function epilogue. Load STG variables to use as argument for call.

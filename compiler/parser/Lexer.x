@@ -457,6 +457,7 @@ data Token
   | ITunsafe
   | ITstdcallconv
   | ITccallconv
+  | ITcapiconv
   | ITprimcallconv
   | ITmdo
   | ITfamily
@@ -642,6 +643,7 @@ reservedWordsFM = listToUFM $
          ( "unsafe",         ITunsafe,        bit ffiBit),
          ( "stdcall",        ITstdcallconv,   bit ffiBit),
          ( "ccall",          ITccallconv,     bit ffiBit),
+         ( "capi",           ITcapiconv,      bit cApiFfiBit),
          ( "prim",           ITprimcallconv,  bit ffiBit),
 
          ( "rec",            ITrec,           bit recBit),
@@ -785,7 +787,7 @@ ifExtension pred bits _ _ _ = pred bits
 multiline_doc_comment :: Action
 multiline_doc_comment span buf _len = withLexedDocType (worker "")
   where
-    worker commentAcc input docType oneLine = case alexGetChar input of
+    worker commentAcc input docType oneLine = case alexGetChar' input of
       Just ('\n', input')
         | oneLine -> docCommentEnd input commentAcc docType buf span
         | otherwise -> case checkIfCommentLine input' of
@@ -796,15 +798,15 @@ multiline_doc_comment span buf _len = withLexedDocType (worker "")
 
     checkIfCommentLine input = check (dropNonNewlineSpace input)
       where
-        check input = case alexGetChar input of
-          Just ('-', input) -> case alexGetChar input of
-            Just ('-', input) -> case alexGetChar input of
+        check input = case alexGetChar' input of
+          Just ('-', input) -> case alexGetChar' input of
+            Just ('-', input) -> case alexGetChar' input of
               Just (c, _) | c /= '-' -> Just input
               _ -> Nothing
             _ -> Nothing
           _ -> Nothing
 
-        dropNonNewlineSpace input = case alexGetChar input of
+        dropNonNewlineSpace input = case alexGetChar' input of
           Just (c, input')
             | isSpace c && c /= '\n' -> dropNonNewlineSpace input'
             | otherwise -> input
@@ -829,13 +831,13 @@ nested_comment cont span _str _len = do
                                if b
                                  then docCommentEnd input commentAcc ITblockComment _str span
                                  else cont
-    go commentAcc n input = case alexGetChar input of
+    go commentAcc n input = case alexGetChar' input of
       Nothing -> errBrace input span
-      Just ('-',input) -> case alexGetChar input of
+      Just ('-',input) -> case alexGetChar' input of
         Nothing  -> errBrace input span
         Just ('\125',input) -> go commentAcc (n-1) input
         Just (_,_)          -> go ('-':commentAcc) n input
-      Just ('\123',input) -> case alexGetChar input of
+      Just ('\123',input) -> case alexGetChar' input of
         Nothing  -> errBrace input span
         Just ('-',input) -> go ('-':'\123':commentAcc) (n+1) input
         Just (_,_)       -> go ('\123':commentAcc) n input
@@ -844,14 +846,14 @@ nested_comment cont span _str _len = do
 nested_doc_comment :: Action
 nested_doc_comment span buf _len = withLexedDocType (go "")
   where
-    go commentAcc input docType _ = case alexGetChar input of
+    go commentAcc input docType _ = case alexGetChar' input of
       Nothing -> errBrace input span
-      Just ('-',input) -> case alexGetChar input of
+      Just ('-',input) -> case alexGetChar' input of
         Nothing -> errBrace input span
         Just ('\125',input) ->
           docCommentEnd input commentAcc docType buf span
         Just (_,_) -> go ('-':commentAcc) input docType False
-      Just ('\123', input) -> case alexGetChar input of
+      Just ('\123', input) -> case alexGetChar' input of
         Nothing  -> errBrace input span
         Just ('-',input) -> do
           setInput input
@@ -872,7 +874,7 @@ withLexedDocType lexDocComment = do
     '#' -> lexDocComment input ITdocOptionsOld False
     _ -> panic "withLexedDocType: Bad doc type"
  where
-    lexDocSection n input = case alexGetChar input of
+    lexDocSection n input = case alexGetChar' input of
       Just ('*', input) -> lexDocSection (n+1) input
       Just (_,   _)     -> lexDocComment input (ITdocSection n) True
       Nothing -> do setInput input; lexToken -- eof reached, lex it normally
@@ -1126,7 +1128,19 @@ setLine code span buf len = do
 
 setFile :: Int -> Action
 setFile code span buf len = do
-  let file = lexemeToFastString (stepOn buf) (len-2)
+  let file = mkFastString (go (lexemeToString (stepOn buf) (len-2)))
+        where go ('\\':c:cs) = c : go cs
+              go (c:cs)      = c : go cs
+              go []          = []
+              -- decode escapes in the filename.  e.g. on Windows
+              -- when our filenames have backslashes in, gcc seems to
+              -- escape the backslashes.  One symptom of not doing this
+              -- is that filenames in error messages look a bit strange:
+              --   C:\\foo\bar.hs
+              -- only the first backslash is doubled, because we apply
+              -- System.FilePath.normalise before printing out
+              -- filenames and it does not remove duplicate
+              -- backslashes after the drive letter (should it?).
   setAlrLastLoc $ alrInitialLoc file
   setSrcLoc (mkRealSrcLoc file (srcSpanEndLine span) (srcSpanEndCol span))
   addSrcFile file
@@ -1742,6 +1756,8 @@ ffiBit :: Int
 ffiBit= 0
 interruptibleFfiBit :: Int
 interruptibleFfiBit = 1
+cApiFfiBit :: Int
+cApiFfiBit = 2
 parrBit :: Int
 parrBit = 3
 arrowsBit :: Int
@@ -1867,6 +1883,7 @@ mkPState flags buf loc =
     where
       bitmap =     ffiBit                      `setBitIf` xopt Opt_ForeignFunctionInterface flags
                .|. interruptibleFfiBit         `setBitIf` xopt Opt_InterruptibleFFI         flags
+               .|. cApiFfiBit                  `setBitIf` xopt Opt_CApiFFI                  flags
                .|. parrBit                     `setBitIf` xopt Opt_ParallelArrays           flags
                .|. arrowsBit                   `setBitIf` xopt Opt_Arrows                   flags
                .|. thBit                       `setBitIf` xopt Opt_TemplateHaskell          flags

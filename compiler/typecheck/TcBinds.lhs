@@ -5,7 +5,7 @@
 \section[TcBinds]{TcBinds}
 
 \begin{code}
-module TcBinds ( tcLocalBinds, tcTopBinds, 
+module TcBinds ( tcLocalBinds, tcTopBinds, tcRecSelBinds,
                  tcHsBootSigs, tcPolyBinds,
                  PragFun, tcSpecPrags, tcVectDecls, mkPragFun, 
                  TcSigInfo(..), SigFun, mkSigFun,
@@ -16,17 +16,17 @@ import {-# SOURCE #-} TcExpr  ( tcMonoExpr )
 
 import DynFlags
 import HsSyn
-
+import HscTypes( isHsBoot )
 import TcRnMonad
 import TcEnv
 import TcUnify
 import TcSimplify
+import TcEvidence
 import TcHsType
 import TcPat
 import TcMType
 import TyCon
 import TcType
--- import Coercion
 import TysPrim
 import Id
 import Var
@@ -83,21 +83,37 @@ At the top-level the LIE is sure to contain nothing but constant
 dictionaries, which we resolve at the module level.
 
 \begin{code}
-tcTopBinds :: HsValBinds Name 
-           -> TcM ( LHsBinds TcId       -- Typechecked bindings
-                  , [LTcSpecPrag]       -- SPECIALISE prags for imported Ids
-                  , TcLclEnv)           -- Augmented environment
+tcTopBinds :: HsValBinds Name -> TcM (TcGblEnv, TcLclEnv)
+-- The TcGblEnv contains the new tcg_binds and tcg_spects
+-- The TcLclEnv has an extended type envt for the new bindings
+tcTopBinds (ValBindsOut binds sigs)
+  = do  { tcg_env <- getGblEnv
+        ; (binds', tcl_env) <- tcValBinds TopLevel binds sigs getLclEnv
+        ; specs <- tcImpPrags sigs   -- SPECIALISE prags for imported Ids
 
-        -- Note: returning the TcLclEnv is more than we really
-        --       want.  The bit we care about is the local bindings
-        --       and the free type variables thereof
-tcTopBinds binds
-  = do  { (ValBindsOut prs sigs, env) <- tcValBinds TopLevel binds getLclEnv
-        ; let binds = foldr (unionBags . snd) emptyBag prs
-        ; specs <- tcImpPrags sigs
-        ; return (binds, specs, env) }
+        ; let { tcg_env' = tcg_env { tcg_binds = foldr (unionBags . snd)
+                                                       (tcg_binds tcg_env)
+                                                       binds'
+                                   , tcg_imp_specs = specs ++ tcg_imp_specs tcg_env } }
+
+        ; return (tcg_env', tcl_env) }
         -- The top level bindings are flattened into a giant 
         -- implicitly-mutually-recursive LHsBinds
+tcTopBinds (ValBindsIn {}) = panic "tcTopBinds"
+
+tcRecSelBinds :: HsValBinds Name -> TcM TcGblEnv
+tcRecSelBinds (ValBindsOut binds sigs)
+  = tcExtendGlobalValEnv [sel_id | L _ (IdSig sel_id) <- sigs] $
+    do { (rec_sel_binds, tcg_env) <- discardWarnings (tcValBinds TopLevel binds sigs getGblEnv)
+       ; let tcg_env' 
+              | isHsBoot (tcg_src tcg_env) = tcg_env
+              | otherwise = tcg_env { tcg_binds = foldr (unionBags . snd)
+                                                        (tcg_binds tcg_env)
+                                                        rec_sel_binds }
+              -- Do not add the code for record-selector bindings when 
+              -- compiling hs-boot files
+       ; return tcg_env' }
+tcRecSelBinds (ValBindsIn {}) = panic "tcRecSelBinds"
 
 tcHsBootSigs :: HsValBinds Name -> TcM [Id]
 -- A hs-boot file has only one BindGroup, and it only has type
@@ -125,9 +141,10 @@ tcLocalBinds EmptyLocalBinds thing_inside
   = do  { thing <- thing_inside
         ; return (EmptyLocalBinds, thing) }
 
-tcLocalBinds (HsValBinds binds) thing_inside
-  = do  { (binds', thing) <- tcValBinds NotTopLevel binds thing_inside
-        ; return (HsValBinds binds', thing) }
+tcLocalBinds (HsValBinds (ValBindsOut binds sigs)) thing_inside
+  = do  { (binds', thing) <- tcValBinds NotTopLevel binds sigs thing_inside
+        ; return (HsValBinds (ValBindsOut binds' sigs), thing) }
+tcLocalBinds (HsValBinds (ValBindsIn {})) _ = panic "tcLocalBinds"
 
 tcLocalBinds (HsIPBinds (IPBinds ip_binds _)) thing_inside
   = do  { (given_ips, ip_binds') <- mapAndUnzipM (wrapLocSndM tc_ip_bind) ip_binds
@@ -168,13 +185,11 @@ untouchable-range idea.
 
 \begin{code}
 tcValBinds :: TopLevelFlag 
-           -> HsValBinds Name -> TcM thing
-           -> TcM (HsValBinds TcId, thing) 
+           -> [(RecFlag, LHsBinds Name)] -> [LSig Name]
+           -> TcM thing
+           -> TcM ([(RecFlag, LHsBinds TcId)], thing) 
 
-tcValBinds _ (ValBindsIn binds _) _
-  = pprPanic "tcValBinds" (ppr binds)
-
-tcValBinds top_lvl (ValBindsOut binds sigs) thing_inside
+tcValBinds top_lvl binds sigs thing_inside
   = do  {       -- Typecheck the signature
         ; let { prag_fn = mkPragFun sigs (foldr (unionBags . snd) emptyBag binds)
               ; ty_sigs = filter isTypeLSig sigs
@@ -193,7 +208,7 @@ tcValBinds top_lvl (ValBindsOut binds sigs) thing_inside
                              tcBindGroups top_lvl sig_fn prag_fn 
                                           binds thing_inside
 
-        ; return (ValBindsOut binds' sigs, thing) }
+        ; return (binds', thing) }
 
 ------------------------
 tcBindGroups :: TopLevelFlag -> SigFun -> PragFun
@@ -694,7 +709,11 @@ tcVect (HsNoVect name)
 tcVect (HsVectTypeIn isScalar lname rhs_name)
   = addErrCtxt (vectCtxt lname) $
     do { tycon <- tcLookupLocatedTyCon lname
-       ; checkTc (not isScalar || tyConArity tycon == 0) scalarTyConMustBeNullary
+       ; checkTc (   not isScalar             -- either    we have a non-SCALAR declaration
+                 || isJust rhs_name           -- or        we explicitly provide a vectorised type
+                 || tyConArity tycon == 0     -- otherwise the type constructor must be nullary
+                 )
+                 scalarTyConMustBeNullary
 
        ; rhs_tycon <- fmapMaybeM (tcLookupTyCon . unLoc) rhs_name
        ; return $ HsVectTypeOut isScalar tycon rhs_tycon
@@ -708,13 +727,13 @@ tcVect (HsVectClassIn lname)
        }
 tcVect (HsVectClassOut _)
   = panic "TcBinds.tcVect: Unexpected 'HsVectClassOut'"
-tcVect (HsVectInstIn isScalar linstTy)
+tcVect (HsVectInstIn linstTy)
   = addErrCtxt (vectCtxt linstTy) $
     do { (cls, tys) <- tcHsVectInst linstTy
        ; inst       <- tcLookupInstance cls tys
-       ; return $ HsVectInstOut isScalar inst
+       ; return $ HsVectInstOut inst
        }
-tcVect (HsVectInstOut _ _)
+tcVect (HsVectInstOut _)
   = panic "TcBinds.tcVect: Unexpected 'HsVectInstOut'"
 
 vectCtxt :: Outputable thing => thing -> SDoc

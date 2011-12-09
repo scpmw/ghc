@@ -85,6 +85,8 @@ import FastTypes
 import FastString
 import Outputable
 
+import StaticFlags ( opt_SuppressVarKinds )
+
 import Data.Data
 \end{code}
 
@@ -120,14 +122,13 @@ Note [Evidence: EvIds and CoVars]
 * An EvId (evidence Id) is a *boxed*, term-level evidence variable 
   (dictionary, implicit parameter, or equality).
 
-* DictId, IpId, and EqVar are synonyms when we know what kind of
-  evidence we are talking about.  For example, an EqVar has type (t1 ~ t2).
-
 * A CoVar (coercion variable) is an *unboxed* term-level evidence variable
   of type (t1 ~# t2).  So it's the unboxed version of an EqVar.
 
-* Only CoVars can occur in Coercions (but NB the LCoercion hack; see
-  Note [LCoercions] in Coercion).
+* Only CoVars can occur in Coercions, EqVars appear in TcCoercions.
+
+* DictId, IpId, and EqVar are synonyms when we know what kind of
+  evidence we are talking about.  For example, an EqVar has type (t1 ~ t2).
 
 Note [Kind and type variables]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -211,7 +212,8 @@ After CoreTidy, top-level LocalIds are turned into GlobalIds
 \begin{code}
 instance Outputable Var where
   ppr var = ifPprDebug (text "(") <+> ppr (varName var) <+> ifPprDebug (brackets (ppr_debug var))
-            <+> ifPprDebug (text "::" <+> ppr (tyVarKind var) <+> text ")")
+            <+> if (not opt_SuppressVarKinds) then ifPprDebug (text "::" <+> ppr (tyVarKind var) <+> text ")")
+                else empty
 
 ppr_debug :: Var -> SDoc
 ppr_debug (TyVar {})                           = ptext (sLit "tv")

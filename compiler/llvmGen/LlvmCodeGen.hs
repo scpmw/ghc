@@ -61,8 +61,10 @@ llvmCodeGen' dflags location cmms tick_map
         cdata <- fmap catMaybes $ mapM split cmm
 
         renderLlvm pprLlvmHeader
-        cmmDataLlvmGens dflags cdata []
-        cmmProcLlvmGens dflags cmm tick_map 1
+        {-# SCC "llvm_datas_gen" #-}
+          cmmDataLlvmGens dflags cdata []
+        {-# SCC "llvm_procs_gen" #-}
+          cmmProcLlvmGens dflags cmm tick_map 1
         cmmMetaLlvmGens dflags location tick_map cmm
         cmmDebugLlvmGens dflags location tick_map cmm
 
@@ -76,7 +78,7 @@ cmmDataLlvmGens :: DynFlags -> [(Section,CmmStatics)]
                 -> [LlvmUnresData] -> LlvmM ()
 
 cmmDataLlvmGens dflags [] lmdata
-  = do lmdata' <- resolveLlvmDatas (reverse lmdata) []
+  = do lmdata' <- resolveLlvmDatas (reverse lmdata)
        let lmdoc = vcat $ map pprLlvmData lmdata'
        liftIO $ dumpIfSet_dyn dflags Opt_D_dump_llvm "LLVM Code" lmdoc
        renderLlvm lmdoc

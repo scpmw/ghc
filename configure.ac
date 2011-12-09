@@ -424,6 +424,9 @@ dnl ** look to see if we have a C compiler using an llvm back end.
 dnl
 FP_CC_LLVM_BACKEND
 
+FP_PROG_LD_HashSize31
+FP_PROG_LD_ReduceMemoryOverheads
+
 CONF_GCC_LINKER_OPTS_STAGE1=$LDFLAGS
 CONF_GCC_LINKER_OPTS_STAGE2=$LDFLAGS
 

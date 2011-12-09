@@ -34,6 +34,7 @@ typedef struct _CostCentre {
 
     char * label;
     char * module;
+    char * srcloc;
 
     // used for accumulating costs at the end of the run...
     StgWord   time_ticks;
@@ -114,8 +115,6 @@ typedef struct _IndexTable {
    Pre-defined cost centres and cost centre stacks
    -------------------------------------------------------------------------- */
 
-extern CostCentreStack * RTS_VAR(CCCS);	        /* current CCS */
- 
 #if IN_STG_CODE
 
 extern StgWord CC_MAIN[];	
@@ -153,6 +152,9 @@ extern CostCentreStack CCS_DONT_CARE[];  // shouldn't ever get set
 extern CostCentre      CC_PINNED[];
 extern CostCentreStack CCS_PINNED[];     // pinned memory
 
+extern CostCentre      CC_IDLE[];
+extern CostCentreStack CCS_IDLE[];       // capability is idle
+
 #endif /* IN_STG_CODE */
 
 extern unsigned int RTS_VAR(CC_ID);     // global ids
@@ -165,7 +167,7 @@ extern unsigned int RTS_VAR(era);
  * ---------------------------------------------------------------------------*/
 
 CostCentreStack * pushCostCentre (CostCentreStack *, CostCentre *);
-void              enterFunCCS    (CostCentreStack *);
+void              enterFunCCS    (StgRegTable *reg, CostCentreStack *);
 
 /* -----------------------------------------------------------------------------
    Registering CCs and CCSs
@@ -202,11 +204,12 @@ extern CostCentreStack * RTS_VAR(CCS_LIST);         // registered CCS list
  * Declaring Cost Centres & Cost Centre Stacks.
  * -------------------------------------------------------------------------- */
 
-# define CC_DECLARE(cc_ident,name,mod,caf,is_local)     \
+# define CC_DECLARE(cc_ident,name,mod,loc,caf,is_local) \
      is_local CostCentre cc_ident[1]                    \
        = {{ ccID       : 0,                             \
             label      : name,                          \
             module     : mod,                           \
+            srcloc     : loc,                           \
             time_ticks : 0,                             \
             mem_alloc  : 0,                             \
             link       : 0,                             \

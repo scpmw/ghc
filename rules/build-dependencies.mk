@@ -33,7 +33,6 @@ $$($1_$2_depfile_haskell) : $$(includes_H_CONFIG) $$(includes_H_PLATFORM)
 
 $$($1_$2_depfile_haskell) : $$($1_$2_HS_SRCS) $$($1_$2_HS_BOOT_SRCS) $$($1_$2_HC_MK_DEPEND_DEP) | $$$$(dir $$$$@)/.
 	$$(call removeFiles,$$@.tmp)
-	touch $$@.tmp
 ifneq "$$($1_$2_HS_SRCS)" ""
 	"$$($1_$2_HC_MK_DEPEND)" -M $$($1_$2_MKDEPENDHS_FLAGS) \
 	    $$(filter-out -split-objs, $$($1_$2_v_ALL_HC_OPTS)) \
@@ -56,7 +55,6 @@ $$($1_$2_depfile_c_asm) : $$(includes_H_CONFIG) $$(includes_H_PLATFORM)
 
 $$($1_$2_depfile_c_asm) : $$($1_$2_C_FILES_DEPS) $$($1_$2_S_FILES) | $$$$(dir $$$$@)/.
 	$$(call removeFiles,$$@.tmp)
-	touch $$@.tmp
 ifneq "$$(strip $$($1_$2_C_FILES_DEPS)$$($1_$2_S_FILES))" ""
 # We ought to actually do this for each way in $$($1_$2_WAYS), but then
 # it takes a long time to make the C deps for the RTS (30 seconds rather

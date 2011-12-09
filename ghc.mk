@@ -81,7 +81,6 @@ default : all
 # Catch make if it runs away into an infinite loop
 ifeq      "$(MAKE_RESTARTS)" ""
 else ifeq "$(MAKE_RESTARTS)" "1"
-else ifeq "$(MAKE_RESTARTS)" "2"
 else
 $(error Make has restarted itself $(MAKE_RESTARTS) times; is there a makefile bug?)
 endif
@@ -553,6 +552,11 @@ BUILD_DIRS += \
    $(GHC_MKDIRHIER_DIR)
 endif
 
+ifeq "$(Windows)" "YES"
+BUILD_DIRS += \
+   $(GHC_TOUCHY_DIR)
+endif
+
 BUILD_DIRS += \
    docs/users_guide \
    docs/ext-core \
@@ -609,10 +613,6 @@ BUILD_DIRS += \
    utils/hpc \
    utils/runghc \
    ghc
-ifeq "$(Windows)" "YES"
-BUILD_DIRS += \
-   $(GHC_TOUCHY_DIR)
-endif
 
 ifneq "$(BINDIST)" "YES"
 BUILD_DIRS += \
@@ -765,7 +765,7 @@ TAGS: TAGS_compiler
 # -----------------------------------------------------------------------------
 # Installation
 
-install: install_libs install_packages install_libexecs install_headers \
+install: install_libs install_packages install_libexecs \
          install_libexec_scripts install_bins install_topdirs
 ifeq "$(HADDOCK_DOCS)" "YES"
 install: install_docs
@@ -822,12 +822,6 @@ install_topdirs: $(INSTALL_TOPDIRS)
 	$(call INSTALL_DIR,"$(DESTDIR)$(topdir)")
 	for i in $(INSTALL_TOPDIRS); do \
 		$(call INSTALL_PROGRAM,$(INSTALL_BIN_OPTS),$$i,"$(DESTDIR)$(topdir)"); \
-	done
-
-install_headers: $(INSTALL_HEADERS)
-	$(call INSTALL_DIR,"$(DESTDIR)$(ghcheaderdir)")
-	for i in $(INSTALL_HEADERS); do \
-		$(call INSTALL_HEADER,$(INSTALL_OPTS),$$i,"$(DESTDIR)$(ghcheaderdir)"); \
 	done
 
 install_docs: $(INSTALL_DOCS)
@@ -933,7 +927,8 @@ $(eval $(call bindist,.,\
     $(BINDIST_HI) \
     $(BINDIST_EXTRAS) \
     $(includes_H_FILES) \
-    $(INSTALL_HEADERS) \
+    $(includes_DERIVEDCONSTANTS) \
+    $(includes_GHCCONSTANTS) \
     $(INSTALL_LIBEXECS) \
     $(INSTALL_LIBEXEC_SCRIPTS) \
     $(INSTALL_TOPDIRS) \
@@ -1047,7 +1042,7 @@ publish-docs:
 # Directory in which we're going to build the src dist
 #
 SRC_DIST_NAME=ghc-$(ProjectVersion)
-SRC_DIST_DIR=$(TOP)/$(SRC_DIST_NAME)
+SRC_DIST_DIR=$(SRC_DIST_NAME)
 
 #
 # Files to include in source distributions
@@ -1083,8 +1078,8 @@ sdist-prep :
 	cd $(SRC_DIST_DIR) && for i in $(SRC_DIST_DIRS); do mkdir $$i; ( cd $$i && lndir $(TOP)/$$i ); done
 	cd $(SRC_DIST_DIR) && for i in $(SRC_DIST_FILES); do $(LN_S) $(TOP)/$$i .; done
 	cd $(SRC_DIST_DIR) && $(MAKE) distclean
-	rm -rf $(SRC_DIST_DIR)/libraries/tarballs/
-	rm -rf $(SRC_DIST_DIR)/libraries/stamp/
+	$(call removeTrees,$(SRC_DIST_DIR)/libraries/tarballs/)
+	$(call removeTrees,$(SRC_DIST_DIR)/libraries/stamp/)
 	$(call sdist_file,compiler,stage2,cmm,,CmmLex,x)
 	$(call sdist_file,compiler,stage2,cmm,,CmmParse,y)
 	$(call sdist_file,compiler,stage2,parser,,Lexer,x)
@@ -1096,7 +1091,7 @@ sdist-prep :
 	$(call sdist_file,utils/haddock,dist,src,Haddock,Lex,x)
 	$(call sdist_file,utils/haddock,dist,src,Haddock,Parse,y)
 	cd $(SRC_DIST_DIR) && $(call removeTrees,compiler/stage[123] mk/build.mk)
-	cd $(SRC_DIST_DIR) && "$(FIND)" $(SRC_DIST_DIRS) \( -name _darcs -o -name SRC -o -name "autom4te*" -o -name "*~" -o -name ".cvsignore" -o -name "\#*" -o -name ".\#*" -o -name "log" -o -name "*-SAVE" -o -name "*.orig" -o -name "*.rej" -o -name "*-darcs-backup*" \) -print | "$(XARGS)" $(XARGS_OPTS) "$(RM)" $(RM_OPTS_REC)
+	cd $(SRC_DIST_DIR) && "$(FIND)" $(SRC_DIST_DIRS) \( -name .git -o -name "autom4te*" -o -name "*~" -o -name "\#*" -o -name ".\#*" -o -name "log" -o -name "*-SAVE" -o -name "*.orig" -o -name "*.rej" \) -print | "$(XARGS)" $(XARGS_OPTS) "$(RM)" $(RM_OPTS_REC)
 
 .PHONY: sdist
 sdist : sdist-prep
@@ -1140,6 +1135,11 @@ sdist_%:
 CLEAN_FILES += libraries/bootstrapping.conf
 CLEAN_FILES += libraries/integer-gmp/cbits/GmpDerivedConstants.h
 CLEAN_FILES += libraries/integer-gmp/cbits/mkGmpDerivedConstants
+
+# These two are no longer generated, but we still clean them for a while
+# as they may still be in old GHC trees:
+CLEAN_FILES += includes/GHCConstants.h
+CLEAN_FILES += includes/DerivedConstants.h
 
 clean : clean_files clean_libraries
 

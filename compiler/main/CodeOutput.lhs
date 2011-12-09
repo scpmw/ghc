@@ -167,7 +167,8 @@ outputAsm dflags filenm flat_absC
 outputLlvm :: DynFlags -> ModLocation -> FilePath -> [RawCmmGroup] -> TickMap -> IO ()
 outputLlvm dflags location filenm flat_absC tick_map
   = do ncg_uniqs <- mkSplitUniqSupply 'n'
-       doOutput filenm $ \f -> llvmCodeGen dflags location f ncg_uniqs flat_absC tick_map
+       {-# SCC "llvm_output" #-} doOutput filenm $ \f -> 
+         {-# SCC "llvm_CodeGen" #-} llvmCodeGen dflags location f ncg_uniqs flat_absC tick_map
 \end{code}
 
 

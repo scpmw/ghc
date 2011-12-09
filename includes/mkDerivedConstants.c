@@ -222,6 +222,7 @@ main(int argc, char *argv[])
     field_offset(StgRegTable, rSpLim);
     field_offset(StgRegTable, rHp);
     field_offset(StgRegTable, rHpLim);
+    field_offset(StgRegTable, rCCCS);
     field_offset(StgRegTable, rCurrentTSO);
     field_offset(StgRegTable, rCurrentNursery);
     field_offset(StgRegTable, rHpAlloc);
@@ -237,6 +238,7 @@ main(int argc, char *argv[])
     struct_field(Capability, no);
     struct_field(Capability, mut_lists);
     struct_field(Capability, context_switch);
+    struct_field(Capability, interrupt);
     struct_field(Capability, sparks);
 
     struct_field(bdescr, start);

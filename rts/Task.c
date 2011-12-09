@@ -173,7 +173,7 @@ static Task*
 newTask (rtsBool worker)
 {
 #if defined(THREADED_RTS)
-    Ticks currentElapsedTime, currentUserTime;
+    Time currentElapsedTime, currentUserTime;
 #endif
     Task *task;
 
@@ -337,7 +337,7 @@ void
 taskTimeStamp (Task *task USED_IF_THREADS)
 {
 #if defined(THREADED_RTS)
-    Ticks currentElapsedTime, currentUserTime;
+    Time currentElapsedTime, currentUserTime;
 
     currentUserTime = getThreadCPUTime();
     currentElapsedTime = getProcessElapsedTime();
@@ -355,7 +355,7 @@ taskTimeStamp (Task *task USED_IF_THREADS)
 }
 
 void
-taskDoneGC (Task *task, Ticks cpu_time, Ticks elapsed_time)
+taskDoneGC (Task *task, Time cpu_time, Time elapsed_time)
 {
     task->gc_time  += cpu_time;
     task->gc_etime += elapsed_time;

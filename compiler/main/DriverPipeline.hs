@@ -148,7 +148,7 @@ compile' (nothingCompiler, interactiveCompiler, batchCompiler)
    -- Figure out what lang we're generating
    let hsc_lang = hscTarget dflags
    -- ... and what the next phase should be
-   let next_phase = hscNextPhase dflags src_flavour hsc_lang
+   let next_phase = hscPostBackendPhase dflags src_flavour hsc_lang
    -- ... and what file to generate the output into
    output_fn <- getOutputFilename next_phase
                         Temporary basename dflags next_phase (Just location)
@@ -745,9 +745,7 @@ runPhase (Unlit sf) input_fn dflags
                    [ -- The -h option passes the file name for unlit to
                      -- put in a #line directive
                      SysTools.Option     "-h"
-                     -- cpp interprets \b etc as escape sequences,
-                     -- so we use / for filenames in pragmas
-                   , SysTools.Option $ reslash Forwards $ normalise input_fn
+                   , SysTools.Option $ escape $ normalise input_fn
                    , SysTools.FileOption "" input_fn
                    , SysTools.FileOption "" output_fn
                    ]
@@ -755,6 +753,19 @@ runPhase (Unlit sf) input_fn dflags
        io $ SysTools.runUnlit dflags flags
 
        return (Cpp sf, output_fn)
+  where
+       -- escape the characters \, ", and ', but don't try to escape
+       -- Unicode or anything else (so we don't use Util.charToC
+       -- here).  If we get this wrong, then in
+       -- Coverage.addTicksToBinds where we check that the filename in
+       -- a SrcLoc is the same as the source filenaame, the two will
+       -- look bogusly different. See test:
+       -- libraries/hpc/tests/function/subdir/tough2.lhs
+       escape ('\\':cs) = '\\':'\\': escape cs
+       escape ('\"':cs) = '\\':'\"': escape cs
+       escape ('\'':cs) = '\\':'\'': escape cs
+       escape (c:cs)    = c : escape cs
+       escape []        = []
 
 -------------------------------------------------------------------------------
 -- Cpp phase : (a) gets OPTIONS out of file
@@ -921,7 +932,7 @@ runPhase (Hsc src_flavour) input_fn dflags0
                                   else return SourceModified
 
   -- get the DynFlags
-        let next_phase = hscNextPhase dflags src_flavour hsc_lang
+        let next_phase = hscPostBackendPhase dflags src_flavour hsc_lang
         output_fn  <- phaseOutputFilename next_phase
 
         let dflags' = dflags { hscTarget = hsc_lang,
@@ -987,7 +998,7 @@ runPhase Cmm input_fn dflags
         PipeEnv{src_basename} <- getPipeEnv
         let hsc_lang = hscTarget dflags
 
-        let next_phase = hscNextPhase dflags HsSrcFile hsc_lang
+        let next_phase = hscPostBackendPhase dflags HsSrcFile hsc_lang
 
         output_fn <- phaseOutputFilename next_phase
 
@@ -999,11 +1010,6 @@ runPhase Cmm input_fn dflags
         PipeState{hsc_env} <- getPipeState
 
         io $ hscCompileCmmFile hsc_env input_fn
-
-        -- XXX: catch errors above and convert them into ghcError?  Original
-        -- code was:
-        --
-        --when (not ok) $ ghcError (PhaseFailed "cmm" (ExitFailure 1))
 
         return (next_phase, output_fn)
 
@@ -1063,7 +1069,6 @@ runPhase cc_phase input_fn dflags
                    | otherwise            = "-O"
 
         -- Decide next phase
-
         let next_phase = As
         output_fn <- phaseOutputFilename next_phase
 
@@ -1136,12 +1141,10 @@ runPhase cc_phase input_fn dflags
 
         return (next_phase, output_fn)
 
-        -- ToDo: postprocess the output from gcc
-
 -----------------------------------------------------------------------------
 -- Splitting phase
 
-runPhase SplitMangle input_fn dflags
+runPhase Splitter input_fn dflags
   = do  -- tmp_pfx is the prefix used for the split .s files
 
         split_s_prefix <- io $ SysTools.newTempName dflags "split"
@@ -1164,12 +1167,13 @@ runPhase SplitMangle input_fn dflags
         io $ addFilesToClean dflags' [ split_s_prefix ++ "__" ++ show n ++ ".s"
                                      | n <- [1..n_files]]
 
-        return (SplitAs, "**splitmangle**")
-          -- we don't use the filename
+        return (SplitAs,
+                "**splitter**") -- we don't use the filename in SplitAs
 
 -----------------------------------------------------------------------------
--- As phase
+-- As, SpitAs phase : Assembler
 
+-- This is for calling the assembler on a regular assembly file (not split).
 runPhase As input_fn dflags
   = do
         -- LLVM from version 3.0 onwards doesn't support the OS X system
@@ -1220,6 +1224,8 @@ runPhase As input_fn dflags
         return (next_phase, output_fn)
 
 
+-- This is for calling the assembler on a split assembly file (so a collection
+-- of assembly files)
 runPhase SplitAs _input_fn dflags
   = do
         -- we'll handle the stub_o file in this phase, so don't MergeStub,
@@ -1343,7 +1349,13 @@ runPhase LlvmLlc input_fn dflags
                | not opt_Static = "dynamic-no-pic"
                | otherwise      = "static"
 
-    output_fn <- phaseOutputFilename LlvmMangle
+    -- hidden debugging flag '-dno-llvm-mangler' to skip mangling
+    let next_phase = case dopt Opt_NoLlvmMangler dflags of
+                         False                            -> LlvmMangle
+                         True | dopt Opt_SplitObjs dflags -> Splitter
+                         True                             -> As
+                        
+    output_fn <- phaseOutputFilename next_phase
 
     io $ SysTools.runLlvmLlc dflags
                 ([ SysTools.Option (llvmOpts !! opt_lvl),
@@ -1353,16 +1365,15 @@ runPhase LlvmLlc input_fn dflags
                 ++ map SysTools.Option lc_opts
                 ++ map SysTools.Option fpOpts)
 
-    return (LlvmMangle, output_fn)
+    return (next_phase, output_fn)
   where
         -- Bug in LLVM at O3 on OSX.
         llvmOpts = if platformOS (targetPlatform dflags) == OSDarwin
                    then ["-O1", "-O2", "-O2"]
                    else ["-O1", "-O2", "-O3"]
         -- On ARMv7 using LLVM, LLVM fails to allocate floating point registers
-        -- while compiling GHC source code. It's probably due to fact
-        -- that it does not enable VFP by default. Let's do this manually
-        -- here
+        -- while compiling GHC source code. It's probably due to fact that it
+        -- does not enable VFP by default. Let's do this manually here
         fpOpts = case platformArch (targetPlatform dflags) of 
                    ArchARM ARMv7 ext -> if (elem VFPv3 ext)
                                       then ["-mattr=+v7,+vfp3"]
@@ -1374,11 +1385,12 @@ runPhase LlvmLlc input_fn dflags
 -----------------------------------------------------------------------------
 -- LlvmMangle phase
 
-runPhase LlvmMangle input_fn _dflags
+runPhase LlvmMangle input_fn dflags
   = do
-      output_fn <- phaseOutputFilename As
-      io $ llvmFixupAsm input_fn output_fn
-      return (As, output_fn)
+      let next_phase = if dopt Opt_SplitObjs dflags then Splitter else As
+      output_fn <- phaseOutputFilename next_phase
+      io $ llvmFixupAsm dflags input_fn output_fn
+      return (next_phase, output_fn)
 
 -----------------------------------------------------------------------------
 -- merge in stub objects
@@ -1702,7 +1714,7 @@ linkBinary dflags o_files dep_packages = do
 
     let
         thread_opts | WayThreaded `elem` ways = [
-#if !defined(mingw32_TARGET_OS) && !defined(freebsd_TARGET_OS) && !defined(openbsd_TARGET_OS) && !defined(haiku_TARGET_OS)
+#if !defined(mingw32_TARGET_OS) && !defined(freebsd_TARGET_OS) && !defined(openbsd_TARGET_OS) && !defined(netbsd_TARGET_OS) && !defined(haiku_TARGET_OS)
                         "-lpthread"
 #endif
 #if defined(osf3_TARGET_OS)
@@ -2101,13 +2113,14 @@ joinObjectFiles dflags o_files output_fn = do
 -- -----------------------------------------------------------------------------
 -- Misc.
 
-hscNextPhase :: DynFlags -> HscSource -> HscTarget -> Phase
-hscNextPhase _ HsBootFile _        =  StopLn
-hscNextPhase dflags _ hsc_lang =
+-- | What phase to run after one of the backend code generators has run
+hscPostBackendPhase :: DynFlags -> HscSource -> HscTarget -> Phase
+hscPostBackendPhase _ HsBootFile _    =  StopLn
+hscPostBackendPhase dflags _ hsc_lang =
   case hsc_lang of
         HscC -> HCc
-        HscAsm | dopt Opt_SplitObjs dflags -> SplitMangle
-               | otherwise -> As
+        HscAsm | dopt Opt_SplitObjs dflags -> Splitter
+               | otherwise                 -> As
         HscLlvm        -> LlvmOpt
         HscNothing     -> StopLn
         HscInterpreted -> StopLn

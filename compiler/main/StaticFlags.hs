@@ -41,6 +41,7 @@ module StaticFlags (
 	opt_SuppressTypeApplications,
 	opt_SuppressIdInfo,
 	opt_SuppressTypeSignatures,
+        opt_SuppressVarKinds,
 
 	-- profiling opts
 	opt_SccProfilingOn,
@@ -222,6 +223,11 @@ opt_SuppressCoercions :: Bool
 opt_SuppressCoercions
 	=  lookUp  (fsLit "-dsuppress-all")
 	|| lookUp  (fsLit "-dsuppress-coercions")
+
+opt_SuppressVarKinds :: Bool
+opt_SuppressVarKinds
+	=  lookUp  (fsLit "-dsuppress-all")
+	|| lookUp  (fsLit "-dsuppress-var-kinds")
 
 -- | Suppress module id prefixes on variables.
 opt_SuppressModulePrefixes :: Bool
@@ -491,7 +497,7 @@ way_details =
 	-- the problems are our fault or theirs, but it seems that using the
 	-- alternative 1:1 threading library libthr works around it:
 	  "-optl-lthr"
-#elif defined(openbsd_TARGET_OS)
+#elif defined(openbsd_TARGET_OS) || defined(netbsd_TARGET_OS)
 	  "-optc-pthread"
 	, "-optl-pthread"
 #elif defined(solaris2_TARGET_OS)
@@ -509,7 +515,7 @@ way_details =
 	--	with -fPIC. Labels not in the current package are assumed to be in a DLL
 	--	different from the current one.
 	, "-fPIC"
-#elif defined(openbsd_TARGET_OS)
+#elif defined(openbsd_TARGET_OS) || defined(netbsd_TARGET_OS)
 	-- Without this, linking the shared libHSffi fails because
 	-- it uses pthread mutexes.
 	, "-optl-pthread"

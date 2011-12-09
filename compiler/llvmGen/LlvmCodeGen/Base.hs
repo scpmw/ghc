@@ -198,12 +198,12 @@ withClearVars m = LlvmM $ \env -> do
     (x, env') <- runLlvmM m env { envVarMap = emptyUFM }
     return (x, env' { envVarMap = envVarMap env })
 
--- | Insert functions into the environment.
+-- | Insert variables or functions into the environment.
 varInsert, funInsert :: Uniquable key => key -> LlvmType -> LlvmM ()
 varInsert s t = LlvmM $ \env -> return ((), env { envVarMap = addToUFM (envVarMap env) s t } )
 funInsert s t = LlvmM $ \env -> return ((), env { envFunMap = addToUFM (envFunMap env) s t } )
 
--- | Lookup functions in the environment.
+-- | Lookup variables or functions in the environment.
 varLookup, funLookup :: Uniquable key => key -> LlvmM (Maybe LlvmType)
 varLookup s = LlvmM $ \env -> return (lookupUFM (envVarMap env) s, env)
 funLookup s = LlvmM $ \env -> return (lookupUFM (envFunMap env) s, env)

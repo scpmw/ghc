@@ -412,6 +412,7 @@ Library
         TcTyClsDecls
         TcTyDecls
         TcType
+        TcEvidence
         TcUnify
         TcInteract
         TcCanonical

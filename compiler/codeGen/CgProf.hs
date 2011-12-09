@@ -21,7 +21,7 @@ module CgProf (
         enterCostCentreThunk,
         enterCostCentreFun,
         costCentreFrom,
-	curCCS, curCCSAddr,
+        curCCS, storeCurCCS,
 	emitCostCentreDecl, emitCostCentreStackDecl, 
         emitSetCCC,
 
@@ -35,7 +35,7 @@ module CgProf (
 #include "../includes/rts/Constants.h"
 	-- For LDV_CREATE_MASK, LDV_STATE_USE
 	-- which are StgWords
-#include "../includes/DerivedConstants.h"
+#include "../includes/dist-derivedconstants/header/DerivedConstants.h"
 	-- For REP_xxx constants, which are MachReps
 
 import ClosureInfo
@@ -66,11 +66,10 @@ import Control.Monad
 
 -- Expression representing the current cost centre stack
 curCCS :: CmmExpr
-curCCS = CmmLoad curCCSAddr bWord
+curCCS = CmmReg (CmmGlobal CCCS)
 
--- Address of current CCS variable, for storing into
-curCCSAddr :: CmmExpr
-curCCSAddr = CmmLit (CmmLabel (mkCmmDataLabel rtsPackageId (fsLit "CCCS")))
+storeCurCCS :: CmmExpr -> CmmStmt
+storeCurCCS e = CmmAssign (CmmGlobal CCCS) e
 
 mkCCostCentre :: CostCentre -> CmmLit
 mkCCostCentre cc = CmmLabel (mkCCLabel cc)
@@ -135,14 +134,15 @@ profAlloc words ccs
 enterCostCentreThunk :: CmmExpr -> Code
 enterCostCentreThunk closure = 
   ifProfiling $ do 
-    stmtC $ CmmStore curCCSAddr (costCentreFrom closure)
+    stmtC $ storeCurCCS (costCentreFrom closure)
 
-enterCostCentreFun :: CostCentreStack -> CmmExpr -> Code
-enterCostCentreFun ccs closure =
+enterCostCentreFun :: CostCentreStack -> CmmExpr -> [GlobalReg] -> Code
+enterCostCentreFun ccs closure vols =
   ifProfiling $ do
     if isCurrentCCS ccs
-       then emitRtsCall rtsPackageId (fsLit "enterFunCCS")
-               [CmmHinted (costCentreFrom closure) AddrHint] False
+       then emitRtsCallWithVols rtsPackageId (fsLit "enterFunCCS")
+               [CmmHinted (CmmReg (CmmGlobal BaseReg)) AddrHint,
+                CmmHinted (costCentreFrom closure) AddrHint] vols
        else return () -- top-level function, nothing to do
 
 ifProfiling :: Code -> Code
@@ -170,11 +170,15 @@ emitCostCentreDecl cc = do
                 -- All cost centres will be in the main package, since we
                 -- don't normally use -auto-all or add SCCs to other packages.
                 -- Hence don't emit the package name in the module here.
+  ; loc <- newByteStringCLit $ bytesFS $ mkFastString $
+                   showSDoc (ppr (costCentreSrcSpan cc))
+           -- XXX going via FastString to get UTF-8 encoding is silly
   ; let
      lits = [ zero,   	-- StgInt ccID,
 	      label,	-- char *label,
 	      modl,	-- char *module,
-              zero,	-- StgWord time_ticks
+              loc,      -- char *srcloc,
+              zero,     -- StgWord time_ticks
               zero64,	-- StgWord64 mem_alloc
               is_caf,   -- StgInt is_caf
               zero      -- struct _CostCentre *link
@@ -226,7 +230,7 @@ emitSetCCC cc tick push
     tmp <- newTemp bWord -- TODO FIXME NOW
     pushCostCentre tmp curCCS cc
     when tick $ stmtC (bumpSccCount (CmmReg (CmmLocal tmp)))
-    when push $ stmtC (CmmStore curCCSAddr (CmmReg (CmmLocal tmp)))
+    when push $ stmtC (storeCurCCS (CmmReg (CmmLocal tmp)))
 
 pushCostCentre :: LocalReg -> CmmExpr -> CostCentre -> Code
 pushCostCentre result ccs cc
@@ -234,7 +238,6 @@ pushCostCentre result ccs cc
 	rtsPackageId 
         (fsLit "pushCostCentre") [CmmHinted ccs AddrHint,
                                   CmmHinted (CmmLit (mkCCostCentre cc)) AddrHint]
-        False
 
 bumpSccCount :: CmmExpr -> CmmStmt
 bumpSccCount ccs

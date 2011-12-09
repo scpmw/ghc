@@ -39,7 +39,7 @@ LIBFFI_PATH_MANGLE = PATH=$$(cygpath "$(TOP)")/libffi:$$PATH; export PATH;
 endif
 
 ifneq "$(BINDIST)" "YES"
-$(libffi_STAMP_CONFIGURE):
+$(libffi_STAMP_CONFIGURE): $(TOUCH_DEP)
 	$(call removeFiles,$(libffi_STAMP_STATIC_CONFIGURE))
 	$(call removeFiles,$(libffi_STAMP_STATIC_BUILD))
 	$(call removeFiles,$(libffi_STAMP_STATIC_INSTALL))
@@ -54,6 +54,17 @@ $(libffi_STAMP_CONFIGURE):
 # option (cp -p) gets used instead.  Otherwise the libffi build system
 # will use cygwin symbolic links which cannot be read by mingw gcc.
 	chmod +x libffi/ln
+
+	# We need to use -MMD rather than -MD, as otherwise we get paths
+	# like c:/... in the dependency files on Windows, and the extra
+	# colons break make
+	mv libffi/build/Makefile.in libffi/build/Makefile.in.orig
+	sed "s/-MD/-MMD/" < libffi/build/Makefile.in.orig > libffi/build/Makefile.in
+
+	# Their cmd invocation only works on msys. On cygwin it starts
+	# a cmd interactive shell. The replacement works in both environments.
+	mv libffi/build/ltmain.sh libffi/build/ltmain.sh.orig
+	sed 's#cmd //c echo "\$$1"#cmd /c "echo $$1"#' < libffi/build/ltmain.sh.orig > libffi/build/ltmain.sh
 
 # Because -Werror may be in SRC_CC_OPTS/SRC_LD_OPTS, we need to turn
 # warnings off or the compilation of libffi might fail due to warnings
@@ -77,15 +88,15 @@ $(libffi_STAMP_CONFIGURE):
 	mv libffi/build/Makefile libffi/build/Makefile.orig
 	sed "s#wc -w#wc -w | sed 's/ //g'#" < libffi/build/Makefile.orig > libffi/build/Makefile
 
-	touch $@
+	"$(TOUCH_CMD)" $@
 
-$(libffi_STAMP_BUILD): $(libffi_STAMP_CONFIGURE)
+$(libffi_STAMP_BUILD): $(libffi_STAMP_CONFIGURE) $(TOUCH_DEP)
 	$(MAKE) -C libffi/build MAKEFLAGS=
-	touch $@
+	"$(TOUCH_CMD)" $@
 
-$(libffi_STAMP_INSTALL): $(libffi_STAMP_BUILD)
+$(libffi_STAMP_INSTALL): $(libffi_STAMP_BUILD) $(TOUCH_DEP)
 	$(MAKE) -C libffi/build MAKEFLAGS= install
-	touch $@
+	"$(TOUCH_CMD)" $@
 
 $(libffi_STATIC_LIB): $(libffi_STAMP_INSTALL)
 	@test -f $@ || { echo "$< exists, but $@ does not."; echo "Suggest removing $<."; exit 1; }
