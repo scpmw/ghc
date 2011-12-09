@@ -28,7 +28,6 @@ import Unique
 import Util
 
 import Data.List ( partition )
-import Control.Monad ( liftM )
 
 
 type LlvmStatements = OrdList LlvmStatement
@@ -38,7 +37,7 @@ type LlvmStatements = OrdList LlvmStatement
 --
 genLlvmProc :: RawCmmDecl -> LlvmM [LlvmCmmDecl]
 genLlvmProc (CmmProc info lbl (ListGraph blocks)) = do
-    (lmblocks, lmdata) <- basicBlocksCodeGen blocks ([], [])
+    (lmblocks, lmdata) <- basicBlocksCodeGen blocks
     let proc = CmmProc info lbl (ListGraph lmblocks)
     return (proc:lmdata)
 
@@ -49,21 +48,14 @@ genLlvmProc _ = panic "genLlvmProc: case that shouldn't reach here!"
 --
 
 -- | Generate code for a list of blocks that make up a complete procedure.
-basicBlocksCodeGen :: [CmmBasicBlock]
-                   -> ( [LlvmBasicBlock] , [LlvmCmmDecl] )
-                   -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
-basicBlocksCodeGen ([]) (blocks, tops)
-  = do let (blocks', allocs) = mapAndUnzip dominateAllocs blocks
+basicBlocksCodeGen :: [CmmBasicBlock] -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
+basicBlocksCodeGen cmmBlocks
+  = do (blockss, topss) <- fmap unzip $ mapM basicBlockCodeGen cmmBlocks
+       let (blocks', allocs) = mapAndUnzip dominateAllocs (concat blockss)
        let allocs' = concat allocs
        let ((BasicBlock id fstmts):rblks) = blocks'
        let fblocks = (BasicBlock id $ funPrologue ++  allocs' ++ fstmts):rblks
-       return (fblocks, tops)
-
-basicBlocksCodeGen (block:blocks) (lblocks', ltops')
-  = do (lb, lt) <- basicBlockCodeGen block
-       let lblocks = lblocks' ++ lb
-       let ltops   = ltops' ++ lt
-       basicBlocksCodeGen blocks (lblocks, ltops)
+       return (fblocks, concat topss)
 
 
 -- | Allocations need to be extracted so they can be moved to the entry
@@ -77,10 +69,9 @@ dominateAllocs (BasicBlock id stmts)
 
 
 -- | Generate code for one block
-basicBlockCodeGen :: CmmBasicBlock
-                  -> LlvmM ( [LlvmBasicBlock], [LlvmCmmDecl] )
+basicBlockCodeGen :: CmmBasicBlock -> LlvmM ( [LlvmBasicBlock], [LlvmCmmDecl] )
 basicBlockCodeGen (BasicBlock id stmts)
-  = do (instrs, top) <- stmtsToInstrs stmts (nilOL, [])
+  = do (instrs, top) <- stmtsToInstrs stmts
        return ([BasicBlock id (fromOL instrs)], top)
 
 
@@ -95,14 +86,10 @@ type StmtData = (LlvmStatements, [LlvmCmmDecl])
 
 
 -- | Convert a list of CmmStmt's to LlvmStatement's
-stmtsToInstrs :: [CmmStmt] -> (LlvmStatements, [LlvmCmmDecl])
-              -> LlvmM StmtData
-stmtsToInstrs [] (llvm, top)
-  = return (llvm, top)
-
-stmtsToInstrs (stmt : stmts) (llvm, top)
-   = do (instrs, tops) <- stmtToInstrs stmt
-        stmtsToInstrs stmts (llvm `appOL` instrs, top ++ tops)
+stmtsToInstrs :: [CmmStmt] -> LlvmM StmtData
+stmtsToInstrs stmts
+   = do (instrss, topss) <- fmap unzip $ mapM stmtToInstrs stmts
+        return (concatOL instrss, concat topss)
 
 
 -- | Convert a CmmStmt to a list of LlvmStatement's
