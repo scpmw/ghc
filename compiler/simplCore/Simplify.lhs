@@ -1021,7 +1021,7 @@ simplTick env tickish expr cont
   -- tick.  This has the effect of moving the tick to the outside of a
   -- case or application context, allowing the normal case and
   -- application optimisations to fire.
-  | not (tickishScoped tickish) -- || tickishLax tickish
+  | not (tickishScoped tickish) || tickishLax tickish
   = do { (env', expr') <- simplExprF env expr cont
        ; return (env', mkTick tickish expr')
        }
