@@ -197,7 +197,7 @@ forkOS_createThreadWrapper ( void * entry )
 {
     Capability *cap;
     cap = rts_lock();
-    cap = rts_evalStableIO(cap, (HsStablePtr) entry, NULL);
+    rts_evalStableIO(&cap, (HsStablePtr) entry, NULL);
     taskTimeStamp(myTask());
     rts_unlock(cap);
     return NULL;
@@ -308,4 +308,9 @@ forkOS_createThread ( HsStablePtr entry STG_UNUSED )
     return -1;
 }
 
-#endif /* !defined(THREADED_RTS) */
+nat getNumberOfProcessors (void)
+{
+    return 1;
+}
+
+#endif

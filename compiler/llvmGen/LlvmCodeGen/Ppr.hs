@@ -68,7 +68,6 @@ moduleLayout =
 pprLlvmHeader :: SDoc
 pprLlvmHeader = moduleLayout
 
-
 -- | Pretty print LLVM data code
 pprLlvmData :: LlvmData -> SDoc
 pprLlvmData (globals, types) =

@@ -61,6 +61,8 @@ llvmCodeGen' dflags location cmms tick_map
         cdata <- fmap catMaybes $ mapM split cmm
 
         renderLlvm pprLlvmHeader
+        ghcInternalFunctions
+        
         {-# SCC "llvm_datas_gen" #-}
           cmmDataLlvmGens dflags cdata []
         {-# SCC "llvm_procs_gen" #-}

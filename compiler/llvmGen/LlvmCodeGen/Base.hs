@@ -15,6 +15,7 @@ module LlvmCodeGen.Base (
         runLlvm, withClearVars, varLookup, varInsert,
         funLookup, funInsert, getLlvmVer, getLlvmPlatform,
         renderLlvm, runUs, markUsedVar, getUsedVars,
+        ghcInternalFunctions,
 
         cmmToLlvmType, widthToLlvmFloat, widthToLlvmInt, llvmFunTy,
         llvmFunSig, llvmStdFunAttrs, llvmFunAlign, llvmInfAlign,
@@ -207,6 +208,26 @@ funInsert s t = LlvmM $ \env -> return ((), env { envFunMap = addToUFM (envFunMa
 varLookup, funLookup :: Uniquable key => key -> LlvmM (Maybe LlvmType)
 varLookup s = LlvmM $ \env -> return (lookupUFM (envVarMap env) s, env)
 funLookup s = LlvmM $ \env -> return (lookupUFM (envFunMap env) s, env)
+
+-- | Here we pre-initialise some functions that are used internally by GHC
+-- so as to make sure they have the most general type in the case that
+-- user code also uses these functions but with a different type than GHC
+-- internally. (Main offender is treating return type as 'void' instead of
+-- 'void *'. Fixes trac #5486.
+ghcInternalFunctions :: LlvmM ()
+ghcInternalFunctions = sequence_
+    [ mk "memcpy" i8Ptr [i8Ptr, i8Ptr, llvmWord]
+    , mk "memmove" i8Ptr [i8Ptr, i8Ptr, llvmWord]
+    , mk "memset" i8Ptr [i8Ptr, llvmWord, llvmWord]
+    , mk "newSpark" llvmWord [i8Ptr, i8Ptr]
+    ]
+  where
+    mk n ret args = do
+      let n' = fsLit n
+          decl = LlvmFunctionDecl n' ExternallyVisible CC_Ccc ret
+                                 FixedArgs (tysToParams args) Nothing
+      renderLlvm $ ppLlvmFunctionDecl decl
+      funInsert n' (LMFunction decl)
 
 -- | Get the LLVM version we are generating code for
 getLlvmVer :: LlvmM LlvmVersion

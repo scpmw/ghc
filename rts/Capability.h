@@ -165,6 +165,10 @@ regTableToCapability (StgRegTable *reg)
 //
 void initCapabilities (void);
 
+// Add and initialise more Capabilities
+//
+Capability * moreCapabilities (nat from, nat to);
+
 // Release a capability.  This is called by a Task that is exiting
 // Haskell to make a foreign call, or in various other cases when we
 // want to relinquish a Capability that we currently hold.
@@ -199,10 +203,15 @@ extern Capability *capabilities;
 //
 extern Capability *last_free_capability;
 
-// GC indicator, in scope for the scheduler
-#define PENDING_GC_SEQ 1
-#define PENDING_GC_PAR 2
-extern volatile StgWord waiting_for_gc;
+//
+// Indicates that the RTS wants to synchronise all the Capabilities
+// for some reason.  All Capabilities should stop and return to the
+// scheduler.
+//
+#define SYNC_GC_SEQ 1
+#define SYNC_GC_PAR 2
+#define SYNC_OTHER  3
+extern volatile StgWord pending_sync;
 
 // Acquires a capability at a return point.  If *cap is non-NULL, then
 // this is taken as a preference for the Capability we wish to
