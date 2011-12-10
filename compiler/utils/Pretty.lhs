@@ -191,8 +191,8 @@ import System.IO
 
 #if defined(__GLASGOW_HASKELL__)
 --for a RULES
-import GHC.Base ( unpackCString# )
-import GHC.Exts ( Int# )
+import GHC.Base ( unpackCString#, unpackFoldrCString# )
+import GHC.Exts ( Int#, build )
 import GHC.Ptr  ( Ptr(..) )
 #endif
 
@@ -571,6 +571,38 @@ zeroWidthText s = textBeside_ (Str s) (_ILIT(0)) Empty
 {-# RULES
   "text/str" forall a. text (unpackCString# a) = ptext (Ptr a)
  #-}
+
+-- RULES that *actually* do it. The problem here is that string fusion
+-- will turn the string into something like
+--
+--   build (unpackFoldrCString# "...")
+--
+-- the first chance it gets (which is earlier than the above rule
+-- matches, from the looks of it). This eventually gets turned back
+-- into the original string, but again too late for the rule to
+-- fire.
+--
+-- So the following rules try to transform the expression back from
+-- its string-fusion form. Unluckily, this leaves the possibility that
+-- we get a very inefficient representation using "appendChar" and
+-- "empty" if the foldr representation of text *actually* gets fused
+-- at some point.
+--
+-- For example:
+--   text (map toUpper "...")
+--   -> unpackFoldrCString# "..." (appendChar . toUpper) Pretty.Empty
+
+{-# RULES
+  "text"      [~1]           text = foldr appendChar empty;
+  "textInv"    [1]           foldr appendChar empty = text;
+  "pprStr"         forall a. unpackFoldrCString# a appendChar Pretty.Empty = ptext (Ptr a);
+ #-}
+{-# NOINLINE [1] text #-}
+
+appendChar :: Char -> Doc -> Doc
+appendChar c d = char c <> d
+{-# NOINLINE [1] appendChar #-}
+
 #endif
 
 nest k  p = mkNest (iUnbox k) (reduceDoc p)        -- Externally callable version
