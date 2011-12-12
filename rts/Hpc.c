@@ -14,10 +14,6 @@
 #include <string.h>
 #include <assert.h>
 
-#ifdef USE_DWARF
-#include <Dwarf.h>
-#endif
-
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
 #endif
@@ -227,17 +223,6 @@ startupHpc(void)
                   mod->hashNo);
 #endif
   }
-
-#ifdef USE_DWARF
-#ifdef TRACING
-  // If tracing is active, load then write out debuging information
-  if (RtsFlags.TraceFlags.tracing) {
-      dwarf_load();
-      dwarf_trace_debug_data();
-      dwarf_free();
-  }
-#endif
-#endif
 
   /* No tix? No point in continuing */
   if (!have_tix)

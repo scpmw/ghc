@@ -66,6 +66,10 @@ void exitLinker( void );	// there is no Linker.h file to include
 #include "Papi.h"
 #endif
 
+#ifdef USE_DWARF
+#include "Dwarf.h"
+#endif
+
 // Count of how many outstanding hs_init()s there have been.
 static int hs_init_count = 0;
 
@@ -241,6 +245,17 @@ hs_init_ghc(int *argc, char **argv[], RtsConfig rts_config)
 
 #if X86_INIT_FPU
     x86_init_fpu();
+#endif
+
+#ifdef USE_DWARF
+#ifdef TRACING
+  // If tracing is active, load then write out debuging information
+  if (RtsFlags.TraceFlags.tracing) {
+      dwarf_load();
+      dwarf_trace_debug_data();
+      dwarf_free();
+  }
+#endif
 #endif
 
     startupHpc();
