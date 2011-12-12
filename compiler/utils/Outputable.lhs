@@ -444,8 +444,6 @@ float n     = docToSDoc $ Pretty.float n
 double n    = docToSDoc $ Pretty.double n
 rational n  = docToSDoc $ Pretty.rational n
 
-{-# INLINE text #-}
-
 parens, braces, brackets, quotes, quote, doubleQuotes, angleBrackets :: SDoc -> SDoc
 
 parens d       = SDoc $ Pretty.parens . runSDoc d
