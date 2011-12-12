@@ -32,7 +32,7 @@ import MonadUtils      ( MonadIO(..) )
 
 import System.Directory(getCurrentDirectory)
 import Control.Monad   (forM, forM_)
-import Data.List       (nub, find, maximumBy)
+import Data.List       (nub, maximumBy)
 import Data.Maybe      (fromMaybe, mapMaybe)
 import Data.Map as Map (Map, fromList, assocs, lookup, elems)
 import Data.Set as Set (Set, fromList, member)
@@ -138,6 +138,9 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
       emitFileMeta fileId unitId unitFile
       return fileId
 
+  -- Lookup of procedure Cmm data
+  let procMap = Map.fromList [ (l, p) | p@(CmmProc _ l _) <- cmm ]
+  
   -- Emit metadata for files and procedures
   forM_ (assocs tiMap) $ \(lbl, tim) -> do
 
@@ -147,10 +150,8 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
           Just span -> (srcSpanStartLine span, srcSpanStartCol span)
           _         -> (1, 0)
 
-    -- Find procedure in CMM data
-    let myProc (CmmProc _ l _)  = l == lbl
-        myProc _                = False
-    case find myProc cmm of
+    -- Find procedure in Cmm data
+    case Map.lookup lbl procMap of
       Just (CmmProc infos _ (ListGraph blocks)) | not (null blocks) -> do
 
         -- Generate metadata for procedure
