@@ -349,9 +349,10 @@ coreToStgExpr expr@(Lam _ _)
     return (result_expr, fvs, escs)
 
 coreToStgExpr (Tick tick expr)
-  = do case tick of
+  = do !_ <- case tick of
          HpcTick{}    -> return ()
          ProfNote{}   -> return ()
+         SourceNote{} -> return ()
          Breakpoint{} -> panic "coreToStgExpr: breakpoint should not happen"
          _otherwise   -> panic "coreToStgExpr: Tick"
        (expr2, fvs, escs) <- coreToStgExpr expr
@@ -1133,15 +1134,15 @@ filterStgBinders bndrs = filter isId bndrs
 \begin{code}
 myCollectBinders :: Expr Var -> ([Var], Expr Var)
 myCollectBinders expr
-  = go [] expr
+  = go [] [] expr
   where
-    go bs (Lam b e)          = go (b:bs) e
-    go bs e@(Tick t e')
-        | tickishIsCode t    = (reverse bs, e)
-        | otherwise          = go bs e'
+    go bs ts (Lam b e)          = go (b:bs) ts e
+    go bs ts e@(Tick t e')
+        | tickishIsCode t       = (reverse bs, foldr Tick e ts)
+        | otherwise             = go bs (t:ts) e'
         -- Ignore only non-code source annotations
-    go bs (Cast e _)         = go bs e
-    go bs e                  = (reverse bs, e)
+    go bs ts (Cast e _)         = go bs ts e
+    go bs ts e                  = (reverse bs, foldr Tick e ts)
 
 myCollectArgs :: CoreExpr -> (Id, [CoreArg])
         -- We assume that we only have variables
