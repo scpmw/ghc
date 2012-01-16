@@ -246,18 +246,25 @@ The final result (after the renamer) will be:
 data OccName = OccName 
     { occNameSpace  :: !NameSpace
     , occNameFS     :: !FastString
+    , _occBase      :: String
+      -- | The base name without trailing numbers as a string. Cached
+      -- for efficient name generation
     }
     deriving Typeable
+
+occName :: NameSpace -> FastString -> OccName
+occName sp s = OccName sp s b
+  where b = reverse (dropWhile isDigit (reverse (unpackFS s)))
 \end{code}
 
 
 \begin{code}
 instance Eq OccName where
-    (OccName sp1 s1) == (OccName sp2 s2) = s1 == s2 && sp1 == sp2
+    (OccName sp1 s1 _) == (OccName sp2 s2 _) = s1 == s2 && sp1 == sp2
 
 instance Ord OccName where
 	-- Compares lexicographically, *not* by Unique of the string
-    compare (OccName sp1 s1) (OccName sp2 s2) 
+    compare (OccName sp1 s1 _) (OccName sp2 s2 _)
 	= (s1  `compare` s2) `thenCmp` (sp1 `compare` sp2)
 
 instance Data OccName where
@@ -279,7 +286,7 @@ instance Outputable OccName where
     ppr = pprOccName
 
 pprOccName :: OccName -> SDoc
-pprOccName (OccName sp occ) 
+pprOccName (OccName sp occ _)
   = getPprStyle $ \ sty ->
     if codeStyle sty 
     then ftext (zEncodeFS occ)
@@ -310,11 +317,14 @@ See Note [Unique OccNames from Template Haskell] in Convert.hs
 %************************************************************************
 
 \begin{code}
+mkOccNameBase :: NameSpace -> String -> String -> OccName
+mkOccNameBase occ_sp str base = OccName occ_sp (mkFastString str) base
+
 mkOccName :: NameSpace -> String -> OccName
-mkOccName occ_sp str = OccName occ_sp (mkFastString str)
+mkOccName occ_sp str = occName occ_sp (mkFastString str)
 
 mkOccNameFS :: NameSpace -> FastString -> OccName
-mkOccNameFS occ_sp fs = OccName occ_sp fs
+mkOccNameFS occ_sp fs = occName occ_sp fs
 
 mkVarOcc :: String -> OccName
 mkVarOcc s = mkOccName varName s
@@ -349,9 +359,9 @@ mkClsOccFS = mkOccNameFS clsName
 -- demoteOccName lowers the Namespace of OccName.
 -- see Note [Demotion]
 demoteOccName :: OccName -> Maybe OccName
-demoteOccName (OccName space name) = do
+demoteOccName (OccName space name base) = do
   space' <- demoteNameSpace space
-  return $ OccName space' name
+  return $ OccName space' name base
 \end{code}
 
 
@@ -377,10 +387,10 @@ easy to build an OccEnv.
 \begin{code}
 instance Uniquable OccName where
       -- See Note [The Unique of an OccName]
-  getUnique (OccName VarName   fs) = mkVarOccUnique  fs
-  getUnique (OccName DataName  fs) = mkDataOccUnique fs
-  getUnique (OccName TvName    fs) = mkTvOccUnique   fs
-  getUnique (OccName TcClsName fs) = mkTcOccUnique   fs
+  getUnique (OccName VarName   fs _) = mkVarOccUnique  fs
+  getUnique (OccName DataName  fs _) = mkDataOccUnique fs
+  getUnique (OccName TvName    fs _) = mkTvOccUnique   fs
+  getUnique (OccName TcClsName fs _) = mkTcOccUnique   fs
 
 newtype OccEnv a = A (UniqFM a)
 
@@ -467,31 +477,31 @@ intersectsOccSet s1 s2 = not (isEmptyOccSet (s1 `intersectOccSet` s2))
 
 \begin{code}
 occNameString :: OccName -> String
-occNameString (OccName _ s) = unpackFS s
+occNameString (OccName _ s _) = unpackFS s
 
 setOccNameSpace :: NameSpace -> OccName -> OccName
-setOccNameSpace sp (OccName _ occ) = OccName sp occ
+setOccNameSpace sp (OccName _ occ base) = OccName sp occ base
 
 isVarOcc, isTvOcc, isTcOcc, isDataOcc :: OccName -> Bool
 
-isVarOcc (OccName VarName _) = True
-isVarOcc _                   = False
+isVarOcc (OccName VarName _ _) = True
+isVarOcc _                     = False
 
-isTvOcc (OccName TvName _) = True
-isTvOcc _                  = False
+isTvOcc (OccName TvName _ _) = True
+isTvOcc _                    = False
 
-isTcOcc (OccName TcClsName _) = True
-isTcOcc _                     = False
+isTcOcc (OccName TcClsName _ _) = True
+isTcOcc _                       = False
 
 -- | /Value/ 'OccNames's are those that are either in 
 -- the variable or data constructor namespaces
 isValOcc :: OccName -> Bool
-isValOcc (OccName VarName  _) = True
-isValOcc (OccName DataName _) = True
-isValOcc _                    = False
+isValOcc (OccName VarName  _ _) = True
+isValOcc (OccName DataName _ _) = True
+isValOcc _                      = False
 
-isDataOcc (OccName DataName _) = True
-isDataOcc (OccName VarName s)  
+isDataOcc (OccName DataName _ _) = True
+isDataOcc (OccName VarName s _)
   | isLexCon s = pprPanic "isDataOcc: check me" (ppr s)
 		-- Jan06: I don't think this should happen
 isDataOcc _                    = False
@@ -499,8 +509,8 @@ isDataOcc _                    = False
 -- | Test if the 'OccName' is a data constructor that starts with
 -- a symbol (e.g. @:@, or @[]@)
 isDataSymOcc :: OccName -> Bool
-isDataSymOcc (OccName DataName s) = isLexConSym s
-isDataSymOcc (OccName VarName s)  
+isDataSymOcc (OccName DataName s _) = isLexConSym s
+isDataSymOcc (OccName VarName s _)
   | isLexConSym s = pprPanic "isDataSymOcc: check me" (ppr s)
 		-- Jan06: I don't think this should happen
 isDataSymOcc _                    = False
@@ -509,10 +519,10 @@ isDataSymOcc _                    = False
 -- | Test if the 'OccName' is that for any operator (whether 
 -- it is a data constructor or variable or whatever)
 isSymOcc :: OccName -> Bool
-isSymOcc (OccName DataName s)  = isLexConSym s
-isSymOcc (OccName TcClsName s) = isLexConSym s
-isSymOcc (OccName VarName s)   = isLexSym s
-isSymOcc (OccName TvName s)    = isLexSym s
+isSymOcc (OccName DataName s _)  = isLexConSym s
+isSymOcc (OccName TcClsName s _) = isLexConSym s
+isSymOcc (OccName VarName s _)   = isLexSym s
+isSymOcc (OccName TvName s _)    = isLexSym s
 -- Pretty inefficient!
 
 parenSymOcc :: OccName -> SDoc -> SDoc
@@ -745,8 +755,8 @@ guys never show up in error messages.  What a hack.
 
 \begin{code}
 mkMethodOcc :: OccName -> OccName
-mkMethodOcc occ@(OccName VarName _) = occ
-mkMethodOcc occ                     = mk_simple_deriv varName "$m" occ
+mkMethodOcc occ@(OccName VarName _ _) = occ
+mkMethodOcc occ                       = mk_simple_deriv varName "$m" occ
 \end{code}
 
 
@@ -779,7 +789,7 @@ initTidyOccEnv = foldl (\env occ -> extendOccEnv env occ 1) emptyTidyOccEnv
 
 tidyOccName :: TidyOccEnv -> OccName -> (TidyOccEnv, OccName)
 
-tidyOccName in_scope occ@(OccName occ_sp fs)
+tidyOccName in_scope occ@(OccName occ_sp _ base_occ)
   = case lookupOccEnv in_scope occ of
 	Nothing -> 	-- Not already used: make it used
 		   (extendOccEnv in_scope occ 1, occ)
@@ -787,9 +797,7 @@ tidyOccName in_scope occ@(OccName occ_sp fs)
 	Just n  -> 	-- Already used: make a new guess, 
 			-- change the guess base, and try again
 		   tidyOccName  (extendOccEnv in_scope occ (n+1))
-                                (mkOccName occ_sp (base_occ ++ show n))
-  where
-    base_occ = reverse (dropWhile isDigit (reverse (unpackFS fs)))
+                                (mkOccNameBase occ_sp (base_occ ++ show n) base_occ)
 \end{code}
 
 %************************************************************************
@@ -800,7 +808,7 @@ tidyOccName in_scope occ@(OccName occ_sp fs)
 
 \begin{code}
 mkTupleOcc :: NameSpace -> TupleSort -> Arity -> OccName
-mkTupleOcc ns sort ar = OccName ns (mkFastString str)
+mkTupleOcc ns sort ar = occName ns (mkFastString str)
   where
  	-- no need to cache these, the caching is done in the caller
 	-- (TysWiredIn.mk_tuple)
@@ -831,7 +839,7 @@ mkTupleOcc ns sort ar = OccName ns (mkFastString str)
 
 isTupleOcc_maybe :: OccName -> Maybe (NameSpace, TupleSort, Arity)
 -- Tuples are special, because there are so many of them!
-isTupleOcc_maybe (OccName ns fs)
+isTupleOcc_maybe (OccName ns fs _)
   = case unpackFS fs of
 	'(':'#':',':rest     -> Just (ns, UnboxedTuple, 2 + count_commas rest)
 	'(':',':rest         -> Just (ns, BoxedTuple,   2 + count_commas rest)
@@ -917,11 +925,11 @@ instance Binary NameSpace where
 	      _ -> do return TcClsName
 
 instance Binary OccName where
-    put_ bh (OccName aa ab) = do
+    put_ bh (OccName aa ab _) = do
 	    put_ bh aa
 	    put_ bh ab
     get bh = do
 	  aa <- get bh
 	  ab <- get bh
-	  return (OccName aa ab)
+	  return (occName aa ab)
 \end{code}
