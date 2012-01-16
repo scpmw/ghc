@@ -891,6 +891,13 @@ data TickTransEnv = TTE { fileName     :: FastString
 
 data TickishType = ProfNotes | HpcTicks | Breakpoints | SourceNotes
 
+-- | Tickishs that only make sense when their source code location
+-- refers to the current file. This might not apply due LINE pragmas
+-- in the code and might confuse at least HPC.
+tickSameFileOnly :: TickishType -> Bool
+tickSameFileOnly HpcTicks = True
+tickSameFileOnly _other   = False
+
 type FreeVars = OccEnv Id
 noFVs :: FreeVars
 noFVs = emptyOccEnv
@@ -959,13 +966,18 @@ getPathEntry = declPath `liftM` getEnv
 getFileName :: TM FastString
 getFileName = fileName `liftM` getEnv
 
-sameFileName :: SrcSpan -> TM a -> TM a -> TM a
-sameFileName pos out_of_scope in_scope = do
+isGoodTickSrcSpan :: SrcSpan -> TM Bool
+isGoodTickSrcSpan pos = do
   file_name <- getFileName
-  case srcSpanFileName_maybe pos of 
-    Just file_name2 
-      | file_name == file_name2 -> in_scope
-    _ -> out_of_scope
+  tickish <- tickishType `liftM` getEnv
+  let need_same_file = tickSameFileOnly tickish
+      same_file      = Just file_name == srcSpanFileName_maybe pos
+  return (isGoodSrcSpan' pos && (not need_same_file || same_file))
+
+ifGoodTickSrcSpan :: SrcSpan -> TM a -> TM a -> TM a
+ifGoodTickSrcSpan pos then_code else_code = do
+  good <- isGoodTickSrcSpan pos
+  if good then then_code else else_code
 
 bindLocals :: [Id] -> TM a -> TM a
 bindLocals new_ids (TM m)
@@ -984,23 +996,23 @@ isBlackListed pos = TM $ \ env st ->
 -- expression argument to support nested box allocations 
 allocTickBox :: BoxLabel -> Bool -> Bool -> SrcSpan -> TM (HsExpr Id)
              -> TM (LHsExpr Id)
-allocTickBox boxLabel countEntries topOnly pos m | isGoodSrcSpan' pos =
-  sameFileName pos (do e <- m; return (L pos e)) $ do
+allocTickBox boxLabel countEntries topOnly pos m =
+  ifGoodTickSrcSpan pos (do
     (fvs, e) <- getFreeVars m
     env <- getEnv
     tickish <- mkTickish boxLabel countEntries topOnly pos fvs (declPath env)
     return (L pos (HsTick tickish (L pos e)))
-allocTickBox _boxLabel _countEntries _topOnly pos m = do
-  e <- m
-  return (L pos e)
-
+  ) (do
+    e <- m
+    return (L pos e)
+  )
 
 -- the tick application inherits the source position of its
 -- expression argument to support nested box allocations 
 allocATickBox :: BoxLabel -> Bool -> Bool -> SrcSpan -> FreeVars
               -> TM (Maybe (Tickish Id))
-allocATickBox boxLabel countEntries topOnly  pos fvs | isGoodSrcSpan' pos =
-  sameFileName pos (return Nothing) $ do
+allocATickBox boxLabel countEntries topOnly  pos fvs =
+  ifGoodTickSrcSpan pos (do
     let
       mydecl_path = case boxLabel of
                       TopLevelBox x -> x
@@ -1008,8 +1020,7 @@ allocATickBox boxLabel countEntries topOnly  pos fvs | isGoodSrcSpan' pos =
                       _ -> panic "allocATickBox"
     tickish <- mkTickish boxLabel countEntries topOnly pos fvs mydecl_path
     return (Just tickish)
-allocATickBox _boxLabel _countEntries _topOnly _pos _fvs =
-  return Nothing
+  ) (return Nothing)
 
 
 mkTickish :: BoxLabel -> Bool -> Bool -> SrcSpan -> OccEnv Id -> [String]
