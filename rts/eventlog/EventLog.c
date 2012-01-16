@@ -100,7 +100,6 @@ char *EventDesc[] = {
   [EVENT_DEBUG_PROCEDURE]     = "Debug procedure data",
   [EVENT_DEBUG_SOURCE]        = "Debug source data",
   [EVENT_DEBUG_CORE]          = "Debug core data",
-  [EVENT_DEBUG_NAME]          = "Debug name data",
   [EVENT_DEBUG_PTR_RANGE]     = "Debug pointer range",
 };
 
@@ -271,7 +270,6 @@ static StgWord16 getEventSize(EventTypeNum t)
     case EVENT_DEBUG_PROCEDURE: // (variable)
     case EVENT_DEBUG_SOURCE: // (variable)
     case EVENT_DEBUG_CORE: // (variable)
-    case EVENT_DEBUG_NAME: // (variable)
         return EVENT_SIZE_VARIABLE;
 
     case EVENT_SPARK_COUNTERS:   // (cap, 7*counter)

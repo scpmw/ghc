@@ -330,17 +330,14 @@ mkProcedureEvent platform tim lbl
 
 mkAnnotEvent :: Set Var -> Tickish () -> [LlvmStatic]
 mkAnnotEvent _ (SourceNote ss names)
-  = if null names then [src_ev] else [name_ev, src_ev]
-  where
-    src_ev = mkEvent EVENT_DEBUG_SOURCE $ mkStaticStruct
-             [ mkLit16BE $ srcSpanStartLine ss
-             , mkLit16BE $ srcSpanStartCol ss
-             , mkLit16BE $ srcSpanEndLine ss
-             , mkLit16BE $ srcSpanEndCol ss
-             , mkStaticString $ unpackFS $ srcSpanFile ss
-             ]
-    name_ev = mkEvent EVENT_DEBUG_NAME $ mkStaticStruct
-              [mkStaticString names]
+  = [mkEvent EVENT_DEBUG_SOURCE $ mkStaticStruct
+      [ mkLit16BE $ srcSpanStartLine ss
+      , mkLit16BE $ srcSpanStartCol ss
+      , mkLit16BE $ srcSpanEndLine ss
+      , mkLit16BE $ srcSpanEndCol ss
+      , mkStaticString $ unpackFS $ srcSpanFile ss
+      , mkStaticString names
+      ]]
 
 mkAnnotEvent bnds (CoreNote lbl (ExprPtr core))
   = [mkEvent EVENT_DEBUG_CORE $ mkStaticStruct
