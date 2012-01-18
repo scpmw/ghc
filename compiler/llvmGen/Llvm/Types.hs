@@ -98,11 +98,13 @@ data LlvmVar
   | LMLitVar LlvmLit
   -- | Metadata
   | LMMetaVar !Int
+  | LMNamedMeta LMString
   deriving (Eq)
 
 instance Outputable LlvmVar where
   ppr (LMLitVar x)  = ppr x
   ppr (LMMetaVar x) = char '!' <> ppr x
+  ppr (LMNamedMeta x)= char '!' <> ppr x
   ppr (x         )  = ppr (getVarType x) <+> ppName x
 
 
@@ -149,6 +151,7 @@ data LlvmStatic
   | LMMeta [LlvmStatic]                -- ^ A list of literals and other metadata
   | LMMetaString LMString              -- ^ Literal metadata string
   | LMMetaRef !Int                     -- ^ Reference to a global metadata node
+  | LMMetaRefs [Int]                   -- ^ Collection of metadata references (for named metadata)
 
 instance Outputable LlvmStatic where
   ppr (LMComment       s) = text "; " <> ftext s
@@ -174,6 +177,8 @@ instance Outputable LlvmStatic where
      = text "metadata !\"" <> ftext str <> text "\""
   ppr (LMMetaRef n)
      = text "metadata !" <> ppr n
+  ppr (LMMetaRefs ns)
+     = text "!{" <> hsep (punctuate comma (map (\n -> char '!' <> ppr n) ns)) <> char '}'
 
 pprStaticArith :: LlvmStatic -> LlvmStatic -> LitString -> LitString -> String -> SDoc
 pprStaticArith s1 s2 int_op float_op op_name =
@@ -196,6 +201,7 @@ ppName v@(LMLocalVar  {}) = char '%' <> ppPlainName v
 ppName v@(LMNLocalVar {}) = char '%' <> ppPlainName v
 ppName v@(LMLitVar    {}) =             ppPlainName v
 ppName v@(LMMetaVar   {}) = char '!' <> ppPlainName v
+ppName v@(LMNamedMeta {}) = char '!' <> ppPlainName v
 
 -- | Return the variable name or value of the 'LlvmVar'
 -- in a plain textual representation (e.g. @x@, @y@ or @42@).
@@ -206,6 +212,7 @@ ppPlainName (LMLocalVar  x _        ) = text ('l' : show x)
 ppPlainName (LMNLocalVar x _        ) = ftext x
 ppPlainName (LMLitVar    x          ) = ppLit x
 ppPlainName (LMMetaVar   n          ) = ppr n
+ppPlainName (LMNamedMeta n          ) = ppr n
 
 -- | Print a literal value. No type.
 ppLit :: LlvmLit -> SDoc
@@ -223,6 +230,7 @@ getVarType (LMLocalVar  _ y        ) = y
 getVarType (LMNLocalVar _ y        ) = y
 getVarType (LMLitVar    l          ) = getLitType l
 getVarType (LMMetaVar   _          ) = LMMetaType
+getVarType (LMNamedMeta _          ) = LMMetaType
 
 -- | Return the 'LlvmType' of a 'LlvmLit'
 getLitType :: LlvmLit -> LlvmType
@@ -246,6 +254,7 @@ getStatType (LMSub         t _) = getStatType t
 getStatType (LMMeta        _  ) = LMMetaType
 getStatType (LMMetaString  _  ) = LMMetaType
 getStatType (LMMetaRef     _  ) = LMMetaType
+getStatType (LMMetaRefs    _  ) = LMMetaType
 getStatType (LMComment       _) = error "Can't call getStatType on LMComment!"
 
 -- | Return the 'LlvmLinkageType' for a 'LlvmVar'
@@ -267,6 +276,7 @@ pVarLift (LMLocalVar  s t        ) = LMLocalVar  s (pLift t)
 pVarLift (LMNLocalVar s t        ) = LMNLocalVar s (pLift t)
 pVarLift (LMLitVar    _          ) = error $ "Can't lower a literal type!"
 pVarLift (LMMetaVar   _          ) = error $ "Can't lower a metadata type!"
+pVarLift (LMNamedMeta _          ) = error $ "Can't lower a metadata type!"
 
 -- | Remove the pointer indirection of the supplied type. Only 'LMPointer'
 -- constructors can be lowered.
@@ -281,6 +291,7 @@ pVarLower (LMLocalVar  s t        ) = LMLocalVar  s (pLower t)
 pVarLower (LMNLocalVar s t        ) = LMNLocalVar s (pLower t)
 pVarLower (LMLitVar    _          ) = error $ "Can't lower a literal type!"
 pVarLower (LMMetaVar   _          ) = error $ "Can't lower a metadata type!"
+pVarLower (LMNamedMeta _          ) = error $ "Can't lower a metadata type!"
 
 -- | Test if the given 'LlvmType' is an integer
 isInt :: LlvmType -> Bool

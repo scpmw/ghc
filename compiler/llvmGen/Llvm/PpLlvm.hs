@@ -81,6 +81,9 @@ ppLlvmGlobal (LMGlobal var@(LMGlobalVar _ _ link x a c) dat) =
 ppLlvmGlobal (LMGlobal var@(LMMetaVar _) (Just val)) =
   ppAssignment var (ppr val)
 
+ppLlvmGlobal (LMGlobal var@(LMNamedMeta _) (Just val)) =
+  ppAssignment var (ppr val)
+
 ppLlvmGlobal (LMGlobal var val) = error $ "Non Global var ppr as global! "
                                           ++ showSDoc (ppr var) ++ " " ++ showSDoc (ppr val)
 

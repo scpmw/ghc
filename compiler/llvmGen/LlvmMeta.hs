@@ -31,9 +31,9 @@ import SrcLoc          (srcSpanFile,
 import MonadUtils      ( MonadIO(..) )
 
 import System.Directory(getCurrentDirectory)
-import Control.Monad   (forM, forM_)
+import Control.Monad   (forM)
 import Data.List       (nub, maximumBy)
-import Data.Maybe      (fromMaybe, mapMaybe)
+import Data.Maybe      (fromMaybe, mapMaybe, catMaybes)
 import Data.Map as Map (Map, fromList, assocs, lookup, elems)
 import Data.Set as Set (Set, fromList, member)
 import Data.Function   (on)
@@ -140,9 +140,9 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
 
   -- Lookup of procedure Cmm data
   let procMap = Map.fromList [ (l, p) | p@(CmmProc _ l _) <- cmm ]
-  
+
   -- Emit metadata for files and procedures
-  forM_ (assocs tiMap) $ \(lbl, tim) -> do
+  procIds <- forM (assocs tiMap) $ \(lbl, tim) -> do
 
     -- Decide what source code to associate with procedure
     let procTick = findGoodSourceTick lbl unitFile tiMap idLabelMap
@@ -178,9 +178,16 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
               ]
           Nothing -> return ()
 
+        return $ Just procId
+
       -- Without CMM source data for the procedure, we are not able to
       -- generate valid DWARF for it
-      _otherwise -> return ()
+      _otherwise -> return Nothing
+
+  -- Generate a list of all generate subprogram metadata structures
+  renderLlvm $ pprLlvmData
+    ([LMGlobal (LMNamedMeta (fsLit "llvm.dbg.sp"))
+               (Just (LMMetaRefs (catMaybes procIds)))], [])
 
   return ()
 
