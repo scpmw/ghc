@@ -29,8 +29,7 @@ import Id
 import VarSet
 import Data.List
 import FastString
-import HscTypes	
-import Platform
+import HscTypes
 import StaticFlags
 import TyCon
 import Unique

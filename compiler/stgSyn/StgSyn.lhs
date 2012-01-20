@@ -51,7 +51,7 @@ module StgSyn (
 
 #include "HsVersions.h"
 
-import CostCentre	( CostCentreStack, CostCentre )
+import CostCentre	( CostCentreStack )
 import VarSet		( IdSet, isEmptyVarSet )
 import Id		
 import DataCon
@@ -70,7 +70,6 @@ import Bitmap
 import DynFlags
 import Platform
 import StaticFlags	( opt_SccProfilingOn )
-import Module
 import FastString
 
 import Packages		( isDllName )

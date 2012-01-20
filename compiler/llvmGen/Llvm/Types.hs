@@ -23,8 +23,8 @@ import PprBase
 
 -- | A global mutable variable. Maybe defined or external
 data LMGlobal = LMGlobal {
-  getGlobalVar :: LlvmVar,          -- ^ Return the 'LlvmType' of the 'LMGlobal'
-  getGlobalType :: Maybe LlvmStatic -- ^ Return the 'LlvmVar' part of a 'LMGlobal'
+  getGlobalVar :: LlvmVar,          -- ^ Returns the variable of the 'LMGlobal'
+  getGlobalValue :: Maybe LlvmStatic -- ^ Return the value of the 'LMGlobal'
   }
 
 -- | A String in LLVM

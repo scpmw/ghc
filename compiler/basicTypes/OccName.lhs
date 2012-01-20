@@ -247,7 +247,7 @@ data OccName = OccName
     { occNameSpace  :: !NameSpace
     , occNameFS     :: !FastString
     , _occBase      :: String
-      -- | The base name without trailing numbers as a string. Cached
+      -- ^ The base name without trailing numbers as a string. Cached
       -- for efficient name generation
     }
     deriving Typeable
