@@ -673,7 +673,7 @@ that
 	- the virtual Hp is moved on to the worst virtual Hp for the branches
 
 \begin{code}
-forkAlts :: [FCode a] -> FCode [a]
+forkAlts :: [FCode a] -> FCode ([a], [Tickish ()])
 
 forkAlts branch_fcodes
   = do	{ info_down <- getInfoDown
@@ -695,7 +695,7 @@ forkAlts branch_fcodes
 	; setState $ foldl stateIncUsage state branch_out_states
 	; mapM_ takeTicksFrom branch_out_states
 		-- NB foldl.  state is the *left* argument to stateIncUsage
-	; return branch_results }
+	; return (branch_results, concatMap cgs_ticks branch_out_states) }
 \end{code}
 
 @forkEval@ takes two blocks of code.

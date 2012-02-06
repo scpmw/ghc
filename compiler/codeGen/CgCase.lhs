@@ -381,8 +381,9 @@ cgInlinePrimOp primop args bndr (AlgAlt tycon) live_in_alts alts
                              (tagToClosure tycon tag_amode)) })
 
 		-- Compile the alts
-	; (branches, mb_deflt) <- cgAlgAlts NoGC Nothing{-cc_slot-}
+	; (branches, mb_deflt, ticks) <- cgAlgAlts NoGC Nothing{-cc_slot-}
 				   	    (AlgAlt tycon) alts
+        ; mapM_ addTick ticks
 
 		-- Do the switch
 	; emitSwitch tag_amode branches mb_deflt 0 (tyConFamilySize tycon - 1)
@@ -475,10 +476,13 @@ cgEvalAlts cc_slot bndr alt_type alts
 	--
 	-- which is worse than having the alt code in the switch statement
 
-	; (alts, mb_deflt) <- cgAlgAlts GCMayHappen cc_slot alt_type alts
+	; instr <- freshInstr
 
-	; (lbl, branches) <- emitAlgReturnTarget (idName bndr) 
-				alts mb_deflt fam_sz
+	; (alts, mb_deflt, ticks) <- withInstr instr $
+                                     cgAlgAlts GCMayHappen cc_slot alt_type alts
+
+	; (lbl, branches) <- emitAlgReturnTarget (idName bndr)
+				alts mb_deflt instr ticks fam_sz
 
 	; returnFC (CaseAlts lbl branches bndr) }
   where
@@ -516,10 +520,11 @@ cgAlgAlts :: GCFlag
        -> AltType				--  ** AlgAlt or PolyAlt only **
        -> [StgAlt]				-- The alternatives
        -> FCode ( [(ConTagZ, CgStmts)], -- The branches
-		  Maybe CgStmts )	-- The default case
+		  Maybe CgStmts,        -- The default case
+                  [Tickish ()])         -- Ticks on alternatives
 
 cgAlgAlts gc_flag cc_slot alt_type alts
-  = do alts <- forkAlts [ cgAlgAlt gc_flag cc_slot alt_type alt | alt <- alts]
+  = do (alts, ticks) <- forkAlts [ cgAlgAlt gc_flag cc_slot alt_type alt | alt <- alts]
        let
 	    mb_deflt = case alts of -- DEFAULT is always first, if present
 			 ((DEFAULT,blks) : _) -> Just blks
@@ -528,7 +533,7 @@ cgAlgAlts gc_flag cc_slot alt_type alts
 	    branches = [(dataConTagZ con, blks) 
 	   	       | (DataAlt con, blks) <- alts]
        -- in
-       return (branches, mb_deflt)
+       return (branches, mb_deflt, ticks)
 
 
 cgAlgAlt :: GCFlag
@@ -577,7 +582,8 @@ cgPrimAlts :: GCFlag
 --
 -- INVARIANT: the default binder is already bound
 cgPrimAlts gc_flag alt_type scrutinee alts
-  = do	{ tagged_absCs <- forkAlts (map (cgPrimAlt gc_flag alt_type) alts)
+  = do	{ (tagged_absCs, ticks) <- forkAlts (map (cgPrimAlt gc_flag alt_type) alts)
+        ; mapM_ addTick ticks
 	; let ((DEFAULT, deflt_absC) : others) = tagged_absCs	-- There is always a default
 	      alt_absCs = [(lit,rhs) | (LitAlt lit, rhs) <- others]
  	; emitLitSwitch (CmmReg scrutinee) alt_absCs deflt_absC }

@@ -231,12 +231,13 @@ emitAlgReturnTarget
 	:: Name				-- Just for its unique
 	-> [(ConTagZ, CgStmts)]		-- Tagged branches
 	-> Maybe CgStmts		-- Default branch (if any)
+	-> Int                          -- instrumentation ID
+	-> [Tickish ()]                 -- ticks from alternatives
 	-> Int                          -- family size
 	-> FCode (CLabel, SemiTaggingStuff)
 
-emitAlgReturnTarget name branches mb_deflt fam_sz
-  = do  { instr <- freshInstr 
-        ; (blks, ticks) <- getCgStmts $ cgInstrument instr $
+emitAlgReturnTarget name branches mb_deflt instr ticks fam_sz
+  = do  { (blks, _) <- getCgStmts $ cgInstrument instr $
                     -- is the constructor tag in the node reg?
                     if isSmallFamily fam_sz
                         then do -- yes, node has constr. tag
