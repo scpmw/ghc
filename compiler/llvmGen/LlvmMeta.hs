@@ -17,9 +17,7 @@ import DynFlags
 import FastString
 
 import Config          ( cProjectName, cProjectVersion )
-import Name            ( nameOccName )
 import Literal         ( Literal(..) )
-import OccName         ( occNameFS )
 import Var             ( Var, varName )
 import OldCmm
 import Outputable
@@ -348,7 +346,7 @@ mkAnnotEvent _ (SourceNote ss names)
 
 mkAnnotEvent bnds (CoreNote lbl (ExprPtr core))
   = [mkEvent EVENT_DEBUG_CORE $ mkStaticStruct
-      [ mkStaticString $ showSDoc $ ppr lbl
+      [ mkStaticString $ showSDocDump $ ppr lbl
       , mkStaticString $ take 10000 $ showSDoc $ ppr $ stripCore bnds core
       ]]
 mkAnnotEvent _ _ = []
@@ -402,7 +400,8 @@ mkI1 :: Bool -> LlvmLit
 mkI1 f = LMIntLit (if f then 1 else 0) (LMInt 1)
 
 placeholder :: Var -> CoreExpr
-placeholder = Lit . MachStr . occNameFS . nameOccName . varName -- for now
+placeholder = Lit . MachStr . mkFastString .
+              ("__Core__" ++) . showSDocDump . ppr . varName
 
 stripCore :: Set Var -> CoreExpr -> CoreExpr
 stripCore bs (App e1 e2) = App (stripCore bs e1) (stripCore bs e2)
