@@ -363,7 +363,7 @@ coreToStgExpr (Cast expr _)
 
 -- Cases require a little more real work.
 
-coreToStgExpr (Case scrut bndr _ alts) = do
+coreToStgExpr caseExpr@(Case scrut bndr ty alts) = do
     (alts2, alts_fvs, alts_escs)
        <- extendVarEnvLne [(bndr, LambdaBound)] $ do
             (alts2, fvs_s, escs_s) <- mapAndUnzip3M vars_alt alts
@@ -407,7 +407,7 @@ coreToStgExpr (Case scrut bndr _ alts) = do
                 -- then return from, a let-no-escape thing.
       )
   where
-    vars_alt (con, binders, rhs)
+    vars_alt alt@(con, binders, rhs)
       = let     -- Remove type variables
             binders' = filterStgBinders binders
         in
@@ -417,7 +417,10 @@ coreToStgExpr (Case scrut bndr _ alts) = do
                 -- Records whether each param is used in the RHS
             good_use_mask = [ b `elementOfFVInfo` rhs_fvs | b <- binders' ]
 
-        return ( (con, binders', good_use_mask, rhs2),
+        let noteExpr = ExprPtr (Case scrut bndr ty [alt])
+            rhs3 = StgTick (CoreNote bndr noteExpr) rhs2
+
+        return ( (con, binders', good_use_mask, rhs3),
                  binders' `minusFVBinders` rhs_fvs,
                  rhs_escs `delVarSetList` binders' )
                 -- ToDo: remove the delVarSet;
