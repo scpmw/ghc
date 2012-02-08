@@ -27,6 +27,7 @@ import SrcLoc          (srcSpanFile,
                         srcSpanStartLine, srcSpanStartCol,
                         srcSpanEndLine, srcSpanEndCol)
 import MonadUtils      ( MonadIO(..) )
+import PprCore         ( pprCoreAlt )
 
 import System.Directory(getCurrentDirectory)
 import Control.Monad   (forM)
@@ -344,10 +345,15 @@ mkAnnotEvent _ (SourceNote ss names)
       , mkStaticString names
       ]]
 
-mkAnnotEvent bnds (CoreNote lbl (ExprPtr core))
+mkAnnotEvent bnds (CoreNote lbl corePtr)
   = [mkEvent EVENT_DEBUG_CORE $ mkStaticStruct
       [ mkStaticString $ showSDocDump $ ppr lbl
-      , mkStaticString $ take 10000 $ showSDoc $ ppr $ stripCore bnds core
+      , -- Core might be too big to fit into an event log
+        -- packet. Impose a limit.
+        let sDocStr = mkStaticString . take 0x80 . showSDoc
+        in case corePtr of
+          ExprPtr core -> sDocStr $ ppr $ stripCore bnds core
+          AltPtr  alt  -> sDocStr $ pprCoreAlt $ stripAlt bnds alt
       ]]
 mkAnnotEvent _ _ = []
 
@@ -412,10 +418,12 @@ stripCore bs (Let es e)  = Let (stripLet bs es) (stripCore bs e)
 stripCore bs (Tick _ e)  = stripCore bs e -- strip out
 stripCore bs (Case e b t as)
   | b `member` bs        = Case (stripCore bs e) b t [(DEFAULT,[],placeholder b)]
-  | otherwise            = Case (stripCore bs e) b t (map stripAlt as)
-  where stripAlt (a, bn, e) = (a, bn, stripCore bs e)
+  | otherwise            = Case (stripCore bs e) b t (map (stripAlt bs) as)
 stripCore bs (CoreSyn.Cast e _)  = stripCore bs e -- strip out
 stripCore _  other       = other
+
+stripAlt :: UniqSet Var -> CoreAlt -> CoreAlt
+stripAlt bs (a, bn, e) = (a, bn, stripCore bs e)
 
 stripLet :: Set Var -> CoreBind -> CoreBind
 stripLet bs (NonRec b e)

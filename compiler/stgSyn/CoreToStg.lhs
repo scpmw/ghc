@@ -363,7 +363,7 @@ coreToStgExpr (Cast expr _)
 
 -- Cases require a little more real work.
 
-coreToStgExpr caseExpr@(Case scrut bndr ty alts) = do
+coreToStgExpr (Case scrut bndr ty alts) = do
     (alts2, alts_fvs, alts_escs)
        <- extendVarEnvLne [(bndr, LambdaBound)] $ do
             (alts2, fvs_s, escs_s) <- mapAndUnzip3M vars_alt alts
@@ -417,8 +417,7 @@ coreToStgExpr caseExpr@(Case scrut bndr ty alts) = do
                 -- Records whether each param is used in the RHS
             good_use_mask = [ b `elementOfFVInfo` rhs_fvs | b <- binders' ]
 
-        let noteExpr = ExprPtr (Case scrut bndr ty [alt])
-            rhs3 = StgTick (CoreNote bndr noteExpr) rhs2
+        let rhs3 = StgTick (CoreNote bndr (AltPtr alt)) rhs2
 
         return ( (con, binders', good_use_mask, rhs3),
                  binders' `minusFVBinders` rhs_fvs,

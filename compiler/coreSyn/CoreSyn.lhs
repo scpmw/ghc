@@ -393,10 +393,12 @@ data Tickish id =
 
   deriving (Eq, Ord, Data, Typeable)
 
--- | A hackish newtype wrapper making the expression ignored by all
--- equality checks
-newtype ExprPtr id = ExprPtr (Expr id)
-                   deriving (Data, Typeable)
+-- | A hackish newtype mostly for making the expression ignored by all
+-- equality checks. Also allows us to cleanly pack expressions as well
+-- as "case" alternatives.
+data ExprPtr id = ExprPtr (Expr id)
+                | AltPtr (Alt id)
+                deriving (Data, Typeable)
 instance Eq (ExprPtr id)  where _ == _       = True
 instance Ord (ExprPtr id) where compare _ _  = EQ
 
