@@ -586,17 +586,14 @@ DwarfUnit *dwarf_new_unit(char *name, char *comp_dir)
 	unit->comp_dir = strdup(comp_dir);
 	unit->procs = 0;
 	unit->next = dwarf_units;
+	unit->proc_table = allocStrHashTable();
 	dwarf_units = unit;
 	return unit;
 }
 
 DwarfProc *dwarf_get_proc(DwarfUnit *unit, char *name)
 {
-	DwarfProc *proc;
-	for (proc = unit->procs; proc; proc = proc->next)
-		if (!strcmp(name, proc->name))
-			return proc;
-	return 0;
+	return lookupStrHashTable(unit->proc_table, name);
 }
 
 DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name,
@@ -615,6 +612,9 @@ DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name,
 	proc->next = (after ? after->next : unit->procs);
 	*(after ? &after->next : &unit->procs) = proc;
 
+	if (!after)
+		insertStrHashTable(unit->proc_table, proc->name, proc);
+
 	return proc;
 }
 
@@ -623,6 +623,7 @@ void dwarf_free()
 	DwarfUnit *unit;
 	while ((unit = dwarf_units)) {
 		dwarf_units = unit->next;
+		freeHashTable(unit->proc_table, NULL);
 
 		DwarfProc *proc;
 		while ((proc = unit->procs)) {

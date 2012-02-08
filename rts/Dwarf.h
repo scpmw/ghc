@@ -6,6 +6,8 @@
 
 #ifdef USE_DWARF
 
+#include "Hash.h"
+
 typedef struct DwarfUnit_ DwarfUnit;
 typedef struct DwarfProc_ DwarfProc;
 typedef enum DwarfSource_ DwarfSource;
@@ -15,6 +17,7 @@ struct DwarfUnit_ {
 	char *comp_dir;
 	DwarfProc *procs;
 	DwarfUnit *next;
+	HashTable *proc_table;
 };
 
 enum DwarfSource_ {
