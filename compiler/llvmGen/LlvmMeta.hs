@@ -15,6 +15,7 @@ import CLabel
 import Module
 import DynFlags
 import FastString
+import UniqSet
 
 import Config          ( cProjectName, cProjectVersion )
 import Literal         ( Literal(..) )
@@ -34,7 +35,6 @@ import Control.Monad   (forM)
 import Data.List       (nub, maximumBy)
 import Data.Maybe      (fromMaybe, mapMaybe, catMaybes)
 import Data.Map as Map (Map, fromList, assocs, lookup, elems)
-import Data.Set as Set (Set, fromList, member)
 import Data.Function   (on)
 import Data.IORef
 import Data.Char       (ord, isAscii, isPrint, intToDigit)
@@ -334,7 +334,7 @@ mkProcedureEvent platform tim lbl
   where none = 0xffff
         showSDocC = flip renderWithStyle (mkCodeStyle CStyle)
 
-mkAnnotEvent :: Set Var -> Tickish () -> [LlvmStatic]
+mkAnnotEvent :: UniqSet Var -> Tickish () -> [LlvmStatic]
 mkAnnotEvent _ (SourceNote ss names)
   = [mkEvent EVENT_DEBUG_SOURCE $ mkStaticStruct
       [ mkLit16BE $ srcSpanStartLine ss
@@ -357,7 +357,7 @@ mkAnnotEvent bnds (CoreNote lbl corePtr)
       ]]
 mkAnnotEvent _ _ = []
 
-mkEvents :: Platform -> Set Var ->
+mkEvents :: Platform -> UniqSet Var ->
             ModLocation -> TickMap -> [RawCmmDecl] -> LlvmStatic
 mkEvents platform bnds mod_loc tick_map cmm
   = mkStaticStruct $
@@ -409,15 +409,15 @@ placeholder :: Var -> CoreExpr
 placeholder = Lit . MachStr . mkFastString .
               ("__Core__" ++) . showSDocDump . ppr . varName
 
-stripCore :: Set Var -> CoreExpr -> CoreExpr
+stripCore :: UniqSet Var -> CoreExpr -> CoreExpr
 stripCore bs (App e1 e2) = App (stripCore bs e1) (stripCore bs e2)
 stripCore bs (Lam b e)
-  | b `member` bs        = Lam b (placeholder b)
+  | b `elemSet` bs       = Lam b (placeholder b)
   | otherwise            = Lam b (stripCore bs e)
 stripCore bs (Let es e)  = Let (stripLet bs es) (stripCore bs e)
 stripCore bs (Tick _ e)  = stripCore bs e -- strip out
 stripCore bs (Case e b t as)
-  | b `member` bs        = Case (stripCore bs e) b t [(DEFAULT,[],placeholder b)]
+  | b `elemSet` bs       = Case (stripCore bs e) b t [(DEFAULT,[],placeholder b)]
   | otherwise            = Case (stripCore bs e) b t (map (stripAlt bs) as)
 stripCore bs (CoreSyn.Cast e _)  = stripCore bs e -- strip out
 stripCore _  other       = other
@@ -425,12 +425,15 @@ stripCore _  other       = other
 stripAlt :: UniqSet Var -> CoreAlt -> CoreAlt
 stripAlt bs (a, bn, e) = (a, bn, stripCore bs e)
 
-stripLet :: Set Var -> CoreBind -> CoreBind
+stripLet :: UniqSet Var -> CoreBind -> CoreBind
 stripLet bs (NonRec b e)
-  | b `member` bs        = NonRec b (placeholder b)
+  | b `elemSet` bs       = NonRec b (placeholder b)
   | otherwise            = NonRec b (stripCore bs e)
 stripLet bs (Rec ps)     = Rec (map f ps)
   where
     f (b, e)
-      | b `member` bs    = (b, placeholder b)
+      | b `elemSet` bs   = (b, placeholder b)
       | otherwise        = (b, stripCore bs e)
+
+elemSet :: Var -> UniqSet Var -> Bool
+elemSet = elementOfUniqSet
