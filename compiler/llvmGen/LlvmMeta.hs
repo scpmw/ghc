@@ -334,8 +334,8 @@ mkProcedureEvent platform tim lbl
   where none = 0xffff
         showSDocC = flip renderWithStyle (mkCodeStyle CStyle)
 
-mkAnnotEvent :: UniqSet Var -> Tickish () -> [LlvmStatic]
-mkAnnotEvent _ (SourceNote ss names)
+mkAnnotEvent :: UniqSet Var -> Maybe Var -> Tickish () -> [LlvmStatic]
+mkAnnotEvent _ _ (SourceNote ss names)
   = [mkEvent EVENT_DEBUG_SOURCE $ mkStaticStruct
       [ mkLit16BE $ srcSpanStartLine ss
       , mkLit16BE $ srcSpanStartCol ss
@@ -345,17 +345,18 @@ mkAnnotEvent _ (SourceNote ss names)
       , mkStaticString names
       ]]
 
-mkAnnotEvent bnds (CoreNote lbl corePtr)
+mkAnnotEvent bnds mbind (CoreNote lbl corePtr)
+  | mbind == Just lbl
   = [mkEvent EVENT_DEBUG_CORE $ mkStaticStruct
       [ mkStaticString $ showSDocDump $ ppr lbl
       , -- Core might be too big to fit into an event log
         -- packet. Impose a limit.
-        let sDocStr = mkStaticString . take 0x80 . showSDoc
+        let sDocStr = mkStaticString . take 0x8000 . showSDoc
         in case corePtr of
           ExprPtr core -> sDocStr $ ppr $ stripCore bnds core
           AltPtr  alt  -> sDocStr $ pprCoreAlt $ stripAlt bnds alt
       ]]
-mkAnnotEvent _ _ = []
+mkAnnotEvent _ _ _ = []
 
 mkEvents :: Platform -> UniqSet Var ->
             ModLocation -> TickMap -> [RawCmmDecl] -> LlvmStatic
@@ -363,23 +364,40 @@ mkEvents platform bnds mod_loc tick_map cmm
   = mkStaticStruct $
       [ mkModuleEvent mod_loc ] ++
       concat [ mkProcedureEvent platform tim (proc_lbl i l)
-               : concatMap (mkAnnotEvent bnds) (timTicks tim)
+               : let mbind = getMainCoreBind (timTicks tim)
+                 in concatMap (mkAnnotEvent bnds mbind) (timTicks tim)
              | CmmProc i l _ <- cmm
              , Just tim <- [Map.lookup l tick_map]] ++
       [ LMStaticLit $ mkI8 0 ]
   where proc_lbl (Just (Statics info_lbl _)) _ = info_lbl
         proc_lbl _                           l = l
 
-collectBinds :: Tickish () -> [Var]
-collectBinds (CoreNote bnd _) = [bnd]
-collectBinds _                = []
+-- | Get core name from tickishs. Note that we might often have many,
+-- many core notes in the list, as Core2Stg annotates every point
+-- where it could see code generation generating a new proc. On the
+-- other hand, if codegen does its job right, many of these will
+-- actually be "inlined", leaving us with rather unwieldingly
+-- fine-grained core annotations.
+--
+-- Luckily, we know that the first core tick we find (more often than
+-- not even the first tickish we have) will be one of the top-level
+-- ticks. If we just ignore all with other names, we cover all
+-- interesting Core without having to split everything in millions of
+-- tiny core pieces.
+getMainCoreBind :: [Tickish ()] -> Maybe Var
+getMainCoreBind (CoreNote bnd _:_) = Just bnd
+getMainCoreBind (_:xs)             = getMainCoreBind xs
+getMainCoreBind _                  = Nothing
 
 cmmDebugLlvmGens :: DynFlags -> ModLocation ->
                     TickMap -> [RawCmmDecl] -> LlvmM ()
 cmmDebugLlvmGens dflags mod_loc tick_map cmm = do
 
-  let collect tim = concatMap collectBinds $ timTicks tim
-      binds =  Set.fromList $ concatMap collect $ elems tick_map
+  -- Collect all bindings that we want to output core pieces for. We
+  -- will use this map to make sure that we don't output a piece of
+  -- core twice.
+  let collect tim = getMainCoreBind (timTicks tim)
+      binds = mkUniqSet $ mapMaybe collect $ elems tick_map
 
   let platform = targetPlatform dflags
 
