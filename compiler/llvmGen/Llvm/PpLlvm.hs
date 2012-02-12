@@ -17,9 +17,6 @@ module Llvm.PpLlvm (
     ppLlvmFunctions,
     ppLlvmFunction,
 
-    -- * Utility functions
-    llvmSDoc
-
     ) where
 
 #include "HsVersions.h"
@@ -28,16 +25,16 @@ import Llvm.AbsSyn
 import Llvm.Types
 
 import Data.List ( intersperse )
-import Pretty
-import qualified Outputable as Out
+import Outputable
 import Unique
+import FastString ( sLit )
 
 --------------------------------------------------------------------------------
 -- * Top Level Print functions
 --------------------------------------------------------------------------------
 
 -- | Print out a whole LLVM module.
-ppLlvmModule :: LlvmModule -> Doc
+ppLlvmModule :: LlvmModule -> SDoc
 ppLlvmModule (LlvmModule comments aliases globals decls funcs)
   = ppLlvmComments comments
     $+$ empty
@@ -50,21 +47,21 @@ ppLlvmModule (LlvmModule comments aliases globals decls funcs)
     $+$ ppLlvmFunctions funcs
 
 -- | Print out a multi-line comment, can be inside a function or on its own
-ppLlvmComments :: [LMString] -> Doc
+ppLlvmComments :: [LMString] -> SDoc
 ppLlvmComments comments = vcat $ map ppLlvmComment comments
 
 -- | Print out a comment, can be inside a function or on its own
-ppLlvmComment :: LMString -> Doc
+ppLlvmComment :: LMString -> SDoc
 ppLlvmComment com = semi <+> ftext com
 
 
 -- | Print out a list of global mutable variable definitions
-ppLlvmGlobals :: [LMGlobal] -> Doc
+ppLlvmGlobals :: [LMGlobal] -> SDoc
 ppLlvmGlobals ls = vcat $ map ppLlvmGlobal ls
 
 -- | Print out a global mutable variable definition
-ppLlvmGlobal :: LMGlobal -> Doc
-ppLlvmGlobal (var@(LMGlobalVar _ _ link x a c), dat) =
+ppLlvmGlobal :: LMGlobal -> SDoc
+ppLlvmGlobal (LMGlobal var@(LMGlobalVar _ _ link x a c) dat) =
     let sect = case x of
             Just x' -> text ", section" <+> doubleQuotes (ftext x')
             Nothing -> empty
@@ -74,32 +71,39 @@ ppLlvmGlobal (var@(LMGlobalVar _ _ link x a c), dat) =
             Nothing -> empty
 
         rhs = case dat of
-            Just stat -> texts stat
-            Nothing   -> texts (pLower $ getVarType var)
+            Just stat -> ppr stat
+            Nothing   -> ppr (pLower $ getVarType var)
 
         const' = if c then text "constant" else text "global"
 
-    in ppAssignment var $ texts link <+> const' <+> rhs <> sect <> align
+    in ppAssignment var $ ppr link <+> const' <+> rhs <> sect <> align
 
-ppLlvmGlobal oth = error $ "Non Global var ppr as global! " ++ show oth
+ppLlvmGlobal (LMGlobal var@(LMMetaVar _) (Just val)) =
+  ppAssignment var (ppr val)
+
+ppLlvmGlobal (LMGlobal var@(LMNamedMeta _) (Just val)) =
+  ppAssignment var (ppr val)
+
+ppLlvmGlobal (LMGlobal var val) = error $ "Non Global var ppr as global! "
+                                          ++ showSDoc (ppr var) ++ " " ++ showSDoc (ppr val)
 
 
 -- | Print out a list of LLVM type aliases.
-ppLlvmAliases :: [LlvmAlias] -> Doc
+ppLlvmAliases :: [LlvmAlias] -> SDoc
 ppLlvmAliases tys = vcat $ map ppLlvmAlias tys
 
 -- | Print out an LLVM type alias.
-ppLlvmAlias :: LlvmAlias -> Doc
-ppLlvmAlias (name, ty) = text "%" <> ftext name <+> equals <+> text "type" <+> texts ty
+ppLlvmAlias :: LlvmAlias -> SDoc
+ppLlvmAlias (name, ty) = text "%" <> ftext name <+> equals <+> text "type" <+> ppr ty
 
 
 -- | Print out a list of function definitions.
-ppLlvmFunctions :: LlvmFunctions -> Doc
+ppLlvmFunctions :: LlvmFunctions -> SDoc
 ppLlvmFunctions funcs = vcat $ map ppLlvmFunction funcs
 
 -- | Print out a function definition.
-ppLlvmFunction :: LlvmFunction -> Doc
-ppLlvmFunction (LlvmFunction dec args attrs sec body) =
+ppLlvmFunction :: LlvmFunction -> SDoc
+ppLlvmFunction (LlvmFunction dec args attrs sec body instr) =
     let attrDoc = ppSpaceJoin attrs
         secDoc = case sec of
                       Just s' -> text "section" <+> (doubleQuotes $ ftext s')
@@ -107,69 +111,76 @@ ppLlvmFunction (LlvmFunction dec args attrs sec body) =
     in text "define" <+> ppLlvmFunctionHeader dec args
         <+> attrDoc <+> secDoc
         $+$ lbrace
-        $+$ ppLlvmBlocks body
+        $+$ ppLlvmBlocks instr body
         $+$ rbrace
 
 -- | Print out a function defenition header.
-ppLlvmFunctionHeader :: LlvmFunctionDecl -> [LMString] -> Doc
+ppLlvmFunctionHeader :: LlvmFunctionDecl -> [LMString] -> SDoc
 ppLlvmFunctionHeader (LlvmFunctionDecl n l c r varg p a) args
   = let varg' = case varg of
-                      VarArgs | null p    -> text "..."
-                              | otherwise -> text ", ..."
-                      _otherwise          -> empty
+                      VarArgs | null p    -> sLit "..."
+                              | otherwise -> sLit ", ..."
+                      _otherwise          -> sLit ""
         align = case a of
-                     Just a' -> text " align" <+> texts a'
+                     Just a' -> text " align " <> ppr a'
                      Nothing -> empty
-        args' = map (\((ty,p),n) -> texts ty <+> ppSpaceJoin p <+> text "%"
+        args' = map (\((ty,p),n) -> ppr ty <+> ppSpaceJoin p <+> char '%'
                                     <> ftext n)
                     (zip p args)
-    in texts l <+> texts c <+> texts r <+> text "@" <> ftext n <> lparen <>
-        (hcat $ intersperse (comma <> space) args') <> varg' <> rparen <> align
+    in ppr l <+> ppr c <+> ppr r <+> char '@' <> ftext n <> lparen <>
+        (hsep $ punctuate comma args') <> ptext varg' <> rparen <> align
 
 
 -- | Print out a list of function declaration.
-ppLlvmFunctionDecls :: LlvmFunctionDecls -> Doc
+ppLlvmFunctionDecls :: LlvmFunctionDecls -> SDoc
 ppLlvmFunctionDecls decs = vcat $ map ppLlvmFunctionDecl decs
 
 -- | Print out a function declaration.
 -- Declarations define the function type but don't define the actual body of
 -- the function.
-ppLlvmFunctionDecl :: LlvmFunctionDecl -> Doc
+ppLlvmFunctionDecl :: LlvmFunctionDecl -> SDoc
 ppLlvmFunctionDecl (LlvmFunctionDecl n l c r varg p a)
   = let varg' = case varg of
-                      VarArgs | null p    -> text "..."
-                              | otherwise -> text ", ..."
-                      _otherwise          -> empty
+                      VarArgs | null p    -> sLit "..."
+                              | otherwise -> sLit ", ..."
+                      _otherwise          -> sLit ""
         align = case a of
-                     Just a' -> text " align" <+> texts a'
+                     Just a' -> text " align" <+> ppr a'
                      Nothing -> empty
         args = hcat $ intersperse (comma <> space) $
-                  map (\(t,a) -> texts t <+> ppSpaceJoin a) p
-    in text "declare" <+> texts l <+> texts c <+> texts r <+> text "@" <>
-        ftext n <> lparen <> args <> varg' <> rparen <> align
+                  map (\(t,a) -> ppr t <+> ppSpaceJoin a) p
+    in text "declare" <+> ppr l <+> ppr c <+> ppr r <+> text "@" <>
+        ftext n <> lparen <> args <> ptext varg' <> rparen <> align
 
 
 -- | Print out a list of LLVM blocks.
-ppLlvmBlocks :: LlvmBlocks -> Doc
-ppLlvmBlocks blocks = vcat $ map ppLlvmBlock blocks
+ppLlvmBlocks :: Maybe Int -> LlvmBlocks -> SDoc
+ppLlvmBlocks tick blocks = vcat $ map (ppLlvmBlock tick) blocks
 
 -- | Print out an LLVM block.
 -- It must be part of a function definition.
-ppLlvmBlock :: LlvmBlock -> Doc
-ppLlvmBlock (LlvmBlock blockId stmts)
+ppLlvmBlock :: Maybe Int -> LlvmBlock -> SDoc
+ppLlvmBlock tick (LlvmBlock blockId stmts)
   = ppLlvmStatement (MkLabel blockId)
-        $+$ nest 4 (vcat $ map ppLlvmStatement stmts)
+        $+$ nest 4 (vcat $ map ppStmt stmts)
+  where ppStmt | Just n <- tick  = ppLlvmStatementDbg n
+               | otherwise       = ppLlvmStatement
 
+-- | Print out an LLVM statement with debug annotation
+ppLlvmStatementDbg :: Int -> LlvmStatement -> SDoc
+ppLlvmStatementDbg _ stmt@(Comment _) = ppLlvmStatement stmt
+ppLlvmStatementDbg _ stmt@(MkLabel _) = ppLlvmStatement stmt
+ppLlvmStatementDbg n stmt             = ppLlvmStatement stmt <> text ", !dbg !" <> ppr n
 
 -- | Print out an LLVM statement.
-ppLlvmStatement :: LlvmStatement -> Doc
+ppLlvmStatement :: LlvmStatement -> SDoc
 ppLlvmStatement stmt
   = case stmt of
         Assignment  dst expr      -> ppAssignment dst (ppLlvmExpression expr)
         Branch      target        -> ppBranch target
         BranchIf    cond ifT ifF  -> ppBranchIf cond ifT ifF
         Comment     comments      -> ppLlvmComments comments
-        MkLabel     label         -> (llvmSDoc $ pprUnique label) <> colon
+        MkLabel     label         -> pprUnique label <> colon
         Store       value ptr     -> ppStore value ptr
         Switch      scrut def tgs -> ppSwitch scrut def tgs
         Return      result        -> ppReturn result
@@ -179,7 +190,7 @@ ppLlvmStatement stmt
 
 
 -- | Print out an LLVM expression.
-ppLlvmExpression :: LlvmExpression -> Doc
+ppLlvmExpression :: LlvmExpression -> SDoc
 ppLlvmExpression expr
   = case expr of
         Alloca     tp amount        -> ppAlloca tp amount
@@ -200,7 +211,7 @@ ppLlvmExpression expr
 
 -- | Should always be a function pointer. So a global var of function type
 -- (since globals are always pointers) or a local var of pointer function type.
-ppCall :: LlvmCallType -> LlvmVar -> [LlvmVar] -> [LlvmFuncAttr] -> Doc
+ppCall :: LlvmCallType -> LlvmVar -> [LlvmVar] -> [LlvmFuncAttr] -> SDoc
 ppCall ct fptr vals attrs = case fptr of
                            --
     -- if local var function pointer, unwrap
@@ -218,25 +229,24 @@ ppCall ct fptr vals attrs = case fptr of
         ppCall' (LlvmFunctionDecl _ _ cc ret argTy params _) =
             let tc = if ct == TailCall then text "tail " else empty
                 ppValues = ppCommaJoin vals
-                ppParams = map (texts . fst) params
-                ppArgTy  = (hcat $ intersperse comma ppParams) <>
+                ppArgTy  = (ppCommaJoin $ map fst params) <>
                            (case argTy of
                                VarArgs   -> text ", ..."
                                FixedArgs -> empty)
                 fnty = space <> lparen <> ppArgTy <> rparen <> text "*"
                 attrDoc = ppSpaceJoin attrs
-            in  tc <> text "call" <+> texts cc <+> texts ret
-                    <> fnty <+> (text $ getName fptr) <> lparen <+> ppValues
+            in  tc <> text "call" <+> ppr cc <+> ppr ret
+                    <> fnty <+> ppName fptr <> lparen <+> ppValues
                     <+> rparen <+> attrDoc
 
 
-ppMachOp :: LlvmMachOp -> LlvmVar -> LlvmVar -> Doc
+ppMachOp :: LlvmMachOp -> LlvmVar -> LlvmVar -> SDoc
 ppMachOp op left right =
-  (texts op) <+> (texts (getVarType left)) <+> (text $ getName left)
-        <> comma <+> (text $ getName right)
+  (ppr op) <+> (ppr (getVarType left)) <+> ppName left
+        <> comma <+> ppName right
 
 
-ppCmpOp :: LlvmCmpOp -> LlvmVar -> LlvmVar -> Doc
+ppCmpOp :: LlvmCmpOp -> LlvmVar -> LlvmVar -> SDoc
 ppCmpOp op left right =
   let cmpOp
         | isInt (getVarType left) && isInt (getVarType right) = text "icmp"
@@ -247,100 +257,81 @@ ppCmpOp op left right =
                 ++ (show $ getVarType left) ++ ", right = "
                 ++ (show $ getVarType right))
         -}
-  in cmpOp <+> texts op <+> texts (getVarType left)
-        <+> (text $ getName left) <> comma <+> (text $ getName right)
+  in cmpOp <+> ppr op <+> ppr (getVarType left)
+        <+> ppName left <> comma <+> ppName right
 
 
-ppAssignment :: LlvmVar -> Doc -> Doc
-ppAssignment var expr = (text $ getName var) <+> equals <+> expr
+ppAssignment :: LlvmVar -> SDoc -> SDoc
+ppAssignment var expr = ppName var <+> equals <+> expr
 
 
-ppLoad :: LlvmVar -> Doc
-ppLoad var = text "load" <+> texts var
+ppLoad :: LlvmVar -> SDoc
+ppLoad var = text "load" <+> ppr var
 
 
-ppStore :: LlvmVar -> LlvmVar -> Doc
-ppStore val dst = text "store" <+> texts val <> comma <+> texts dst
+ppStore :: LlvmVar -> LlvmVar -> SDoc
+ppStore val dst = text "store" <+> ppr val <> comma <+> ppr dst
 
 
-ppCast :: LlvmCastOp -> LlvmVar -> LlvmType -> Doc
-ppCast op from to = texts op <+> texts from <+> text "to" <+> texts to
+ppCast :: LlvmCastOp -> LlvmVar -> LlvmType -> SDoc
+ppCast op from to = ppr op <+> ppr from <+> text "to" <+> ppr to
 
 
-ppMalloc :: LlvmType -> Int -> Doc
+ppMalloc :: LlvmType -> Int -> SDoc
 ppMalloc tp amount =
   let amount' = LMLitVar $ LMIntLit (toInteger amount) i32
-  in text "malloc" <+> texts tp <> comma <+> texts amount'
+  in text "malloc" <+> ppr tp <> comma <+> ppr amount'
 
 
-ppAlloca :: LlvmType -> Int -> Doc
+ppAlloca :: LlvmType -> Int -> SDoc
 ppAlloca tp amount =
   let amount' = LMLitVar $ LMIntLit (toInteger amount) i32
-  in text "alloca" <+> texts tp <> comma <+> texts amount'
+  in text "alloca" <+> ppr tp <> comma <+> ppr amount'
 
 
-ppGetElementPtr :: Bool -> LlvmVar -> [LlvmVar] -> Doc
+ppGetElementPtr :: Bool -> LlvmVar -> [LlvmVar] -> SDoc
 ppGetElementPtr inb ptr idx =
   let indexes = comma <+> ppCommaJoin idx
       inbound = if inb then text "inbounds" else empty
-  in text "getelementptr" <+> inbound <+> texts ptr <> indexes
+  in text "getelementptr" <+> inbound <+> ppr ptr <> indexes
 
 
-ppReturn :: Maybe LlvmVar -> Doc
-ppReturn (Just var) = text "ret" <+> texts var
-ppReturn Nothing    = text "ret" <+> texts LMVoid
+ppReturn :: Maybe LlvmVar -> SDoc
+ppReturn (Just var) = text "ret" <+> ppr var
+ppReturn Nothing    = text "ret" <+> ppr LMVoid
 
 
-ppBranch :: LlvmVar -> Doc
-ppBranch var = text "br" <+> texts var
+ppBranch :: LlvmVar -> SDoc
+ppBranch var = text "br" <+> ppr var
 
 
-ppBranchIf :: LlvmVar -> LlvmVar -> LlvmVar -> Doc
+ppBranchIf :: LlvmVar -> LlvmVar -> LlvmVar -> SDoc
 ppBranchIf cond trueT falseT
-  = text "br" <+> texts cond <> comma <+> texts trueT <> comma <+> texts falseT
+  = text "br" <+> ppr cond <> comma <+> ppr trueT <> comma <+> ppr falseT
 
 
-ppPhi :: LlvmType -> [(LlvmVar,LlvmVar)] -> Doc
+ppPhi :: LlvmType -> [(LlvmVar,LlvmVar)] -> SDoc
 ppPhi tp preds =
-  let ppPreds (val, label) = brackets $ (text $ getName val) <> comma
-        <+> (text $ getName label)
-  in text "phi" <+> texts tp <+> hcat (intersperse comma $ map ppPreds preds)
+  let ppPreds (val, label) = brackets $ ppName val <> comma <+> ppName label
+  in text "phi" <+> ppr tp <+> hsep (punctuate comma $ map ppPreds preds)
 
 
-ppSwitch :: LlvmVar -> LlvmVar -> [(LlvmVar,LlvmVar)] -> Doc
+ppSwitch :: LlvmVar -> LlvmVar -> [(LlvmVar,LlvmVar)] -> SDoc
 ppSwitch scrut dflt targets =
-  let ppTarget  (val, lab) = texts val <> comma <+> texts lab
+  let ppTarget  (val, lab) = ppr val <> comma <+> ppr lab
       ppTargets  xs        = brackets $ vcat (map ppTarget xs)
-  in text "switch" <+> texts scrut <> comma <+> texts dflt
+  in text "switch" <+> ppr scrut <> comma <+> ppr dflt
         <+> ppTargets targets
 
 
-ppAsm :: LMString -> LMString -> LlvmType -> [LlvmVar] -> Bool -> Bool -> Doc
+ppAsm :: LMString -> LMString -> LlvmType -> [LlvmVar] -> Bool -> Bool -> SDoc
 ppAsm asm constraints rty vars sideeffect alignstack =
   let asm'  = doubleQuotes $ ftext asm
       cons  = doubleQuotes $ ftext constraints
-      rty'  = texts rty 
+      rty'  = ppr rty
       vars' = lparen <+> ppCommaJoin vars <+> rparen
       side  = if sideeffect then text "sideeffect" else empty
       align = if alignstack then text "alignstack" else empty
   in text "call" <+> rty' <+> text "asm" <+> side <+> align <+> asm' <> comma
         <+> cons <> vars'
-
-
---------------------------------------------------------------------------------
--- * Misc functions
---------------------------------------------------------------------------------
-ppCommaJoin :: (Show a) => [a] -> Doc
-ppCommaJoin strs = hcat $ intersperse (comma <> space) (map texts strs)
-
-ppSpaceJoin :: (Show a) => [a] -> Doc
-ppSpaceJoin strs = hcat $ intersperse space (map texts strs)
-
--- | Convert SDoc to Doc
-llvmSDoc :: Out.SDoc -> Doc
-llvmSDoc d = Out.withPprStyleDoc (Out.mkCodeStyle Out.CStyle) d
-
--- | Showable to Doc
-texts :: (Show a) => a -> Doc
-texts = (text . show)
 

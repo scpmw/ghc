@@ -31,6 +31,7 @@ import CgForeignCall
 import CgUtils
 import CgProf
 import CgInfoTbls
+import CgHpc (cgInstrument)
 
 import ClosureInfo
 import OldCmmUtils
@@ -425,7 +426,8 @@ cgEvalAlts cc_slot bndr alt_type@(PrimAlt tycon) alts
   = do	{ let   rep = tyConCgRep tycon
 		reg = dataReturnConvPrim rep	-- Bottom for voidRep
 
-	; abs_c <- forkProc $ do
+	; instr <- freshInstr
+	; (abs_c, ticks) <- forkProc $ cgInstrument instr $ do
 		{ 	-- Bind the case binder, except if it's void
 			-- (reg is bottom in that case)
 		  whenC (nonVoidArg rep) $
@@ -433,7 +435,7 @@ cgEvalAlts cc_slot bndr alt_type@(PrimAlt tycon) alts
 		; restoreCurrentCostCentre cc_slot True
 		; cgPrimAlts GCMayHappen alt_type reg alts }
 
-	; lbl <- emitReturnTarget (idName bndr) abs_c
+	; lbl <- emitReturnTarget (idName bndr) abs_c instr ticks
 	; returnFC (CaseAlts lbl Nothing bndr) }
 
 cgEvalAlts cc_slot bndr (UbxTupAlt _) [(con,args,_,rhs)]
@@ -446,7 +448,8 @@ cgEvalAlts cc_slot bndr (UbxTupAlt _) [(con,args,_,rhs)]
 	     text "cgEvalAlts: dodgy case of unboxed tuple type" )
     do	{ 	-- forkAbsC for the RHS, so that the envt is
 		-- not changed for the emitReturn call
-	  abs_c <- forkProc $ do 
+          instr <- freshInstr
+        ; (abs_c, ticks) <- forkProc $ cgInstrument instr $ do 
 		{ (live_regs, ptrs, nptrs, _) <- bindUnboxedTupleComponents args
 			-- Restore the CC *after* binding the tuple components, 
 			-- so that we get the stack offset of the saved CC right.
@@ -455,7 +458,7 @@ cgEvalAlts cc_slot bndr (UbxTupAlt _) [(con,args,_,rhs)]
 			-- and finally the code for the alternative
 		; unbxTupleHeapCheck live_regs ptrs nptrs noStmts
 				     (cgExpr rhs) }
-	; lbl <- emitReturnTarget (idName bndr) abs_c
+	; lbl <- emitReturnTarget (idName bndr) abs_c instr ticks
 	; returnFC (CaseAlts lbl Nothing bndr) }
 
 cgEvalAlts cc_slot bndr alt_type alts
@@ -535,10 +538,11 @@ cgAlgAlt :: GCFlag
       	 -> FCode (AltCon, CgStmts)
 
 cgAlgAlt gc_flag cc_slot alt_type (con, args, _use_mask, rhs)
-  = do	{ abs_c <- getCgStmts $ do
+  = do	{ (abs_c, ticks) <- getCgStmts $ do
 		{ bind_con_args con args
 		; restoreCurrentCostCentre cc_slot True
 		; maybeAltHeapCheck gc_flag alt_type (cgExpr rhs) }
+        ; mapM_ addTick ticks
 	; return (con, abs_c) }
   where
     bind_con_args DEFAULT      _    = nopC
@@ -585,7 +589,8 @@ cgPrimAlt :: GCFlag
 
 cgPrimAlt gc_flag alt_type (con, [], [], rhs)
   = ASSERT( case con of { DEFAULT -> True; LitAlt _ -> True; _ -> False } )
-    do	{ abs_c <- getCgStmts (maybeAltHeapCheck gc_flag alt_type (cgExpr rhs)) 
+    do	{ (abs_c, ticks) <- getCgStmts (maybeAltHeapCheck gc_flag alt_type (cgExpr rhs)) 
+        ; mapM_ addTick ticks
 	; returnFC (con, abs_c) }
 cgPrimAlt _ _ _ = panic "cgPrimAlt: non-empty lists"
 \end{code}

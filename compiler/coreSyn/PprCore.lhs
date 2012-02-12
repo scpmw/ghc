@@ -37,6 +37,7 @@ import Util
 import Outputable
 import FastString
 import Data.Maybe
+import SrcLoc      ( pprUserRealSpan )
 \end{code}
 
 %************************************************************************
@@ -494,6 +495,10 @@ instance Outputable id => Outputable (Tickish id) where
          (True,True)  -> hcat [ptext (sLit "scctick<"), ppr cc, char '>']
          (True,False) -> hcat [ptext (sLit "tick<"),    ppr cc, char '>']
          _            -> hcat [ptext (sLit "scc<"),     ppr cc, char '>']
+  ppr (SourceNote span _) =
+      hcat [ ptext (sLit "src<"), pprUserRealSpan True span, char '>']
+  ppr (CoreNote {coreBind = bnd}) =
+      hcat [ ptext (sLit "core<"), ppr bnd, ptext (sLit "=...>") ]
 \end{code}
 
 -----------------------------------------------------

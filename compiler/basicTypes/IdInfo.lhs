@@ -66,10 +66,8 @@ module IdInfo (
         -- ** The LBVarInfo type
         LBVarInfo(..),
         noLBVarInfo, hasNoLBVarInfo,
-        lbvarInfo, setLBVarInfo,
+        lbvarInfo, setLBVarInfo
 
-        -- ** Tick-box Info
-        TickBoxOp(..), TickBoxId,
     ) where
 
 import CoreSyn
@@ -83,8 +81,7 @@ import DataCon
 import TyCon
 import ForeignCall
 import Demand
-import Outputable	
-import Module
+import Outputable
 import FastString
 
 import Data.Maybe
@@ -134,8 +131,6 @@ data IdDetails
   | PrimOpId PrimOp		-- ^ The 'Id' is for a primitive operator
   | FCallId ForeignCall		-- ^ The 'Id' is for a foreign call
 
-  | TickBoxOpId TickBoxOp	-- ^ The 'Id' is for a HPC tick box (both traditional and binary)
-
   | DFunId Bool                 -- ^ A dictionary function.
        -- Bool = True <=> the class has only one method, so may be
        --                  implemented with a newtype, so it might be bad
@@ -157,7 +152,6 @@ pprIdDetails other     = brackets (pp other)
    pp (ClassOpId {})    = ptext (sLit "ClassOp")
    pp (PrimOpId _)      = ptext (sLit "PrimOp")
    pp (FCallId _)       = ptext (sLit "ForeignCall")
-   pp (TickBoxOpId _)   = ptext (sLit "TickBoxOp")
    pp (DFunId nt)       = ptext (sLit "DFunId")
                              <> ppWhen nt (ptext (sLit "(nt)"))
    pp (RecSelId { sel_naughty = is_naughty })
@@ -551,21 +545,4 @@ zapFragileInfo info
 	       `setOccInfo` zapFragileOcc occ)
   where
     occ = occInfo info
-\end{code}
-
-%************************************************************************
-%*									*
-\subsection{TickBoxOp}
-%*									*
-%************************************************************************
-
-\begin{code}
-type TickBoxId = Int
-
--- | Tick box for Hpc-style coverage
-data TickBoxOp 
-   = TickBox Module {-# UNPACK #-} !TickBoxId
-
-instance Outputable TickBoxOp where
-    ppr (TickBox mod n)         = ptext (sLit "tick") <+> ppr (mod,n)
 \end{code}

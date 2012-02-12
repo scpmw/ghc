@@ -85,6 +85,20 @@ void postSparkCountersEvent (Capability *cap,
                              StgWord remaining);
 
 /*
+ * Profiling
+ */
+
+void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo);
+
+void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips);
+
+void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
+
+void postDebugModule(char *unit_name);
+void postDebugProc(char *label);
+void postProcPtrRange(void *low_pc, void *high_pc);
+
+/*
  * Post an event to annotate a thread with a label
  */
 void postThreadLabel(Capability    *cap,

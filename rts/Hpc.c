@@ -207,6 +207,27 @@ startupHpc(void)
 
   debugTrace(DEBUG_hpc,"startupHpc");
 
+  // Go through modules
+  HpcModuleInfo *mod = modules;
+  StgBool have_tix = 0;
+  for (; mod; mod = mod->next) {
+
+      // Do we have tix?
+      if (mod->tixArr)
+          have_tix = 1;
+
+#ifdef TRACING
+      // Add HPC module announcements to trace
+      traceModule(mod->modName,
+                  mod->tickCount,
+                  mod->hashNo);
+#endif
+  }
+
+  /* No tix? No point in continuing */
+  if (!have_tix)
+      return;
+
   /* XXX Check results of mallocs/strdups, and check we are requesting
          enough bytes */
   if (hpc_tixfile != NULL) {
@@ -252,8 +273,9 @@ startupHpc(void)
 
 void
 hs_hpc_module(char *modName,
-	      StgWord32 modCount,
-	      StgWord32 modHashNo,
+              char *modSource,
+              StgWord32 modCount,
+              StgWord32 modHashNo,
               StgWord64 *tixArr)
 {
   HpcModuleInfo *tmpModule;
@@ -270,6 +292,7 @@ hs_hpc_module(char *modName,
       tmpModule = (HpcModuleInfo *)stgMallocBytes(sizeof(HpcModuleInfo),
                                                   "Hpc.hs_hpc_module");
       tmpModule->modName = modName;
+      tmpModule->modSource = modSource;
       tmpModule->tickCount = modCount;
       tmpModule->hashNo = modHashNo;
 
@@ -309,6 +332,7 @@ hs_hpc_module(char *modName,
       }
       tmpModule->from_file = rtsFalse;
   }
+
 }
 
 static void

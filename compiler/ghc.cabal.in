@@ -166,6 +166,7 @@ Library
         LlvmCodeGen.Ppr
         LlvmCodeGen.Regs
         LlvmMangler
+        LlvmMeta
         MkId
         Module
         Name

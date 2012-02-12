@@ -158,6 +158,22 @@ void trace_(char *msg, ...);
 void traceUserMsg(Capability *cap, char *msg);
 
 /*
+ * Profiling
+ */
+
+void traceModule(char *modName,
+                 StgWord32 modCount,
+                 StgWord32 modHashNo);
+
+void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips);
+
+void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
+
+void traceDebugModule(char *unit_name);
+void traceDebugProc(char *label);
+void traceProcPtrRange(void *low_pc, void *high_pc);
+
+/*
  * An event to record a Haskell thread's label/name
  * Used by GHC.Conc.labelThread
  */

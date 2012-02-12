@@ -554,6 +554,66 @@ void traceUserMsg(Capability *cap, char *msg)
     traceFormatUserMsg(cap, "%s", msg);
 }
 
+void traceModule(char *modName,
+                 StgWord32 modCount,
+                 StgWord32 modHashNo)
+{
+#ifdef DEBUG
+	if (RtsFlags.TraceFlags.tracing != TRACE_STDERR)
+#endif
+	{
+        if (eventlog_enabled) {
+            postModule(modName, modCount, modHashNo);
+        }
+	}
+}
+
+void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)
+{
+#ifdef DEBUG
+	StgWord32 i;
+	if (RtsFlags.TraceFlags.tracing == TRACE_STDERR) {
+		// Maybe sort this somewhen so it looks more useful...
+		tracePreface();
+		debugBelch("cap %d IP sample:", cap->no);
+		for (i = 0; i < cnt; i++)
+			debugBelch(" %p", ips[i]);
+		debugBelch("\n");
+	} else
+#endif
+	{
+        if (eventlog_enabled) {
+            postInstrPtrSample(cap, own_cap, cnt, ips);
+        }
+	}
+}
+
+void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)
+{
+	if (eventlog_enabled) {
+		postDebugData(num, size, dbg);
+	}
+}
+
+void traceDebugModule(char *mod_name)
+{
+	if (eventlog_enabled)
+		postDebugModule(mod_name);
+}
+
+void traceDebugProc(char *label)
+{
+	if (eventlog_enabled)
+		postDebugProc(label);
+}
+
+void traceProcPtrRange(void *low_pc, void *high_pc)
+{
+	if (eventlog_enabled) {
+		postProcPtrRange(low_pc, high_pc);
+	}
+}
+
 void traceThreadLabel_(Capability *cap,
                        StgTSO     *tso,
                        char       *label)

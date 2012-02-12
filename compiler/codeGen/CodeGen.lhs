@@ -38,6 +38,8 @@ import CLabel
 import OldCmm
 import OldPprCmm
 
+import Outputable
+
 import StgSyn
 import PrelNames
 import DynFlags
@@ -50,7 +52,6 @@ import Name
 import TyCon
 import Module
 import ErrUtils
-import Panic
 \end{code}
 
 \begin{code}
@@ -60,7 +61,7 @@ codeGen :: DynFlags
         -> CollectedCCs         -- (Local/global) cost-centres needing declaring/registering.
 	-> [(StgBinding,[(Id,[Id])])]	-- Bindings to convert, with SRTs
 	-> HpcInfo
-        -> IO [CmmGroup]          -- Output
+	-> IO ([CmmGroup], TickMap) -- Output
 
                 -- N.B. returning '[Cmm]' and not 'Cmm' here makes it
                 -- possible for object splitting to split up the
@@ -78,7 +79,8 @@ codeGen dflags this_mod data_tycons cost_centre_info stg_binds hpc_info
 		; cmm_tycons <- mapM cgTyCon data_tycons
 		; cmm_init   <- getCmm (mkModuleInit dflags cost_centre_info 
                                              this_mod hpc_info)
-                ; return (cmm_init : cmm_binds ++ cmm_tycons)
+		; tick_map    <- return . cgs_tick_map =<< getState
+		; return (cmm_init : cmm_binds ++ cmm_tycons, tick_map)
 		}
 		-- Put datatype_stuff after code_stuff, because the
 		-- datatype closure table (for enumeration types) to
@@ -91,7 +93,8 @@ codeGen dflags this_mod data_tycons cost_centre_info stg_binds hpc_info
                 -- initialisation routines; see Note
                 -- [pipeline-split-init].
 
-  ; dumpIfSet_dyn dflags Opt_D_dump_cmm "Cmm" (pprCmms (targetPlatform dflags) code_stuff)
+  ; dumpIfSet_dyn dflags Opt_D_dump_cmm "Cmm" ( pprCmms (targetPlatform dflags) (fst code_stuff) $$
+                                                pprPlatform (targetPlatform dflags) (snd code_stuff) )
 
   ; return code_stuff }
 

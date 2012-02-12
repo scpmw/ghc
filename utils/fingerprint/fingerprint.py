@@ -93,14 +93,18 @@ def restore(fp, branch_name=None):
         sys.stderr.write("WARNING: "+
           subdir+" is in fingerprint but missing in working directory\n")
 
-  # special handling for top ghc repo
-  # if we are creating a new branch then also add an entry to the
-  # git config so the sync-all command is happy
-  branch_args = ["-b", branch_name] if branch_name else []
-  rc = subprocess.call(checkout + branch_args + [fp["."]])
-  if (rc == 0) and branch_name:
-    branch_config = "branch."+branch_name+".remote"
-    subprocess.call(["git", "config", "--add", branch_config, "origin"])
+  try:
+    # special handling for top ghc repo
+    # if we are creating a new branch then also add an entry to the
+    # git config so the sync-all command is happy
+    branch_args = ["-b", branch_name] if branch_name else []
+    rc = subprocess.call(checkout + branch_args + [fp["."]])
+    if (rc == 0) and branch_name:
+      branch_config = "branch."+branch_name+".remote"
+      subprocess.call(["git", "config", "--add", branch_config, "origin"])
+  except KeyError:
+    pass
+
 
 actions = {"create" : create_action, "restore" : restore_action}
 def parseopts(argv):

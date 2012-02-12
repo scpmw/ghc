@@ -163,6 +163,35 @@ typedef struct Task_ {
     // Links tasks on the all_tasks list
     struct Task_ *all_link;
 
+#ifdef USE_PAPI
+
+	/* Event sets and counter arrays for GC and mutator */
+	int MutatorEvents;
+	int GCEvents;
+	
+	long long MutatorCounters[10]; // TODO: MAX_PAPI_EVENTS
+	long long GC0Counters[10];
+	long long GC1Counters[10];
+
+	long long start_mutator_cycles;
+	long long mutator_cycles;
+	long long start_gc_cycles;
+	long long gc0_cycles;
+	long long gc1_cycles;
+
+	nat instrPtrSamplePos;
+	void *instrPtrSample[1024]; // TODO: INSTR_PTR_SAMPLE_MAX_SIZE
+#endif
+
+#ifdef USE_PERF_EVENT
+	int perf_event_fd;
+	union {
+		void *perf_event_mmap;
+		struct perf_event_mmap_page *perf_event_data;
+	};
+	StgWord64 perf_event_last_head;
+#endif
+
 } Task;
 
 INLINE_HEADER rtsBool

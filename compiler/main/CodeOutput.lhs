@@ -30,6 +30,7 @@ import HscTypes
 import DynFlags
 import Config
 import SysTools
+import CLabel           ( TickMap )
 
 import ErrUtils		( dumpIfSet_dyn, showPass, ghcExit )
 import Outputable
@@ -56,9 +57,10 @@ codeOutput :: DynFlags
 	   -> ForeignStubs
 	   -> [PackageId]
            -> [RawCmmGroup]                       -- Compiled C--
+           -> TickMap
            -> IO (Bool{-stub_h_exists-}, Maybe FilePath{-stub_c_exists-})
 
-codeOutput dflags this_mod location foreign_stubs pkg_deps flat_abstractC
+codeOutput dflags this_mod location foreign_stubs pkg_deps flat_abstractC tick_map
   = 
     -- You can have C (c_output) or assembly-language (ncg_output),
     -- but not both.  [Allowing for both gives a space leak on
@@ -83,7 +85,7 @@ codeOutput dflags this_mod location foreign_stubs pkg_deps flat_abstractC
              HscInterpreted -> return ();
              HscAsm         -> outputAsm dflags filenm flat_abstractC;
              HscC           -> outputC dflags filenm flat_abstractC pkg_deps;
-             HscLlvm        -> outputLlvm dflags filenm flat_abstractC;
+             HscLlvm        -> outputLlvm dflags location filenm flat_abstractC tick_map;
              HscNothing     -> panic "codeOutput: HscNothing"
 	  }
 	; return stubs_exist
@@ -162,12 +164,11 @@ outputAsm dflags filenm flat_absC
 %************************************************************************
 
 \begin{code}
-outputLlvm :: DynFlags -> FilePath -> [RawCmmGroup] -> IO ()
-outputLlvm dflags filenm flat_absC
+outputLlvm :: DynFlags -> ModLocation -> FilePath -> [RawCmmGroup] -> TickMap -> IO ()
+outputLlvm dflags location filenm flat_absC tick_map
   = do ncg_uniqs <- mkSplitUniqSupply 'n'
-       {-# SCC "llvm_output" #-} doOutput filenm $
-           \f -> {-# SCC "llvm_CodeGen" #-}
-                 llvmCodeGen dflags f ncg_uniqs flat_absC
+       {-# SCC "llvm_output" #-} doOutput filenm $ \f -> 
+         {-# SCC "llvm_CodeGen" #-} llvmCodeGen dflags location f ncg_uniqs flat_absC tick_map
 \end{code}
 
 

@@ -24,6 +24,7 @@
 #include "Ticker.h"
 #include "Capability.h"
 #include "RtsSignals.h"
+#include "Papi.h"
 
 /* ticks left before next pre-emptive context switch */
 static int ticks_to_ctxt_switch = 0;
@@ -84,6 +85,20 @@ handle_tick(int unused STG_UNUSED)
       break;
   }
 #endif
+
+#ifdef TRACING
+#ifdef USE_PAPI
+  if(RtsFlags.PapiFlags.sampleType) {
+	  papi_timer();
+  }
+#endif
+#ifdef USE_PERF_EVENTS
+  if(RtsFlags.PerfEventFlags.sampleType) {
+	  papi_timer();
+  }
+#endif
+#endif
+
 }
 
 // This global counter is used to allow multiple threads to stop the

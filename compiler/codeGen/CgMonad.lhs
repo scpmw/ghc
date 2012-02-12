@@ -23,7 +23,8 @@ module CgMonad (
 	initC, thenC, thenFC, listCs, listFCs, mapCs, mapFCs,
 	returnFC, fixC, fixC_, checkedAbsC, 
 	stmtC, stmtsC, labelC, emitStmts, nopC, whenC, newLabelC,
-	newUnique, newUniqSupply, 
+	newUnique, newUniqSupply,
+	freshInstr, withInstr, getInstrCnt, addTick,
 
 	CgStmts, emitCgStmts, forkCgStmts, cgStmtsToBlocks,
 	getCgStmts', getCgStmts,
@@ -84,9 +85,11 @@ import OrdList
 import Unique
 import UniqSupply
 import Outputable
+import CoreSyn (Tickish)
 
 import Control.Monad
 import Data.List
+import Data.Map as Map ( empty, union, insert )
 
 infixr 9 `thenC`	-- Right-associative!
 infixr 9 `thenFC`
@@ -109,9 +112,10 @@ data CgInfoDownwards	-- information only passed *downwards* by the monad
 	cgd_mod     :: Module,		-- Module being compiled
 	cgd_statics :: CgBindings,	-- [Id -> info] : static environment
 	cgd_srt_lbl :: CLabel,		-- label of the current SRT
-        cgd_srt     :: SRT,		-- the current SRT
+	cgd_srt     :: SRT,	    	-- the current SRT
 	cgd_ticky   :: CLabel,		-- current destination for ticky counts
-	cgd_eob     :: EndOfBlockInfo	-- Info for stuff to do at end of basic block:
+	cgd_eob     :: EndOfBlockInfo, 	-- Info for stuff to do at end of basic block
+	cgd_instr   :: Maybe Int	-- ID of containing instrumentation
   }
 
 initCgInfoDown :: DynFlags -> Module -> CgInfoDownwards
@@ -122,7 +126,8 @@ initCgInfoDown dflags mod
 			cgd_srt_lbl = error "initC: srt_lbl",
 			cgd_srt     = error "initC: srt",
 			cgd_ticky   = mkTopTickyCtrLabel,
-			cgd_eob     = initEobInfo }
+			cgd_eob     = initEobInfo, 
+			cgd_instr   = Nothing }
 
 data CgState
   = MkCgState {
@@ -139,15 +144,30 @@ data CgState
      cgs_stk_usg :: StackUsage,
      cgs_hp_usg  :: HeapUsage,
      
-     cgs_uniqs :: UniqSupply }
+     cgs_uniqs :: UniqSupply, 
+     
+     cgs_next_itick :: !Int,
 
-initCgState :: UniqSupply -> CgState
-initCgState uniqs
+     -- | List of debug annotations we have found for the currently
+     -- translated closure
+     cgs_ticks :: [Tickish ()],
+
+     -- | Maps the cmm proc labels to the instrumentation number and
+     -- all tick annotations found while generating it
+     cgs_tick_map :: TickMap
+     }
+
+initCgState :: UniqSupply -> Int -> CgState
+initCgState uniqs next_itick
   = MkCgState { cgs_stmts = nilOL, cgs_tops = nilOL,
 		cgs_binds = emptyVarEnv, 
 		cgs_stk_usg = initStkUsage, 
 		cgs_hp_usg = initHpUsage,
-		cgs_uniqs = uniqs }
+		cgs_uniqs = uniqs,
+		cgs_next_itick = next_itick,
+		cgs_ticks = [],
+		cgs_tick_map = Map.empty
+		}
 \end{code}
 
 @EndOfBlockInfo@ tells what to do at the end of this block of code or,
@@ -361,6 +381,12 @@ s1 `addCodeBlocksFrom` s2
   = s1 { cgs_stmts = cgs_stmts s1 `appOL` cgs_stmts s2,
 	 cgs_tops  = cgs_tops  s1 `appOL` cgs_tops  s2 }
 
+takeTicksFrom :: CgState -> Code
+takeTicksFrom s2 = do
+  s1 <- getState 
+  setState $ s1 { cgs_next_itick = cgs_next_itick s2
+                , cgs_tick_map = cgs_tick_map s1 `Map.union` cgs_tick_map s2 }
+
 maxHpHw :: HeapUsage -> VirtualHpOffset -> HeapUsage
 hp_usg `maxHpHw` hw = hp_usg { virtHp = virtHp hp_usg `max` hw }
 
@@ -393,7 +419,7 @@ initC :: DynFlags -> Module -> FCode a -> IO a
 
 initC dflags mod (FCode code)
   = do	{ uniqs <- mkSplitUniqSupply 'c'
-	; case code (initCgInfoDown dflags mod) (initCgState uniqs) of
+	; case code (initCgInfoDown dflags mod) (initCgState uniqs 0) of
 	      (res, _) -> return res
 	}
 
@@ -517,6 +543,27 @@ newUnique = do
 	us <- newUniqSupply
 	return (uniqFromSupply us)
 
+addTick :: Tickish () -> FCode ()
+addTick ti = do
+        state <- getState
+        setState $ state {cgs_ticks = ti:cgs_ticks state}
+
+freshInstr :: FCode Int
+freshInstr = do
+        state <- getState
+        setState $ state { cgs_next_itick = cgs_next_itick state + 1 }
+        return $ cgs_next_itick state
+
+withInstr :: Int -> FCode a -> FCode a
+withInstr instr code = do
+        infoDown <- getInfoDown
+        withInfoDown code (infoDown { cgd_instr = Just instr})
+
+getInstrCnt :: FCode Int
+getInstrCnt = do
+        state <- getState
+        return (cgs_next_itick state)
+
 ------------------
 getInfoDown :: FCode CgInfoDownwards
 getInfoDown = FCode $ \info_down state -> (info_down,state)
@@ -565,9 +612,11 @@ forkClosureBody body_code
 	; state <- getState
    	; let	body_info_down = info { cgd_eob = initEobInfo }
 		((),fork_state)	= doFCode body_code body_info_down 
-					  (initCgState us)
-	; ASSERT( isNilOL (cgs_stmts fork_state) )
-	  setState $ state `addCodeBlocksFrom` fork_state }
+					  (initCgState us (cgs_next_itick state))
+	; ASSERT( isNilOL (cgs_stmts fork_state)) 
+	  ASSERT( null (cgs_ticks fork_state) )
+	  setState $ state `addCodeBlocksFrom` fork_state 
+        ; takeTicksFrom fork_state }
 	
 forkStatics :: FCode a -> FCode a
 forkStatics body_code
@@ -577,25 +626,28 @@ forkStatics body_code
 	; let	rhs_info_down = info { cgd_statics = cgs_binds state,
 				       cgd_eob     = initEobInfo }
 		(result, fork_state_out) = doFCode body_code rhs_info_down 
-						   (initCgState us)
-	; ASSERT( isNilOL (cgs_stmts fork_state_out) )
+						   (initCgState us (cgs_next_itick state))
+	; ASSERT( isNilOL (cgs_stmts fork_state_out) ) 
+	  ASSERT( null (cgs_ticks fork_state_out) )
 	  setState (state `addCodeBlocksFrom` fork_state_out)
+	; takeTicksFrom fork_state_out 	
 	; return result }
 
-forkProc :: Code -> FCode CgStmts
+forkProc :: Code -> FCode (CgStmts, [Tickish ()])
 forkProc body_code
   = do	{ info_down <- getInfoDown
 	; us    <- newUniqSupply
 	; state <- getState
-	; let	fork_state_in = (initCgState us) 
+	; let	fork_state_in = (initCgState us (cgs_next_itick state)) 
 					{ cgs_binds   = cgs_binds state,
 					  cgs_stk_usg = cgs_stk_usg state,
 					  cgs_hp_usg  = cgs_hp_usg state }
 			-- ToDo: is the hp usage necesary?
-		(code_blks, fork_state_out) = doFCode (getCgStmts body_code) 
+		(code_blks_ticks, fork_state_out) = doFCode (getCgStmts body_code) 
 						      info_down fork_state_in
 	; setState $ state `stateIncUsageEval` fork_state_out
-	; return code_blks }
+	; takeTicksFrom fork_state_out
+	; return code_blks_ticks}
 
 codeOnly :: Code -> Code
 -- Emit any code from the inner thing into the outer thing
@@ -605,7 +657,8 @@ codeOnly body_code
   = do	{ info_down <- getInfoDown
 	; us   <- newUniqSupply
 	; state <- getState
-	; let	fork_state_in = (initCgState us) { cgs_binds   = cgs_binds state,
+	; let	fork_state_in = (initCgState us (cgs_next_itick state))
+					         { cgs_binds   = cgs_binds state,
 					           cgs_stk_usg = cgs_stk_usg state,
 					           cgs_hp_usg  = cgs_hp_usg state }
 		((), fork_state_out) = doFCode body_code info_down fork_state_in
@@ -626,18 +679,21 @@ forkAlts branch_fcodes
   = do	{ info_down <- getInfoDown
 	; us <- newUniqSupply
 	; state <- getState
-	; let compile us branch 
-		= (us2, doFCode branch info_down branch_state)
+	; let compile (us,it) branch 
+		= ((us2, it2), result)
 		where
+		  it2 = cgs_next_itick (snd result)
 		  (us1,us2) = splitUniqSupply us
-	          branch_state = (initCgState us1) {
+	          branch_state = (initCgState us1 it) {
 					cgs_binds   = cgs_binds state,
 					cgs_stk_usg = cgs_stk_usg state,
 					cgs_hp_usg  = cgs_hp_usg state }
+		  result = doFCode branch info_down branch_state
 
-	      (_us, results) = mapAccumL compile us branch_fcodes
+	      (_, results) = mapAccumL compile (us, cgs_next_itick state) branch_fcodes
 	      (branch_results, branch_out_states) = unzip results
 	; setState $ foldl stateIncUsage state branch_out_states
+	; mapM_ takeTicksFrom branch_out_states
 		-- NB foldl.  state is the *left* argument to stateIncUsage
 	; return branch_results }
 \end{code}
@@ -680,7 +736,7 @@ forkEvalHelp body_eob_info env_code body_code
 	; let { info_down_for_body = info_down {cgd_eob = body_eob_info}
 	      ; (_, env_state) = doFCode env_code info_down_for_body 
 					 (state {cgs_uniqs = us})
-	      ; state_for_body = (initCgState (cgs_uniqs env_state)) 
+	      ; state_for_body = (initCgState (cgs_uniqs env_state) (cgs_next_itick env_state))
 					{ cgs_binds   = binds_for_body,
 	      				  cgs_stk_usg = stk_usg_for_body }
 	      ; binds_for_body   = nukeVolatileBinds (cgs_binds env_state)
@@ -695,6 +751,7 @@ forkEvalHelp body_eob_info env_code body_code
 		 -- The code coming back should consist only of nested declarations,
 		 -- notably of the return vector!
 	  setState $ state `stateIncUsageEval` state_at_end_return
+	; takeTicksFrom state_at_end_return
 	; return (virtSp_from_env, value_returned) }
 
 
@@ -735,7 +792,10 @@ emitStmts stmts = emitCgStmts (fmap CgStmt stmts)
 -- forkLabelledCode is for emitting a chunk of code with a label, outside
 -- of the current instruction stream.
 forkLabelledCode :: Code -> FCode BlockId
-forkLabelledCode code = getCgStmts code >>= forkCgStmts
+forkLabelledCode code 
+  = do { (stmts, ticks) <- getCgStmts code 
+       ; mapM_ addTick ticks
+       ; forkCgStmts stmts }
 
 emitCgStmt :: CgStmt -> Code
 emitCgStmt stmt
@@ -748,19 +808,20 @@ emitDecl decl
   = do 	{ state <- getState
 	; setState $ state { cgs_tops = cgs_tops state `snocOL` decl } }
 
-emitProc :: CmmInfo -> CLabel -> [CmmFormal] -> [CmmBasicBlock] -> Code
-emitProc info lbl [] blocks
-  = do  { let proc_block = CmmProc info lbl (ListGraph blocks)
+emitProc :: CmmInfo -> CLabel -> [CmmFormal] -> [CmmBasicBlock] -> Maybe Int -> [Tickish ()] -> Code
+emitProc info lbl [] blocks instr ticks
+  = do  { finishInstrument lbl instr ticks
+        ; let proc_block = CmmProc info lbl (ListGraph blocks)
 	; state <- getState
 	; setState $ state { cgs_tops = cgs_tops state `snocOL` proc_block } }
-emitProc _ _ (_:_) _ = panic "emitProc called with nonempty args"
+emitProc _ _ (_:_) _ _ _ = panic "emitProc called with nonempty args"
 
 emitSimpleProc :: CLabel -> Code -> Code
 -- Emit a procedure whose body is the specified code; no info table
 emitSimpleProc lbl code
-  = do	{ stmts <- getCgStmts code
+  = do	{ (stmts, ticks) <- getCgStmts code
 	; blks <- cgStmtsToBlocks stmts
-	; emitProc (CmmInfo Nothing Nothing CmmNonInfoTable) lbl [] blks }
+	; emitProc (CmmInfo Nothing Nothing CmmNonInfoTable) lbl [] blks Nothing ticks }
 
 getCmm :: Code -> FCode CmmGroup
 -- Get all the CmmTops (there should be no stmts)
@@ -772,6 +833,19 @@ getCmm code
 	; setState $ state2 { cgs_tops = cgs_tops state1 } 
         ; return (fromOL (cgs_tops state2))
         }
+
+-- Associates the given label with collected ticks, as well as
+-- generated instrumentation.
+finishInstrument :: CLabel -> Maybe Int -> [Tickish ()] -> Code
+finishInstrument lbl instr ticks 
+  = do	{ state <- getState
+	; infoDown <- getInfoDown
+	; let tick_entry = TickMapEntry { timInstr = instr
+	                                , timParent = cgd_instr infoDown
+	                                , timTicks = ticks }
+	; setState $ state {
+	  cgs_tick_map = Map.insert lbl tick_entry $ cgs_tick_map state
+	  } }
 
 -- ----------------------------------------------------------------------------
 -- CgStmts
@@ -802,15 +876,16 @@ cgStmtsToBlocks stmts
 	}	
 
 -- collect the code emitted by an FCode computation
-getCgStmts' :: FCode a -> FCode (a, CgStmts)
+getCgStmts' :: FCode a -> FCode (a, (CgStmts, [Tickish ()]))
 getCgStmts' fcode
   = do	{ state1 <- getState
 	; (a, state2) <- withState fcode (state1 { cgs_stmts = nilOL })
-	; setState $ state2 { cgs_stmts = cgs_stmts state1  }
-	; return (a, cgs_stmts state2) }
+	; setState $ state2 { cgs_stmts = cgs_stmts state1
+	                    , cgs_ticks = cgs_ticks state1 }
+	; return (a, (cgs_stmts state2, cgs_ticks state2)) }
 
-getCgStmts :: FCode a -> FCode CgStmts
-getCgStmts fcode = do { (_,stmts) <- getCgStmts' fcode; return stmts }
+getCgStmts :: FCode a -> FCode (CgStmts, [Tickish ()])
+getCgStmts fcode = getCgStmts' fcode >>= return . snd
 
 -- Simple ways to construct CgStmts:
 noCgStmts :: CgStmts

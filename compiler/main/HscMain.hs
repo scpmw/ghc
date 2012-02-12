@@ -130,6 +130,7 @@ import NameSet          ( emptyNameSet )
 import InstEnv
 import FamInstEnv
 import Fingerprint      ( Fingerprint )
+import CLabel           ( TickMap )
 
 import DynFlags
 import ErrUtils
@@ -149,6 +150,7 @@ import Data.List
 import Control.Monad
 import Data.Maybe
 import Data.IORef
+import Data.Map         (empty)
 import System.FilePath as FilePath
 import System.Directory
 
@@ -1212,15 +1214,15 @@ hscGenHardCode cgguts mod_summary = do
 
         ------------------  Code generation ------------------
 
-        cmms <- if dopt Opt_TryNewCodeGen dflags
-                    then {-# SCC "NewCodeGen" #-}
-                         tryNewCodeGen hsc_env this_mod data_tycons
-                             cost_centre_info
-                             stg_binds hpc_info
-                    else {-# SCC "CodeGen" #-}
-                         codeGen dflags this_mod data_tycons
-                             cost_centre_info
-                             stg_binds hpc_info
+        (cmms, ticks) <- if dopt Opt_TryNewCodeGen dflags
+                         then {-# SCC "NewCodeGen" #-}
+                              tryNewCodeGen hsc_env this_mod data_tycons
+                                  cost_centre_info
+                                  stg_binds hpc_info
+                         else {-# SCC "CodeGen" #-}
+                              codeGen dflags this_mod data_tycons
+                                  cost_centre_info
+                                  stg_binds hpc_info
 
         ------------------  Code output -----------------------
         rawcmms <- {-# SCC "cmmToRawCmm" #-}
@@ -1229,7 +1231,7 @@ hscGenHardCode cgguts mod_summary = do
         (_stub_h_exists, stub_c_exists)
             <- {-# SCC "codeOutput" #-}
                codeOutput dflags this_mod location foreign_stubs
-               dependencies rawcmms
+               dependencies rawcmms ticks
         return stub_c_exists
 
 hscInteractive :: (ModIface, ModDetails, CgGuts)
@@ -1277,7 +1279,7 @@ hscCompileCmmFile hsc_env filename = runHsc hsc_env $ do
     cmm <- ioMsgMaybe $ parseCmmFile dflags filename
     liftIO $ do
         rawCmms <- cmmToRawCmm (targetPlatform dflags) [cmm]
-        _ <- codeOutput dflags no_mod no_loc NoStubs [] rawCmms
+        _ <- codeOutput dflags no_mod no_loc NoStubs [] rawCmms Data.Map.empty
         return ()
   where
     no_mod = panic "hscCmmFile: no_mod"
@@ -1291,7 +1293,7 @@ tryNewCodeGen   :: HscEnv -> Module -> [TyCon]
                 -> CollectedCCs
                 -> [(StgBinding,[(Id,[Id])])]
                 -> HpcInfo
-                -> IO [Old.CmmGroup]
+                -> IO ([Old.CmmGroup], TickMap)
 tryNewCodeGen hsc_env this_mod data_tycons
               cost_centre_info stg_binds hpc_info = do
     let dflags = hsc_dflags hsc_env
@@ -1309,7 +1311,7 @@ tryNewCodeGen hsc_env this_mod data_tycons
 
     let prog' = map cmmOfZgraph (srtToData topSRT : prog)
     dumpIfSet_dyn dflags Opt_D_dump_cmmz "Output Cmm" (pprPlatform platform prog')
-    return prog'
+    return (prog', Data.Map.empty)
 
 myCoreToStg :: DynFlags -> Module -> CoreProgram
             -> IO ( [(StgBinding,[(Id,[Id])])] -- output program

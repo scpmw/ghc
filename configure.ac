@@ -427,6 +427,19 @@ FP_CC_LLVM_BACKEND
 FP_PROG_LD_HashSize31
 FP_PROG_LD_ReduceMemoryOverheads
 
+CONF_GCC_LINKER_OPTS_STAGE1=$LDFLAGS
+CONF_GCC_LINKER_OPTS_STAGE2=$LDFLAGS
+
+CONF_CC_OPTS_STAGE0="$CONF_CC_OPTS_STAGE0 $CFLAGS"
+CONF_CC_OPTS_STAGE1="$CONF_CC_OPTS_STAGE1 $CFLAGS"
+CONF_CC_OPTS_STAGE2="$CONF_CC_OPTS_STAGE2 $CFLAGS"
+CONF_GCC_LINKER_OPTS_STAGE0="$CONF_GCC_LINKER_OPTS_STAGE0 $LDFLAGS"
+CONF_GCC_LINKER_OPTS_STAGE1="$CONF_GCC_LINKER_OPTS_STAGE1 $LDFLAGS"
+CONF_GCC_LINKER_OPTS_STAGE2="$CONF_GCC_LINKER_OPTS_STAGE2 $LDFLAGS"
+CONF_CPP_OPTS_STAGE0="$CONF_CPP_OPTS_STAGE0 $CXXFLAGS"
+CONF_CPP_OPTS_STAGE1="$CONF_CPP_OPTS_STAGE1 $CXXFLAGS"
+CONF_CPP_OPTS_STAGE2="$CONF_CPP_OPTS_STAGE2 $CXXFLAGS"
+
 FPTOOLS_SET_C_LD_FLAGS([target],[CFLAGS],[LDFLAGS],[IGNORE_LINKER_LD_FLAGS],[CPPFLAGS])
 FPTOOLS_SET_C_LD_FLAGS([build],[CONF_CC_OPTS_STAGE0],[CONF_GCC_LINKER_OPTS_STAGE0],[CONF_LD_LINKER_OPTS_STAGE0],[CONF_CPP_OPTS_STAGE0])
 FPTOOLS_SET_C_LD_FLAGS([target],[CONF_CC_OPTS_STAGE1],[CONF_GCC_LINKER_OPTS_STAGE1],[CONF_LD_LINKER_OPTS_STAGE1],[CONF_CPP_OPTS_STAGE1])
@@ -754,17 +767,30 @@ AC_SUBST([GTK_CONFIG])
 #Checking for PAPI
 AC_CHECK_LIB(papi, PAPI_library_init, HavePapiLib=YES, HavePapiLib=NO)
 AC_CHECK_HEADER([papi.h], [HavePapiHeader=YES], [HavePapiHeader=NO])
-AC_SUBST(HavePapiLib)
-AC_SUBST(HavePapiHeader)
-
-AC_CHECK_FUNCS(__mingw_vfprintf)
-
 if test "$HavePapiLib" = "YES" -a "$HavePapiHeader" = "YES"; then
    HavePapi=YES
 else
    HavePapi=NO
 fi
 AC_SUBST(HavePapi)
+
+AC_CHECK_FUNCS(__mingw_vfprintf)
+
+# Check for perf_event (will only be present for new-ish Linux)
+AC_CHECK_HEADER([linux/perf_event.h], [HavePerfEvent=YES], [HavePerfEvent=NO])
+AC_SUBST(HavePerfEvent)
+
+# Check for libdwarf
+AC_CHECK_HEADER([libdwarf.h], [HaveDwarfHeader=YES], [HaveLibDwarfHeader=NO])
+AC_CHECK_LIB(dwarf, dwarf_init, [HaveDwarfLib=YES], [HaveDwarfLib=NO])
+AC_CHECK_LIB(elf, elf_begin, [HaveElfLib=YES], [HaveElfLib=NO])
+if test "$HaveDwarfLib" = "YES" -a "$HaveDwarfHeader" = "YES" -a "$HaveElfLib" = "YES"; then
+   HaveLibDwarf=YES
+else
+   HaveLibDwarf=NO
+fi
+AC_SUBST(HaveLibDwarf)
+
 
 if test "$HAVE_DOCBOOK_XSL" = "NO" ||
    test "$XsltprocCmd" = ""

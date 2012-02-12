@@ -1778,6 +1778,7 @@ linkBinary dflags o_files dep_packages = do
                       ++ pkg_framework_opts
                       ++ debug_opts
                       ++ thread_opts
+                      ++ cGccLinkerOpts
                     ))
 
     -- parallel only: move binary to another dir -- HWL

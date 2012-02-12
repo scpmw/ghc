@@ -31,6 +31,8 @@ import CgCon
 import CgHeapery
 import CgInfoTbls
 import CgStackery
+import CgHpc (cgInstrument)
+
 import OldCmm
 import OldCmmUtils
 import CLabel
@@ -168,12 +170,13 @@ cgLetNoEscapeClosure
 		    ; nukeDeadBindings full_live_in_rhss })
 
 		(do { deAllocStackTop retAddrSizeW
-		    ; abs_c <- forkProc $ cgLetNoEscapeBody bndr cc 
-						  cc_slot args body
+		    ; instr <- freshInstr
+		    ; (abs_c, ticks) <- forkProc $ cgInstrument instr $
+                                        cgLetNoEscapeBody bndr cc cc_slot args body
 
 			-- Ignore the label that comes back from
 			-- mkRetDirectTarget.  It must be conjured up elswhere
-		    ; _ <- emitReturnTarget (idName bndr) abs_c
+		    ; _ <- emitReturnTarget (idName bndr) abs_c instr ticks
 		    ; return () })
 
 	; returnFC (bndr, letNoEscapeIdInfo bndr vSp lf_info) }

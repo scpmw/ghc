@@ -41,6 +41,7 @@ module SrcLoc (
         -- * SrcSpan
 	RealSrcSpan,		-- Abstract
 	SrcSpan(..),
+	pprUserRealSpan, pprUserSpan,
 
         -- ** Constructing SrcSpan
 	mkGeneralSrcSpan, mkSrcSpan, mkRealSrcSpan,
@@ -54,8 +55,7 @@ module SrcLoc (
 	realSrcSpanStart, realSrcSpanEnd,
 	srcSpanFileName_maybe,
 
-	-- ** Unsafely deconstructing SrcSpan
-	-- These are dubious exports, because they crash on some inputs
+	-- ** Deconstructing RealSrcSpan
 	srcSpanFile, 
         srcSpanStartLine, srcSpanEndLine, 
         srcSpanStartCol, srcSpanEndCol,
@@ -266,8 +266,8 @@ data SrcSpan =
   | UnhelpfulSpan !FastString	-- Just a general indication
 				-- also used to indicate an empty span
 
-  deriving (Eq, Typeable, Show) -- Show is used by Lexer.x, becuase we
-                                -- derive Show for Token
+  deriving (Eq, Ord, Typeable, Show) -- Show is used by Lexer.x, becuase we
+                                     -- derive Show for Token
 
 -- | Built-in "bad" 'SrcSpan's for common sources of location uncertainty
 noSrcSpan, wiredInSrcSpan :: SrcSpan
@@ -426,12 +426,11 @@ srcSpanFileName_maybe (UnhelpfulSpan _) = Nothing
 
 \begin{code}
 
--- We want to order SrcSpans first by the start point, then by the end point.
-instance Ord SrcSpan where
-  a `compare` b = 
-     (srcSpanStart a `compare` srcSpanStart b) `thenCmp` 
-     (srcSpanEnd   a `compare` srcSpanEnd   b)
-
+-- We want to order RealSrcSpans first by the start point, then by the end point.
+instance Ord RealSrcSpan where
+  a `compare` b =
+     (realSrcSpanStart a `compare` realSrcSpanStart b) `thenCmp`
+     (realSrcSpanEnd   a `compare` realSrcSpanEnd   b)
 
 instance Outputable RealSrcSpan where
     ppr span

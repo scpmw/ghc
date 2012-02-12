@@ -22,6 +22,7 @@ data Platform
               platformOS                       :: OS,
               platformWordSize                 :: {-# UNPACK #-} !Int,
               platformHasGnuNonexecStack       :: Bool,
+              platformHasIdentDirective        :: Bool,
               platformHasSubsectionsViaSymbols :: Bool
           }
         deriving (Read, Show, Eq)

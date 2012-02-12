@@ -56,7 +56,10 @@ data LlvmFunction = LlvmFunction {
     funcSect  :: LMSection,
 
     -- | The body of the functions.
-    funcBody  :: LlvmBlocks
+    funcBody  :: LlvmBlocks,
+
+    -- | An instrumentation number
+    funcInstr :: Maybe Int
   }
 
 type LlvmFunctions  = [LlvmFunction]
@@ -138,7 +141,7 @@ data LlvmStatement
   -}
   | Nop
 
-  deriving (Show, Eq)
+  deriving (Eq)
 
 
 -- | Llvm Expressions
@@ -229,5 +232,5 @@ data LlvmExpression
   -}
   | Asm LMString LMString LlvmType [LlvmVar] Bool Bool
 
-  deriving (Show, Eq)
+  deriving (Eq)
 

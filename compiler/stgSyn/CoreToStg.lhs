@@ -247,7 +247,7 @@ coreToTopStgRhs dflags scope_fv_info (bndr, rhs)
   = do { (new_rhs, rhs_fvs, _) <- coreToStgExpr rhs
        ; lv_info <- freeVarsToLiveVars rhs_fvs
 
-       ; let stg_rhs   = mkTopStgRhs dflags rhs_fvs (mkSRT lv_info) bndr_info new_rhs
+       ; let stg_rhs   = mkTopStgRhs dflags rhs_fvs (mkSRT lv_info) bndr_info (annotateCore (bndr, rhs)) new_rhs
              stg_arity = stgRhsArity stg_rhs
        ; return (ASSERT2( arity_ok stg_arity, mk_arity_msg stg_arity) stg_rhs,
                  rhs_fvs) }
@@ -274,26 +274,27 @@ coreToTopStgRhs dflags scope_fv_info (bndr, rhs)
                 ptext (sLit "STG arity:") <+> ppr stg_arity]
 
 mkTopStgRhs :: DynFlags -> FreeVarsInfo
-            -> SRT -> StgBinderInfo -> StgExpr
+            -> SRT -> StgBinderInfo -> (StgExpr -> StgExpr)
+            -> StgExpr
             -> StgRhs
 
-mkTopStgRhs _ rhs_fvs srt binder_info (StgLam _ bndrs body)
+mkTopStgRhs _ rhs_fvs srt binder_info annot (StgLam _ bndrs body)
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   ReEntrant
                   srt
-                  bndrs body
+                  bndrs (annot body)
 
-mkTopStgRhs dflags _ _ _ (StgConApp con args)
+mkTopStgRhs dflags _ _ _ _ (StgConApp con args)
   | not (isDllConApp dflags con args)  -- Dynamic StgConApps are updatable
   = StgRhsCon noCCS con args
 
-mkTopStgRhs _ rhs_fvs srt binder_info rhs
+mkTopStgRhs _ rhs_fvs srt binder_info annot rhs
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   Updatable
                   srt
-                  [] rhs
+                  [] (annot rhs)
 \end{code}
 
 
@@ -347,16 +348,15 @@ coreToStgExpr expr@(Lam _ _)
 
     return (result_expr, fvs, escs)
 
-coreToStgExpr (Tick (HpcTick m n) expr)
-  = do (expr2, fvs, escs) <- coreToStgExpr expr
-       return (StgTick m n expr2, fvs, escs)
-
-coreToStgExpr (Tick (ProfNote cc tick push) expr)
-  = do (expr2, fvs, escs) <- coreToStgExpr expr
-       return (StgSCC cc tick push expr2, fvs, escs)
-
-coreToStgExpr (Tick Breakpoint{} _expr)
-  = panic "coreToStgExpr: breakpoint should not happen"
+coreToStgExpr (Tick tick expr)
+  = do !_ <- case tick of
+         HpcTick{}    -> return ()
+         ProfNote{}   -> return ()
+         SourceNote{} -> return ()
+         Breakpoint{} -> panic "coreToStgExpr: breakpoint should not happen"
+         _otherwise   -> panic "coreToStgExpr: Tick"
+       (expr2, fvs, escs) <- coreToStgExpr expr
+       return (StgTick tick expr2, fvs, escs)
 
 coreToStgExpr (Cast expr _)
   = coreToStgExpr expr
@@ -553,7 +553,6 @@ coreToStgApp _ f args = do
                 FCallId call     -> ASSERT( saturated )
                                     StgOpApp (StgFCallOp call (idUnique f)) args' res_ty
 
-                TickBoxOpId {}   -> pprPanic "coreToStg TickBox" $ ppr (f,args')
                 _other           -> StgApp f args'
         fvs = fun_fvs  `unionFVInfo` args_fvs
         vars = fun_escs `unionVarSet` (getFVSet args_fvs)
@@ -586,6 +585,12 @@ coreToStgArgs (Type _ : args) = do     -- Type argument
 coreToStgArgs (Coercion _ : args)  -- Coercion argument; replace with place holder
   = do { (args', fvs) <- coreToStgArgs args
        ; return (StgVarArg coercionTokenId : args', fvs) }
+
+coreToStgArgs (Tick t e : args)
+  = ASSERT ( not (tickishIsCode t)) coreToStgArgs (e : args)
+
+coreToStgArgs (Cast e _ : args) -- I have a feeling this shouldn't happen somehow.
+  = coreToStgArgs (e : args)
 
 coreToStgArgs (arg : args) = do         -- Non-type argument
     (stg_args, args_fvs) <- coreToStgArgs args
@@ -762,25 +767,25 @@ coreToStgRhs :: FreeVarsInfo            -- Free var info for the scope of the bi
 coreToStgRhs scope_fv_info binders (bndr, rhs) = do
     (new_rhs, rhs_fvs, rhs_escs) <- coreToStgExpr rhs
     lv_info <- freeVarsToLiveVars (binders `minusFVBinders` rhs_fvs)
-    return (mkStgRhs rhs_fvs (mkSRT lv_info) bndr_info new_rhs,
+    return (mkStgRhs rhs_fvs (mkSRT lv_info) bndr_info (annotateCore (bndr, rhs)) new_rhs,
             rhs_fvs, lv_info, rhs_escs)
   where
     bndr_info = lookupFVInfo scope_fv_info bndr
 
-mkStgRhs :: FreeVarsInfo -> SRT -> StgBinderInfo -> StgExpr -> StgRhs
+mkStgRhs :: FreeVarsInfo -> SRT -> StgBinderInfo -> (StgExpr -> StgExpr) -> StgExpr -> StgRhs
 
-mkStgRhs _ _ _ (StgConApp con args) = StgRhsCon noCCS con args
+mkStgRhs _ _ _ _ (StgConApp con args) = StgRhsCon noCCS con args
 
-mkStgRhs rhs_fvs srt binder_info (StgLam _ bndrs body)
+mkStgRhs rhs_fvs srt binder_info annot (StgLam _ bndrs body)
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   ReEntrant
-                  srt bndrs body
+                  srt bndrs (annot body)
 
-mkStgRhs rhs_fvs srt binder_info rhs
+mkStgRhs rhs_fvs srt binder_info annot rhs
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
-                  upd_flag srt [] rhs
+                  upd_flag srt [] (annot rhs)
   where
    upd_flag = Updatable
   {-
@@ -808,6 +813,19 @@ mkStgRhs rhs_fvs srt binder_info rhs
         -- specifically Main.lvl6 in spectral/cryptarithm2.
         -- So no great loss.  KSW 2000-07.
 -}
+
+-- | Adds a "core" annotation to the Rhs
+annotateCore :: (Id, CoreExpr) -> StgExpr -> StgExpr
+  -- TODO: Not having this special case makes GHC generate duplicated labels
+  -- in the back-end for some reason. Figure out exactly why. -- PMW
+annotateCore _ rhs@(StgApp _ []) = rhs
+annotateCore (bnd, expr) rhs = StgTick note rhs
+ where
+   note = CoreNote {
+     coreBind = bnd,
+     coreNote = ExprPtr expr
+     }
+
 \end{code}
 
 Detect thunks which will reduce immediately to PAPs, and make them
@@ -1116,15 +1134,15 @@ filterStgBinders bndrs = filter isId bndrs
 \begin{code}
 myCollectBinders :: Expr Var -> ([Var], Expr Var)
 myCollectBinders expr
-  = go [] expr
+  = go [] [] expr
   where
-    go bs (Lam b e)          = go (b:bs) e
-    go bs e@(Tick t e')
-        | tickishIsCode t    = (reverse bs, e)
-        | otherwise          = go bs e'
+    go bs ts (Lam b e)          = go (b:bs) ts e
+    go bs ts e@(Tick t e')
+        | tickishIsCode t       = (reverse bs, foldr Tick e ts)
+        | otherwise             = go bs (t:ts) e'
         -- Ignore only non-code source annotations
-    go bs (Cast e _)         = go bs e
-    go bs e                  = (reverse bs, e)
+    go bs ts (Cast e _)         = go bs ts e
+    go bs ts e                  = (reverse bs, foldr Tick e ts)
 
 myCollectArgs :: CoreExpr -> (Id, [CoreArg])
         -- We assume that we only have variables
@@ -1134,7 +1152,9 @@ myCollectArgs expr
   where
     go (Var v)          as = (v, as)
     go (App f a) as        = go f (a:as)
-    go (Tick _ _)     _  = pprPanic "CoreToStg.myCollectArgs" (ppr expr)
+    go (Tick t e)       as
+       | tickishIsCode t   = pprPanic "CoreToStg.myCollectArgs" (ppr expr)
+       | otherwise         = go e as
     go (Cast e _)       as = go e as
     go (Lam b e)        as
        | isTyVar b         = go e as  -- Note [Collect args]

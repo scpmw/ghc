@@ -240,6 +240,8 @@ STANDARD_OPTS += -Iincludes -Irts -Irts/dist/build
 # COMPILING_RTS is only used when building Win32 DLL support.
 STANDARD_OPTS += -DCOMPILING_RTS
 
+STANDARD_OPTS += $(CFLAGS)
+
 # HC_OPTS is included in both .c and .cmm compilations, whereas CC_OPTS is
 # only included in .c compilations.  HC_OPTS included the WAY_* opts, which
 # must be included in both types of compilations.
@@ -428,6 +430,21 @@ else # GhcRtsWithPapi==YES
 rts_PACKAGE_CPP_OPTS += -DPAPI_INCLUDE_DIR=""
 rts_PACKAGE_CPP_OPTS += -DPAPI_LIB_DIR=""
 
+endif
+
+#-----------------------------------------------------------------------------
+# Add perf_event interface, if available
+
+ifeq "$(GhcRtsWithPerfEvent)" "YES"
+rts_CC_OPTS += -DUSE_PERF_EVENT
+endif
+
+#-----------------------------------------------------------------------------
+# Add support for reading DWARF debugging information, if available
+
+ifeq "$(GhcRtsWithDwarf)" "YES"
+rts_CC_OPTS += -DUSE_DWARF
+rts_PACKAGE_CPP_OPTS += -DUSE_DWARF
 endif
 
 # -----------------------------------------------------------------------------

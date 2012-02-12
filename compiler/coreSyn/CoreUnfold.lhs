@@ -1227,3 +1227,4 @@ nonTriv ::  ArgSummary -> Bool
 nonTriv TrivArg = False
 nonTriv _       = True
 \end{code}
+

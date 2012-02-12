@@ -36,6 +36,7 @@ import CgBindery
 import CgCallConv
 import CgUtils
 import CgMonad
+import CgHpc (cgInstrument)
 import CmmBuildInfoTables
 
 import OldCmm
@@ -43,6 +44,7 @@ import CLabel
 import Name
 import Unique
 import StaticFlags
+import CoreSyn (Tickish)
 
 import Constants
 import DynFlags
@@ -59,11 +61,11 @@ import Outputable
 -- representation as a list of 'CmmAddr' is handled later
 -- in the pipeline by 'cmmToRawCmm'.
 
-emitClosureCodeAndInfoTable :: ClosureInfo -> [CmmFormal] -> CgStmts -> Code
-emitClosureCodeAndInfoTable cl_info args body
+emitClosureCodeAndInfoTable :: ClosureInfo -> [CmmFormal] -> CgStmts -> Int -> [Tickish ()] -> Code
+emitClosureCodeAndInfoTable cl_info args body instr ticks
  = do	{ blks <- cgStmtsToBlocks body
         ; info <- mkCmmInfo cl_info
-        ; emitInfoTableAndCode (entryLabelFromCI cl_info) info args blks }
+        ; emitInfoTableAndCode (entryLabelFromCI cl_info) info args blks (Just instr) ticks }
 
 -- Convert from 'ClosureInfo' to 'CmmInfo'.
 -- Not used for return points.  (The 'smRepClosureTypeInt' call would panic.)
@@ -100,8 +102,10 @@ mkCmmInfo cl_info
 emitReturnTarget
    :: Name
    -> CgStmts			-- The direct-return code (if any)
+   -> Int
+   -> [Tickish ()]
    -> FCode CLabel
-emitReturnTarget name stmts
+emitReturnTarget name stmts instr ticks
   = do	{ srt_info   <- getSRTInfo
 	; blks <- cgStmtsToBlocks stmts
         ; frame <- mkStackLayout
@@ -111,7 +115,7 @@ emitReturnTarget name stmts
                                       , cit_prof = NoProfilingInfo
                                       , cit_rep  = smrep
                                       , cit_srt  = srt_info }
-        ; emitInfoTableAndCode entry_lbl info args blks
+        ; emitInfoTableAndCode entry_lbl info args blks (Just instr) ticks
 	; return info_lbl }
   where
     args      = {- trace "emitReturnTarget: missing args" -} []
@@ -231,7 +235,8 @@ emitAlgReturnTarget
 	-> FCode (CLabel, SemiTaggingStuff)
 
 emitAlgReturnTarget name branches mb_deflt fam_sz
-  = do  { blks <- getCgStmts $
+  = do  { instr <- freshInstr 
+        ; (blks, ticks) <- getCgStmts $ cgInstrument instr $
                     -- is the constructor tag in the node reg?
                     if isSmallFamily fam_sz
                         then do -- yes, node has constr. tag
@@ -244,7 +249,7 @@ emitAlgReturnTarget name branches mb_deflt fam_sz
                               untagged_ptr = cmmRegOffB nodeReg (-1)
                               tag_expr = getConstrTag (untagged_ptr)
                           emitSwitch tag_expr branches mb_deflt 0 (fam_sz - 1)
-	; lbl <- emitReturnTarget name blks
+	; lbl <- emitReturnTarget name blks instr ticks
 	; return (lbl, Nothing) }
 		-- Nothing: the internal branches in the switch don't have
 		-- global labels, so we can't use them at the 'call site'
@@ -381,8 +386,10 @@ emitInfoTableAndCode
 	-> CmmInfo 		-- ...the info table
 	-> [CmmFormal]	-- ...args
 	-> [CmmBasicBlock]	-- ...and body
+	-> Maybe Int            -- instrumentation number
+	-> [Tickish ()]         -- tick information about code
 	-> Code
 
-emitInfoTableAndCode entry_ret_lbl info args blocks
-  = emitProc info entry_ret_lbl args blocks
+emitInfoTableAndCode entry_ret_lbl info args blocks instr ticks
+  = emitProc info entry_ret_lbl args blocks instr ticks
 

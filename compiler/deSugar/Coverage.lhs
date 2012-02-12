@@ -96,6 +96,11 @@ addTicksToBinds dflags mod mod_loc exports tyCons binds =
                                           | tyCon <- tyCons ]
                       , density      = mkDensity dflags
                       , this_mod     = mod
+                      , tickishType  = case hscTarget dflags of
+                          HscInterpreted          -> Breakpoints
+                          _ | opt_Hpc             -> HpcTicks
+                            | opt_SccProfilingOn  -> ProfNotes
+                            | otherwise           -> SourceNotes
                        })
 		   (TT 
 		      { tickBoxCount = 0
@@ -188,8 +193,10 @@ mkDensity dflags
   | ProfAutoAll     <- profAuto dflags   = TickAllFunctions
   | ProfAutoTop     <- profAuto dflags   = TickTopFunctions
   | ProfAutoExports <- profAuto dflags   = TickExportedFunctions
+  | HscLlvm         <- hscTarget dflags  = TickAllFunctions
   | ProfAutoCalls   <- profAuto dflags   = TickCallSites
-  | otherwise = panic "desnity"
+  | otherwise = panic "density"
+
   -- ToDo: -fhpc is taking priority over -fprof-auto here.  It seems
   -- that coverage works perfectly well with profiling, but you don't
   -- get any auto-generated SCCs.  It would make perfect sense to
@@ -877,9 +884,19 @@ data TickTransEnv = TTE { fileName     :: FastString
                         , inScope      :: VarSet
                         , blackList    :: Map SrcSpan ()
                         , this_mod     :: Module
+                        , tickishType  :: TickishType
                         }
 
 --	deriving Show
+
+data TickishType = ProfNotes | HpcTicks | Breakpoints | SourceNotes
+
+-- | Tickishs that only make sense when their source code location
+-- refers to the current file. This might not apply due LINE pragmas
+-- in the code and might confuse at least HPC.
+tickSameFileOnly :: TickishType -> Bool
+tickSameFileOnly HpcTicks = True
+tickSameFileOnly _other   = False
 
 type FreeVars = OccEnv Id
 noFVs :: FreeVars
@@ -949,13 +966,18 @@ getPathEntry = declPath `liftM` getEnv
 getFileName :: TM FastString
 getFileName = fileName `liftM` getEnv
 
-sameFileName :: SrcSpan -> TM a -> TM a -> TM a
-sameFileName pos out_of_scope in_scope = do
+isGoodTickSrcSpan :: SrcSpan -> TM Bool
+isGoodTickSrcSpan pos = do
   file_name <- getFileName
-  case srcSpanFileName_maybe pos of 
-    Just file_name2 
-      | file_name == file_name2 -> in_scope
-    _ -> out_of_scope
+  tickish <- tickishType `liftM` getEnv
+  let need_same_file = tickSameFileOnly tickish
+      same_file      = Just file_name == srcSpanFileName_maybe pos
+  return (isGoodSrcSpan' pos && (not need_same_file || same_file))
+
+ifGoodTickSrcSpan :: SrcSpan -> TM a -> TM a -> TM a
+ifGoodTickSrcSpan pos then_code else_code = do
+  good <- isGoodTickSrcSpan pos
+  if good then then_code else else_code
 
 bindLocals :: [Id] -> TM a -> TM a
 bindLocals new_ids (TM m)
@@ -974,23 +996,23 @@ isBlackListed pos = TM $ \ env st ->
 -- expression argument to support nested box allocations 
 allocTickBox :: BoxLabel -> Bool -> Bool -> SrcSpan -> TM (HsExpr Id)
              -> TM (LHsExpr Id)
-allocTickBox boxLabel countEntries topOnly pos m | isGoodSrcSpan' pos =
-  sameFileName pos (do e <- m; return (L pos e)) $ do
+allocTickBox boxLabel countEntries topOnly pos m =
+  ifGoodTickSrcSpan pos (do
     (fvs, e) <- getFreeVars m
     env <- getEnv
     tickish <- mkTickish boxLabel countEntries topOnly pos fvs (declPath env)
     return (L pos (HsTick tickish (L pos e)))
-allocTickBox _boxLabel _countEntries _topOnly pos m = do
-  e <- m
-  return (L pos e)
-
+  ) (do
+    e <- m
+    return (L pos e)
+  )
 
 -- the tick application inherits the source position of its
 -- expression argument to support nested box allocations 
 allocATickBox :: BoxLabel -> Bool -> Bool -> SrcSpan -> FreeVars
               -> TM (Maybe (Tickish Id))
-allocATickBox boxLabel countEntries topOnly  pos fvs | isGoodSrcSpan' pos =
-  sameFileName pos (return Nothing) $ do
+allocATickBox boxLabel countEntries topOnly  pos fvs =
+  ifGoodTickSrcSpan pos (do
     let
       mydecl_path = case boxLabel of
                       TopLevelBox x -> x
@@ -998,8 +1020,7 @@ allocATickBox boxLabel countEntries topOnly  pos fvs | isGoodSrcSpan' pos =
                       _ -> panic "allocATickBox"
     tickish <- mkTickish boxLabel countEntries topOnly pos fvs mydecl_path
     return (Just tickish)
-allocATickBox _boxLabel _countEntries _topOnly _pos _fvs =
-  return Nothing
+  ) (return Nothing)
 
 
 mkTickish :: BoxLabel -> Bool -> Bool -> SrcSpan -> OccEnv Id -> [String]
@@ -1024,10 +1045,13 @@ mkTickish boxLabel countEntries topOnly pos fvs decl_path =
 
         count = countEntries && dopt Opt_ProfCountEntries (dflags env)
 
-        tickish
-          | opt_Hpc            = HpcTick (this_mod env) c
-          | opt_SccProfilingOn = ProfNote cc count True{-scopes-}
-          | otherwise          = Breakpoint c ids
+        tickish = case tickishType env of
+          HpcTicks    -> HpcTick (this_mod env) c
+          ProfNotes   -> ProfNote cc count True{-scopes-}
+          Breakpoints -> Breakpoint c ids
+          SourceNotes | RealSrcSpan pos' <- pos
+                      -> SourceNote pos' cc_name
+          _otherwise  -> panic "mkTickish: bad source span!"
     in
     ( tickish
     , fvs
@@ -1037,11 +1061,14 @@ mkTickish boxLabel countEntries topOnly pos fvs decl_path =
 
 allocBinTickBox :: (Bool -> BoxLabel) -> SrcSpan -> TM (HsExpr Id)
                 -> TM (LHsExpr Id)
-allocBinTickBox boxLabel pos m
- | not opt_Hpc = allocTickBox (ExpBox False) False False pos m
- | isGoodSrcSpan' pos =
- do
- e <- m
+allocBinTickBox boxLabel pos m = do {
+ ; env <- getEnv
+ ; case tickishType env of
+   HpcTicks -> do {
+ ; e <- m
+ ; if not (isGoodSrcSpan' pos)
+   then return (L pos e)
+   else
  TM $ \ env st ->
   let meT = (pos,declPath env, [],boxLabel True)
       meF = (pos,declPath env, [],boxLabel False)
@@ -1056,7 +1083,9 @@ allocBinTickBox boxLabel pos m
              , noFVs
              , st {tickBoxCount=c+3 , mixEntries=meF:meT:meE:mes}
              )
-allocBinTickBox _boxLabel pos m = do e <- m; return (L pos e)
+  }
+   _other -> allocTickBox (ExpBox False) False False pos m
+  }
 
 isGoodSrcSpan' :: SrcSpan -> Bool
 isGoodSrcSpan' pos@(RealSrcSpan _) = srcSpanStart pos /= srcSpanEnd pos
@@ -1122,27 +1151,38 @@ static void hpc_init_Main(void)
  hs_hpc_module("Main",8,1150288664,_hpc_tickboxes_Main_hpc);}
 
 \begin{code}
-hpcInitCode :: Platform -> Module -> HpcInfo -> SDoc
-hpcInitCode _ _ (NoHpcInfo {}) = empty
-hpcInitCode platform this_mod (HpcInfo tickCount hashNo)
+hpcInitCode :: DynFlags -> Module -> ModLocation -> HpcInfo -> SDoc
+hpcInitCode dflags this_mod mod_loc hpc_info
  = vcat
     [ text "static void hpc_init_" <> ppr this_mod
          <> text "(void) __attribute__((constructor));"
     , text "static void hpc_init_" <> ppr this_mod <> text "(void)"
     , braces (vcat [
-        ptext (sLit "extern StgWord64 ") <> tickboxes <>
-               ptext (sLit "[]") <> semi,
+        tickboxes_decl,
         ptext (sLit "hs_hpc_module") <>
           parens (hcat (punctuate comma [
               doubleQuotes full_name_str,
+              doubleQuotes mod_loc_str,
               int tickCount, -- really StgWord32
               int hashNo,    -- really StgWord32
-              tickboxes
+              if opt_Hpc then tickboxes else int 0
             ])) <> semi
        ])
     ]
   where
-    tickboxes = pprCLabel platform (mkHpcTicksLabel $ this_mod)
+    platform = targetPlatform dflags
+
+    do_hpc | not opt_Hpc               = False
+           | NoHpcInfo {} <- hpc_info  = False
+           | otherwise                 = True
+    (tickCount, hashNo)
+      | do_hpc    = (hpcInfoTickCount hpc_info, hpcInfoHash hpc_info) 
+      | otherwise = (0, 0)
+
+    tickboxes = pprCLabel platform (mkHpcTicksLabel this_mod)
+    tickboxes_decl
+      | opt_Hpc   = ptext (sLit "extern StgWord64 ") <> tickboxes <> ptext (sLit "[]") <> semi
+      | otherwise = empty
 
     module_name  = hcat (map (text.charToC) $
                          bytesFS (moduleNameFS (Module.moduleName this_mod)))
@@ -1153,4 +1193,8 @@ hpcInitCode platform this_mod (HpcInfo tickCount hashNo)
        = module_name
        | otherwise
        = package_name <> char '/' <> module_name
+
+    mod_loc_str = case ml_hs_file mod_loc of
+                       Just path -> text path
+                       Nothing   -> text "*** no source *** "
 \end{code}

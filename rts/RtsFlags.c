@@ -211,6 +211,10 @@ void initRtsFlagsDefaults(void)
     /* By default no special measurements taken */
     RtsFlags.PapiFlags.eventType        = 0;
     RtsFlags.PapiFlags.numUserEvents    = 0;
+#ifdef TRACING
+	RtsFlags.PapiFlags.sampleType       = 0;
+	RtsFlags.PapiFlags.samplePeriod     = 0;
+#endif
 #endif
 }
 
@@ -389,6 +393,22 @@ usage_text[] = {
 "            e - cache miss and branch misprediction events",
 "            +PAPI_EVENT   - collect papi preset event PAPI_EVENT",
 "            #NATIVE_EVENT - collect native event NATIVE_EVENT (in hex)",
+#ifdef TRACING
+"",
+"  -aSX      Sample instruction pointer using PAPI counter",
+"            (use with -l or -v). X is one of:",
+"",
+"            y - cycles",
+"            1 - level 1 cache misses",
+"            2 - level 2 cache misses",
+"",
+"  -aP<n>    Sampling period to use for PAPI counters",
+#endif
+#endif
+#ifdef USE_PERF_EVENT
+#ifdef TRACING
+"  -E        CPU performance counter measurements using perf_events",
+#endif
 #endif
 "",
 "RTS options may also be specified using the GHCRTS environment variable.",
@@ -725,10 +745,38 @@ error = rtsTrue;
                   RtsFlags.PapiFlags.eventType = PAPI_USER_EVENTS;
                   RtsFlags.PapiFlags.userEventsKind[eventNum] = eventKind;
                   break;
+#ifdef TRACING
+		case 'S':
+			switch(rts_argv[arg][3]) {
+			case '1':
+				RtsFlags.PapiFlags.sampleType = PAPI_SAMPLE_BY_L1_MISS;
+				break;
+			case '2':
+				RtsFlags.PapiFlags.sampleType = PAPI_SAMPLE_BY_L2_MISS;
+				break;
+			case 'y':
+			default:
+				RtsFlags.PapiFlags.sampleType = PAPI_SAMPLE_BY_CYCLE;
+				break;
+			}
+			break;
+		case 'P':
+			RtsFlags.PapiFlags.samplePeriod = atoi(rts_argv[arg] + 3);
+			break;
+#endif
 		default:
 		  bad_option( rts_argv[arg] );
 		}
 		break;
+#endif
+
+#ifdef USE_PERF_EVENT
+#ifdef TRACING
+			case 'E':
+				OPTION_UNSAFE;
+				RtsFlags.PerfEventFlags.sampleType = 1;
+				break;
+#endif
 #endif
 
 	      case 'B':

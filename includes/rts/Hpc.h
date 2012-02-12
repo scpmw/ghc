@@ -17,6 +17,7 @@
 // Simple linked list of modules
 typedef struct _HpcModuleInfo {
   char *modName;		// name of module
+  char *modSource;		// path of source file module was created from
   StgWord32 tickCount;		// number of ticks
   StgWord32 hashNo;             // Hash number for this module's mix info
   StgWord64 *tixArr;		// tix Array; local for this module
@@ -25,7 +26,8 @@ typedef struct _HpcModuleInfo {
 } HpcModuleInfo;
 
 void hs_hpc_module (char *modName,
-                    StgWord32 modCount,
+                    char *modSource,
+                    StgWord32 tickCount,
                     StgWord32 modHashNo,
                     StgWord64 *tixArr);
 

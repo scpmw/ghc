@@ -32,9 +32,9 @@ import UniqSupply       ( UniqSupply )
 import ListSetOps       ( removeDups )
 import Outputable
 import DynFlags
-import FastString
+import CoreSyn          ( Tickish(..) )
 import SrcLoc
-
+import FastString
 
 stgMassageForProfiling
         :: DynFlags
@@ -89,7 +89,7 @@ stgMassageForProfiling dflags mod_name _us stg_binds
     do_top_rhs :: Id -> StgRhs -> MassageM StgRhs
 
     do_top_rhs _ (StgRhsClosure _ _ _ _ _ []
-                     (StgSCC _cc False{-not tick-} _push (StgConApp con args)))
+                     (StgTick (ProfNote _cc False{-not tick-} _push) (StgConApp con args)))
       | not (isDllConApp dflags con args)
         -- Trivial _scc_ around nothing but static data
         -- Eliminate _scc_ ... and turn into StgRhsCon
@@ -142,10 +142,14 @@ stgMassageForProfiling dflags mod_name _us stg_binds
     do_expr (StgOpApp con args res_ty)
       = return (StgOpApp con args res_ty)
 
-    do_expr (StgSCC cc tick push expr) = do -- Ha, we found a cost centre!
+    do_expr (StgTick note@(ProfNote cc _ _) expr) = do -- Ha, we found a cost centre!
         collectCC cc
         expr' <- do_expr expr
-        return (StgSCC cc tick push expr')
+        return (StgTick note expr')
+
+    do_expr (StgTick ti expr) = do
+        expr' <- do_expr expr
+        return (StgTick ti expr')
 
     do_expr (StgCase expr fv1 fv2 bndr srt alt_type alts) = do
         expr' <- do_expr expr
@@ -163,10 +167,6 @@ stgMassageForProfiling dflags mod_name _us stg_binds
     do_expr (StgLetNoEscape lvs1 lvs2 b e) = do
           (b,e) <- do_let b e
           return (StgLetNoEscape lvs1 lvs2 b e)
-
-    do_expr (StgTick m n expr) = do
-          expr' <- do_expr expr
-          return (StgTick m n expr')
 
     do_expr other = pprPanic "SCCfinal.do_expr" (ppr other)
 
@@ -197,7 +197,7 @@ stgMassageForProfiling dflags mod_name _us stg_binds
         -- We should really attach (PushCC cc CurrentCCS) to the rhs,
         -- but need to reinstate PushCC for that.
     do_rhs (StgRhsClosure _closure_cc _bi _fv _u _srt []
-               (StgSCC cc False{-not tick-} _push (StgConApp con args)))
+               (StgTick (ProfNote cc False{-not tick-} _push) (StgConApp con args)))
       = do collectCC cc
            return (StgRhsCon currentCCS con args)
 

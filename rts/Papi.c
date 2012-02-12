@@ -28,6 +28,9 @@
 #include "Stats.h"
 #include "Papi.h"
 
+#include "Task.h"
+#include "Trace.h"
+
 // used to protect the aggregated counters
 #ifdef THREADED_RTS
 static Mutex papi_counter_mutex;
@@ -70,10 +73,6 @@ struct _papi_events {
 /* While PAPI reporting is going on this flag is on */
 int papi_is_reporting;
 
-/* Event sets and counter arrays for GC and mutator */
-
-int MutatorEvents = PAPI_NULL;
-int GCEvents = PAPI_NULL;
 
 int papi_error;
 
@@ -87,22 +86,41 @@ static nat n_papi_events = 0;
 /* Events counted during GC and Mutator execution */
 /* There's a trailing comma, do all C compilers accept that? */
 static struct _papi_events papi_events[MAX_PAPI_EVENTS];
-long_long MutatorCounters[MAX_PAPI_EVENTS];
-long_long GC0Counters[MAX_PAPI_EVENTS];
-long_long GC1Counters[MAX_PAPI_EVENTS];
-
-long_long start_mutator_cycles;
-long_long mutator_cycles = 0;
-long_long start_gc_cycles;
-long_long gc0_cycles = 0;
-long_long gc1_cycles = 0;
-
-
 
 static long_long papi_counter(long_long values[],int event);
 static void papi_add_events(int EventSet);
 
+#ifdef TRACING
+static void papi_overflow_handler(int EventSet, void *IP, long_long overflow, void *ctx);
+#endif
+
 static nat max_hardware_counters = 2;
+
+/* Instruction pointer sampling */
+#ifdef TRACING
+#define INSTR_PTR_SAMPLE_PERIOD     100000 /* How often to read the IP. In cycles */
+#define INSTR_PTR_SAMPLE_MIN_SIZE   256    /* Wait for this many events before generating an event */
+#define INSTR_PTR_SAMPLE_MAX_SIZE   1024   /* Maximum number of samples, might discard if more are generated before flush */
+
+#ifdef THREADED_RTS
+#define THREAD __thread
+#define MY_CAP (myTask()->cap)
+#else
+#define THREAD 
+#define MY_CAP (&MainCapability)
+#endif // TREADED_RTS
+
+// Map for the overflow handler, to quickly find the place to
+// aggregate instruction pointers. This works pretty well as
+// PAPI tends to use low values for map IDs. For larger IDs, we will
+// have to fall back to myTask() though.
+#define EVENTSET_TASK_MAP_SIZE 128
+static Task * eventset_task_map[EVENTSET_TASK_MAP_SIZE];
+
+static int ip_sample_event = 0;
+static int ip_sample_period = 0;
+
+#endif // TRACING
 
 /* If you want to add events to count, extend the
  * init_countable_events and the papi_report function.
@@ -122,6 +140,17 @@ static void papi_add_event(const char *name, int code)
     n_papi_events++;
 }    
 
+#ifdef TRACING
+static StgBool papi_have_event(int code)
+{
+	nat i;
+	for(i = 0; i < n_papi_events; i++)
+		if(papi_events[i].event_code == code)
+			return 1;
+	return 0;
+}
+#endif
+
 static void
 init_countable_events(void) 
 {
@@ -130,10 +159,8 @@ init_countable_events(void)
 #define PAPI_ADD_EVENT(EVENT) papi_add_event(#EVENT,EVENT)
 
     if (RtsFlags.PapiFlags.eventType==PAPI_FLAG_BRANCH) {
-	PAPI_ADD_EVENT(FR_BR);
-	PAPI_ADD_EVENT(FR_BR_MIS);
-	/* Docs are wrong? Opteron does not count indirect branch misses exclusively */
-	PAPI_ADD_EVENT(FR_BR_MISCOMPARE);
+	PAPI_ADD_EVENT(PAPI_BR_CN);
+	PAPI_ADD_EVENT(PAPI_BR_MSP);
     } else if (RtsFlags.PapiFlags.eventType==PAPI_FLAG_STALLS) {
 	PAPI_ADD_EVENT(FR_DISPATCH_STALLS);
 	PAPI_ADD_EVENT(FR_DISPATCH_STALLS_BR);
@@ -181,7 +208,7 @@ init_countable_events(void)
 	// PAPI_ADD_EVENT(PAPI_L2_TCR); // L2 cache reads
 	// PAPI_ADD_EVENT(PAPI_CA_CLN); // exclusive access to clean cache line
 	// PAPI_ADD_EVENT(PAPI_TLB_DM); // TLB misses
-        PAPI_ADD_EVENT(PAPI_TOT_INS); // Total instructions
+    //    PAPI_ADD_EVENT(PAPI_TOT_INS); // Total instructions
         PAPI_ADD_EVENT(PAPI_TOT_CYC); // Total instructions
 	// PAPI_ADD_EVENT(PAPI_CA_SHR); // exclusive access to shared cache line
 	// PAPI_ADD_EVENT(PAPI_RES_STL); // Cycles stalled on any resource
@@ -219,7 +246,7 @@ papi_report(long_long counters[])
     }
 
     if (RtsFlags.PapiFlags.eventType==PAPI_FLAG_BRANCH) {
-	PAPI_REPORT_PCT(counters,FR_BR_MIS,FR_BR);
+	PAPI_REPORT_PCT(counters,PAPI_BR_MSP,PAPI_BR_CN);
 	PAPI_REPORT_PCT(counters,FR_BR_MISCOMPARE,FR_BR);
     }
 
@@ -233,26 +260,27 @@ papi_report(long_long counters[])
 }
 
 void
-papi_stats_report (void)
+papi_stats_report (struct Task_ * task)
 {
     statsPrintf("  Mutator CPU counters\n");
-    papi_report_event("CYCLES", mutator_cycles);
-    papi_report(MutatorCounters);
+    papi_report_event("CYCLES", task->mutator_cycles);
+    papi_report(task->MutatorCounters);
     
     statsPrintf("\n  GC(0) CPU counters\n");
-    papi_report_event("CYCLES", gc0_cycles);
-    papi_report(GC0Counters);
+    papi_report_event("CYCLES", task->gc0_cycles);
+    papi_report(task->GC0Counters);
 
     statsPrintf("\n  GC(1) CPU counters\n");
-    papi_report_event("CYCLES", gc1_cycles);
-    papi_report(GC1Counters);
+    papi_report_event("CYCLES", task->gc1_cycles);
+    papi_report(task->GC1Counters);
 }
     
 void
 papi_init_eventset (int *event_set)
 {
-    PAPI_register_thread();
+	*event_set = PAPI_NULL;
     PAPI_CHECK( PAPI_create_eventset(event_set));
+	PAPI_set_multiplex(*event_set);
     papi_add_events(*event_set);
 }
 
@@ -284,9 +312,82 @@ papi_init (void)
 
     init_countable_events();
 
-    papi_init_eventset(&MutatorEvents);
-    papi_init_eventset(&GCEvents);
+#ifdef TRACING
+	// load sampling data
+	ip_sample_event = 0;
+	switch (RtsFlags.PapiFlags.sampleType) {
+	case PAPI_SAMPLE_BY_CYCLE:
+		ip_sample_event = PAPI_TOT_CYC; ip_sample_period = 100000; break;
+	case PAPI_SAMPLE_BY_L1_MISS:
+		ip_sample_event = PAPI_L1_TCM; ip_sample_period = 10000; break;
+	case PAPI_SAMPLE_BY_L2_MISS:
+		ip_sample_event = PAPI_L2_TCM; ip_sample_period = 1000; break;
+	}
+	if(RtsFlags.PapiFlags.samplePeriod)
+		ip_sample_period = RtsFlags.PapiFlags.samplePeriod;
+
+	// Make sure we the counter is present in the event set
+	if(ip_sample_event)
+		if(!papi_have_event(ip_sample_event))
+			papi_add_event("Sampling Counter", ip_sample_event);
+#endif
+
 }
+
+void papi_init_task(struct Task_ *task)
+{
+
+    PAPI_CHECK(PAPI_register_thread());
+
+    papi_init_eventset(&task->MutatorEvents);
+    papi_init_eventset(&task->GCEvents);
+
+	// Initialize all counters
+	nat i;
+	for(i = 0; i < MAX_PAPI_EVENTS; i++) {
+		task->MutatorCounters[i] = 0;
+		task->GC0Counters[i] = 0;
+		task->GC1Counters[i] = 0;
+	}
+	task->start_mutator_cycles = 0;
+	task->mutator_cycles = 0;
+	task->start_gc_cycles = 0;
+	task->gc0_cycles = 0;
+	task->gc1_cycles = 0;
+
+#ifdef TRACING
+	if(ip_sample_event) {
+		task->instrPtrSamplePos = 0;
+		if(task->MutatorEvents < EVENTSET_TASK_MAP_SIZE)
+			eventset_task_map[task->MutatorEvents] = task;
+		PAPI_CHECK(PAPI_overflow(task->MutatorEvents, 
+								 ip_sample_event, ip_sample_period, 0,
+								 &papi_overflow_handler));
+	}
+#endif
+}
+
+#if defined(TRACING)
+
+/* Called by PAPI on each overflow */
+static void
+papi_overflow_handler(int event_set, void *ip, long_long overflow, void *ctx)
+{
+	(void) overflow; (void) ctx;
+	// Find our task
+	Task * task;
+	if (event_set < EVENTSET_TASK_MAP_SIZE)
+		task = eventset_task_map[event_set];
+	else
+		task = myTask();
+	if (!task) return;
+	// Record
+	if(task->instrPtrSamplePos < INSTR_PTR_SAMPLE_MAX_SIZE) {
+		task->instrPtrSample[task->instrPtrSamplePos++] = ip;
+	}
+}
+
+#endif
 
 /* Extract the value corresponding to an event */
 static long_long
@@ -327,50 +428,57 @@ papi_add_events(int EventSet)
 void
 papi_start_mutator_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    PAPI_CHECK( PAPI_start(MutatorEvents));
-    start_mutator_cycles = PAPI_cycles();
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+    PAPI_CHECK( PAPI_start(task->MutatorEvents));
+    task->start_mutator_cycles = PAPI_cycles();
 }
 
 void
 papi_stop_mutator_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    mutator_cycles += PAPI_cycles() - start_mutator_cycles;
-    PAPI_CHECK( PAPI_accum(MutatorEvents,MutatorCounters));
-    PAPI_CHECK( PAPI_stop(MutatorEvents,NULL));
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+	if (!task->start_mutator_cycles) return;
+	if(PAPI_cycles() > task->start_mutator_cycles) 
+		task->mutator_cycles += PAPI_cycles() - task->start_mutator_cycles;
+	task->start_mutator_cycles = 0;
+    PAPI_CHECK( PAPI_accum(task->MutatorEvents,task->MutatorCounters));
+    PAPI_CHECK( PAPI_stop(task->MutatorEvents,NULL));
+
+#ifdef TRACING
+	// As the counter is disabled, we can savely flush instruction pointer samples
+	if(task->instrPtrSamplePos >= INSTR_PTR_SAMPLE_MIN_SIZE) {
+		traceInstrPtrSample(MY_CAP, 1, task->instrPtrSamplePos, task->instrPtrSample);
+		task->instrPtrSamplePos = 0;
+	}
+#endif
+
 }
 
 void
 papi_start_gc_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    PAPI_CHECK( PAPI_start(GCEvents));
-    start_gc_cycles = PAPI_cycles();
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+    PAPI_CHECK( PAPI_start(task->GCEvents));
+    task->start_gc_cycles = PAPI_cycles();
 }
 
 void
 papi_stop_gc0_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    PAPI_CHECK( PAPI_accum(GCEvents,GC0Counters));
-    PAPI_CHECK( PAPI_stop(GCEvents,NULL));
-    gc0_cycles += PAPI_cycles() - start_gc_cycles;
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+    PAPI_CHECK( PAPI_accum(task->GCEvents,task->GC0Counters));
+    PAPI_CHECK( PAPI_stop(task->GCEvents,NULL));
+    task->gc0_cycles += PAPI_cycles() - task->start_gc_cycles;
 }
 
 
 void
 papi_stop_gc1_count(void)
 {
-    ACQUIRE_LOCK(&papi_counter_mutex);
-    PAPI_CHECK( PAPI_accum(GCEvents,GC1Counters));
-    PAPI_CHECK( PAPI_stop(GCEvents,NULL));
-    gc1_cycles += PAPI_cycles() - start_gc_cycles;
-    RELEASE_LOCK(&papi_counter_mutex);
+	Task *task = myTask(); if(!task) return;
+    PAPI_CHECK( PAPI_accum(task->GCEvents,task->GC1Counters));
+    PAPI_CHECK( PAPI_stop(task->GCEvents,NULL));
+    task->gc1_cycles += PAPI_cycles() - task->start_gc_cycles;
 }
 
 
@@ -389,6 +497,26 @@ papi_thread_stop_gc1_count(int event_set)
     PAPI_CHECK( PAPI_accum(event_set,GC1Counters));
     PAPI_CHECK( PAPI_stop(event_set,NULL));
     RELEASE_LOCK(&papi_counter_mutex);
+}
+
+void
+papi_timer(void)
+{
+
+#ifdef TRACING
+	Task *task = all_tasks;
+
+	// This is slightly unsafe. One of the tasks in question might enter
+	// GC, and then we have duplicated instruction
+	// pointer samples.
+	for (task = all_tasks; task; task = task->next) {
+		if(task->instrPtrSamplePos >= INSTR_PTR_SAMPLE_MIN_SIZE) {
+			traceInstrPtrSample(task->cap, 0, task->instrPtrSamplePos, task->instrPtrSample);
+			task->instrPtrSamplePos = 0;
+		}
+	}
+#endif
+
 }
 
 #endif /* USE_PAPI */

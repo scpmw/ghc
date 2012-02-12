@@ -49,6 +49,7 @@ import Outputable
 import FastString
 import Module
 import TysWiredIn ( eqTyConName )
+import SrcLoc     ( RealSrcSpan, pprUserRealSpan )
 
 infixl 3 &&&
 \end{code}
@@ -258,6 +259,7 @@ data IfaceExpr
 data IfaceTickish
   = IfaceHpcTick Module Int                -- from HpcTick x
   | IfaceSCC     CostCentre Bool Bool      -- from ProfNote
+  | IfaceSource  RealSrcSpan String        -- from SourceNote
   -- no breakpoints: we never export these into interface files
 
 type IfaceAlt = (IfaceConAlt, [IfLclName], IfaceExpr)
@@ -646,6 +648,8 @@ pprIfaceTickish (IfaceHpcTick m ix)
   = braces (text "tick" <+> ppr m <+> ppr ix)
 pprIfaceTickish (IfaceSCC cc tick scope)
   = braces (pprCostCentreCore cc <+> ppr tick <+> ppr scope)
+pprIfaceTickish (IfaceSource src _names)
+  = braces (pprUserRealSpan True src)
 
 ------------------
 pprIfaceApp :: IfaceExpr -> [SDoc] -> SDoc

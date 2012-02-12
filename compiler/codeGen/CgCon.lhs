@@ -30,6 +30,7 @@ import CgTailCall
 import CgProf
 import CgTicky
 import CgInfoTbls
+import CgHpc (cgInstrument)
 import CLabel
 import ClosureInfo
 import OldCmmUtils
@@ -449,15 +450,16 @@ cgDataCon data_con
             -- static data structures (ie those built at compile
             -- time), we take care that info-table contains the
             -- information we need.
-            (static_cl_info, _) =
+            (static_cl_info, _) = 
                 layOutStaticConstr data_con arg_reps
 
-            (dyn_cl_info, arg_things) =
+            (dyn_cl_info, arg_things) = 
                 layOutDynConstr    data_con arg_reps
 
             emit_info cl_info ticky_code
-                = do { code_blks <- getCgStmts the_code
-                     ; emitClosureCodeAndInfoTable cl_info [] code_blks }
+                = do { instr <- freshInstr
+                     ; (code_blks, ticks) <- getCgStmts (cgInstrument instr the_code)
+                     ; emitClosureCodeAndInfoTable cl_info [] code_blks instr ticks }
                 where
                   the_code = do { _ <- ticky_code
                                 ; ldvEnter (CmmReg nodeReg)
@@ -466,7 +468,7 @@ cgDataCon data_con
             arg_reps :: [(CgRep, Type)]
             arg_reps = [(typeCgRep ty, ty) | ty <- dataConRepArgTys data_con]
 
-            body_code = do {
+            body_code = do {    
                         -- NB: We don't set CC when entering data (WDP 94/06)
                              tickyReturnOldCon (length arg_things)
                            -- The case continuation code is expecting a tagged pointer
