@@ -83,6 +83,7 @@ import Panic
 
 import Data.Char
 import qualified Data.Map as M
+import Data.Int
 import qualified Data.IntMap as IM
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -624,6 +625,12 @@ class PlatformOutputable a where
 instance Outputable Bool where
     ppr True  = ptext (sLit "True")
     ppr False = ptext (sLit "False")
+
+instance Outputable Int32 where
+   ppr n = integer $ fromIntegral n
+
+instance Outputable Int64 where
+   ppr n = integer $ fromIntegral n
 
 instance Outputable Int where
    ppr n = int n

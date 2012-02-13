@@ -7,6 +7,7 @@ module Llvm.Types where
 #include "HsVersions.h"
 
 import Data.Char
+import Data.Int
 import Numeric
 import Outputable
 
