@@ -78,7 +78,7 @@ readSections r w = go B.empty [] []
         Right l | l == syntaxUnified 
                   -> finishSection >>= \ss' -> writeSection w (l, B.empty)
                                    >> go B.empty ss' tys
-                -- | Lift the .file directives to the top of the file. This
+                -- Lift the .file directives to the top of the file. This
                 -- will prevent assembler errors like "Error: unassigned file
                 -- number x" by making sure they are assigned before used.
                 | fileStmt `B.isPrefixOf` l

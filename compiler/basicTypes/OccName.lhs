@@ -246,9 +246,9 @@ The final result (after the renamer) will be:
 data OccName = OccName 
     { occNameSpace  :: !NameSpace
     , occNameFS     :: !FastString
+    -- | The base name without trailing numbers as a string. Cached
+    -- for efficient name generation
     , _occBase      :: String
-      -- | The base name without trailing numbers as a string. Cached
-      -- for efficient name generation
     }
     deriving Typeable
 
