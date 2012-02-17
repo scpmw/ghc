@@ -463,8 +463,13 @@ runAs :: DynFlags -> [Option] -> IO ()
 runAs dflags args = do
   let (p,args0) = pgm_a dflags
       args1 = args0 ++ args
-  mb_env <- getGccEnv args1
-  runSomethingFiltered dflags id "Assembler" p args1 mb_env
+      args2 = filter (not . isDebugOption) args1
+
+      isDebugOption (Option str) | str `elem` ["-g", "-ggdb"] = True
+      isDebugOption _ = False
+
+  mb_env <- getGccEnv args2
+  runSomethingFiltered dflags id "Assembler" p args2 mb_env
 
 -- | Run the LLVM Optimiser
 runLlvmOpt :: DynFlags -> [Option] -> IO ()
