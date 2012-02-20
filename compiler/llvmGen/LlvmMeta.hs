@@ -155,7 +155,7 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
       Just (CmmProc infos _ (ListGraph blocks)) | not (null blocks) -> do
 
         -- Generate metadata for procedure
-        entryLabel <- strCLabel_llvm $ case infos of
+        let entryLabel = case infos of
               Nothing               -> lbl
               Just (Statics lbl' _) -> lbl'
         procId <- freshId
@@ -202,26 +202,28 @@ emitFileMeta fileId unitId filePath = do
     ]
 
 emitProcMeta ::
-  Int -> Int -> Int -> LMString -> Maybe (Tickish ()) -> Int
+  Int -> Int -> Int -> CLabel -> Maybe (Tickish ()) -> Int
   -> (Int, Int) -> DynFlags -> Map FastString Int
   -> LlvmM ()
 emitProcMeta procId unitId srtypeId entryLabel procTick defaultFileId (line, _) dflags fileMap = do
+  entryLabelStr <- strCLabel_llvm entryLabel
 
   let srcFileLookup = flip Map.lookup fileMap . srcSpanFile . sourceSpan
       fileId = fromMaybe defaultFileId (procTick >>= srcFileLookup)
-      funRef = LMGlobalVar entryLabel (LMPointer llvmFunTy) Internal Nothing Nothing True
+      funRef = LMGlobalVar entryLabelStr (LMPointer llvmFunTy) Internal Nothing Nothing True
+      local = not . externallyVisibleCLabel $ entryLabel
 
   renderLlvm $ pprMeta procId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_subprogram)
     , LMStaticLit (mkI32 0)                      -- "Unused"
     , LMMetaRef unitId                           -- Reference to compile unit
-    , LMMetaString entryLabel                    -- Procedure name
-    , LMMetaString entryLabel                    -- Display name
-    , LMMetaString entryLabel                    -- MIPS name
+    , LMMetaString entryLabelStr                 -- Procedure name
+    , LMMetaString entryLabelStr                 -- Display name
+    , LMMetaString entryLabelStr                 -- MIPS name
     , LMMetaRef fileId                           -- Reference to file
     , LMStaticLit (mkI32 $ fromIntegral line)    -- Line number
     , LMMetaRef srtypeId                         -- Type descriptor
-    , LMStaticLit (mkI1 True)                    -- Local to compile unit
+    , LMStaticLit (mkI1 local)                   -- Local to compile unit
     , LMStaticLit (mkI1 True)                    -- Defined here (not "extern")
     , LMStaticLit (mkI32 0)                      -- Virtuality (none)
     , LMStaticLit (mkI32 0)                      --
