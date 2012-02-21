@@ -206,20 +206,24 @@ emitProcMeta ::
   -> (Int, Int) -> DynFlags -> Map FastString Int
   -> LlvmM ()
 emitProcMeta procId unitId srtypeId entryLabel procTick defaultFileId (line, _) dflags fileMap = do
-  entryLabelStr <- strCLabel_llvm entryLabel
+  -- it seems like LLVM 3.0 (likely 2.x as well) ignores the procedureName
+  -- procedureName <- strProcedureName_llvm entryLabel
+  linkageName <- strCLabel_llvm entryLabel
+  displayName <- strDisplayName_llvm entryLabel
 
   let srcFileLookup = flip Map.lookup fileMap . srcSpanFile . sourceSpan
       fileId = fromMaybe defaultFileId (procTick >>= srcFileLookup)
-      funRef = LMGlobalVar entryLabelStr (LMPointer llvmFunTy) Internal Nothing Nothing True
+      funRef = LMGlobalVar linkageName (LMPointer llvmFunTy) Internal Nothing Nothing True
       local = not . externallyVisibleCLabel $ entryLabel
+      procedureName = displayName
 
   renderLlvm $ pprMeta procId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_subprogram)
     , LMStaticLit (mkI32 0)                      -- "Unused"
     , LMMetaRef unitId                           -- Reference to compile unit
-    , LMMetaString entryLabelStr                 -- Procedure name
-    , LMMetaString entryLabelStr                 -- Display name
-    , LMMetaString entryLabelStr                 -- MIPS name
+    , LMMetaString procedureName                 -- Procedure name
+    , LMMetaString displayName                   -- Display name
+    , LMMetaString linkageName                   -- MIPS name
     , LMMetaRef fileId                           -- Reference to file
     , LMStaticLit (mkI32 $ fromIntegral line)    -- Line number
     , LMMetaRef srtypeId                         -- Type descriptor

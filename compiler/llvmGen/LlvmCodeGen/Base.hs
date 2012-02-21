@@ -21,7 +21,8 @@ module LlvmCodeGen.Base (
         llvmFunSig, llvmStdFunAttrs, llvmFunAlign, llvmInfAlign,
         llvmPtrBits, mkLlvmFunc, tysToParams,
 
-        strCLabel_llvm, genCmmLabelRef, genStringLabelRef
+        strCLabel_llvm, strDisplayName_llvm, strProcedureName_llvm,
+        genCmmLabelRef, genStringLabelRef
 
     ) where
 
@@ -268,6 +269,30 @@ strCLabel_llvm lbl = do
     platform <- getLlvmPlatform
     let sdoc = pprCLabel platform lbl
         str = Outp.renderWithStyle sdoc (Outp.mkCodeStyle Outp.CStyle)
+    return (fsLit str)
+
+strDisplayName_llvm :: CLabel -> LlvmM LMString
+strDisplayName_llvm lbl = do
+    platform <- getLlvmPlatform
+    let sdoc = pprCLabel platform lbl
+        depth = Outp.PartWay 1
+        style = Outp.mkUserStyle (const Outp.NameNotInScope2, const True) depth
+        str = Outp.renderWithStyle sdoc style
+    return (fsLit (dropInfoSuffix str))
+
+dropInfoSuffix :: String -> String
+dropInfoSuffix = go
+  where go "_info" = []
+        go (x:xs)  = x:go xs
+        go []      = []
+
+strProcedureName_llvm :: CLabel -> LlvmM LMString
+strProcedureName_llvm lbl = do
+    platform <- getLlvmPlatform
+    let sdoc = pprCLabel platform lbl
+        depth = Outp.PartWay 1
+        style = Outp.mkUserStyle (const Outp.NameUnqual, const False) depth
+        str = Outp.renderWithStyle sdoc style
     return (fsLit str)
 
 -- | Create an external definition for a 'CLabel' defined in another module.
