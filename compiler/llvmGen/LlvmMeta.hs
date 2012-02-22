@@ -47,12 +47,15 @@ import Data.Word       (Word16)
 -- Constants
 
 lLVMDebugVersion, dW_TAG_compile_unit, dW_TAG_subroutine_type :: Integer
-dW_TAG_file_type, dW_TAG_subprogram :: Integer
+dW_TAG_file_type, dW_TAG_subprogram, dW_TAG_lexical_block :: Integer
+dW_TAG_base_type :: Integer
 lLVMDebugVersion = 0x80000
 dW_TAG_compile_unit = 17 + lLVMDebugVersion
 dW_TAG_subroutine_type = 32 + lLVMDebugVersion
 dW_TAG_file_type = 41 + lLVMDebugVersion
 dW_TAG_subprogram = 46 + lLVMDebugVersion
+dW_TAG_lexical_block = 11 + lLVMDebugVersion
+dW_TAG_base_type = 36 + lLVMDebugVersion
 
 dW_LANG_Haskell :: Integer
 dW_LANG_Haskell  = 0x8042 -- Chosen arbitrarily
@@ -79,7 +82,13 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
   srcPath <- liftIO $ getCurrentDirectory
   let srcFile  = fromMaybe "" (ml_hs_file mod_loc)
       producerName = cProjectName ++ " " ++ cProjectVersion
+
   unitId <- freshId
+  enumTypesId <- freshId
+  retainedTypesId <- freshId
+  subprogramsId <- freshId
+  globalsId <- freshId
+
   renderLlvm $ pprMeta unitId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_compile_unit)
     , LMStaticLit (LMNullLit LMMetaType)         -- "unused"
@@ -92,6 +101,10 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
     , LMStaticLit (mkI1 $ optLevel dflags > 0)   -- Optimized?
     , LMMetaString (fsLit "")                    -- Flags (?)
     , LMStaticLit (mkI32 0)                      -- Runtime version (?)
+    , LMMetaRef enumTypesId                      -- List of enums types
+    , LMMetaRef retainedTypesId                  -- List of retained types
+    , LMMetaRef subprogramsId                    -- List of subprograms
+    , LMMetaRef globalsId                        -- List of global variables
     ]
 
   -- Subprogram type we use: void (*)()
@@ -146,6 +159,8 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
 
     -- Decide what source code to associate with procedure
     let procTick = findGoodSourceTick lbl unitFile tiMap idLabelMap
+        srcFileLookup = flip Map.lookup fileMap . srcSpanFile . sourceSpan
+        fileId = fromMaybe defaultFileId (procTick >>= srcFileLookup)
         (line, col) = case fmap sourceSpan procTick of
           Just span -> (srcSpanStartLine span, srcSpanStartCol span)
           _         -> (1, 0)
@@ -159,7 +174,7 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
               Nothing               -> lbl
               Just (Statics lbl' _) -> lbl'
         procId <- freshId
-        emitProcMeta procId unitId srtypeId entryLabel procTick defaultFileId (line, col) dflags fileMap
+        emitProcMeta procId unitId srtypeId entryLabel fileId (line, col) dflags
 
         -- Generate source annotation using the given ID (this is used to
         -- reference it from LLVM code). This information has little
@@ -169,13 +184,23 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
         -- Note that this would end up generating duplicated metadata if
         -- instrumentation IDs weren't unique per procedure!
         case timInstr tim of
-          Just i ->
-            renderLlvm $ pprMeta i $ LMMeta $
-              [ LMStaticLit (mkI32 $ fromIntegral line) -- Source line (yes, no tag!)
-              , LMStaticLit (mkI32 $ fromIntegral col)  -- Source column (ignored)
+          Just i -> do
+            blockId <- freshId
+            renderLlvm $ pprMeta blockId $ LMMeta $
+              [ LMStaticLit (mkI32 $ dW_TAG_lexical_block)
               , LMMetaRef procId
-              , LMStaticLit (LMNullLit LMMetaType)      -- "Original scope"
+              , LMStaticLit (mkI32 $ fromIntegral line) -- Source line
+              , LMStaticLit (mkI32 $ fromIntegral col)  -- Source column
+              , LMMetaRef fileId                        -- File context
+              , LMStaticLit (mkI32 0)                   -- Template parameter index
               ]
+            renderLlvm $ pprMeta i $ LMMeta $
+              [ LMStaticLit (mkI32 $ fromIntegral line) -- Source line
+              , LMStaticLit (mkI32 $ fromIntegral col)  -- Source column
+              , LMMetaRef blockId                       -- Block context
+              , LMStaticLit (LMNullLit LMMetaType)      -- Inlined from location
+              ]
+
           Nothing -> return ()
 
         return $ Just procId
@@ -185,9 +210,31 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
       _otherwise -> return Nothing
 
   -- Generate a list of all generate subprogram metadata structures
+  zeroId <- freshId
+  zeroArrayId <- freshId
+  let refs xs | null xs'  = LMMeta [LMMetaRef zeroArrayId]
+              | otherwise = LMMeta (map LMMetaRef xs')
+        where xs' = catMaybes xs
+
+      renderRetainer retainId retainRefs = do
+        arrayId <- freshId
+        renderLlvm $ pprMeta retainId $ LMMeta [LMMetaRef arrayId]
+        renderLlvm $ pprMeta arrayId $ refs retainRefs 
+
+  -- retained debug metadata is a reference to an array
+  renderLlvm $ pprMeta zeroArrayId $ LMMeta [LMMetaRef zeroId]
+  renderLlvm $ pprMeta zeroId $ LMMeta [LMStaticLit (mkI32 0)]
+
+  renderRetainer enumTypesId []
+  renderRetainer retainedTypesId [Just srtypeId]
+  renderRetainer subprogramsId procIds
+  renderRetainer globalsId []
+
+  -- the DWARF printer prefers all debug metadata
+  -- to be referenced from a single global metadata
   renderLlvm $ pprLlvmData
-    ([LMGlobal (LMNamedMeta (fsLit "llvm.dbg.sp"))
-               (Just (LMMetaRefs (catMaybes procIds)))], [])
+    ([LMGlobal (LMNamedMeta (fsLit "llvm.dbg.cu"))
+               (Just (LMMetaRefs [unitId]))], [])
 
   return ()
 
@@ -201,19 +248,15 @@ emitFileMeta fileId unitId filePath = do
     , LMMetaRef unitId                           -- Reference to compile unit
     ]
 
-emitProcMeta ::
-  Int -> Int -> Int -> CLabel -> Maybe (Tickish ()) -> Int
-  -> (Int, Int) -> DynFlags -> Map FastString Int
-  -> LlvmM ()
-emitProcMeta procId unitId srtypeId entryLabel procTick defaultFileId (line, _) dflags fileMap = do
+emitProcMeta :: Int -> Int -> Int -> CLabel -> Int
+             -> (Int, Int) -> DynFlags -> LlvmM ()
+emitProcMeta procId unitId srtypeId entryLabel fileId (line, _) dflags = do
   -- it seems like LLVM 3.0 (likely 2.x as well) ignores the procedureName
   -- procedureName <- strProcedureName_llvm entryLabel
   linkageName <- strCLabel_llvm entryLabel
   displayName <- strDisplayName_llvm entryLabel
 
-  let srcFileLookup = flip Map.lookup fileMap . srcSpanFile . sourceSpan
-      fileId = fromMaybe defaultFileId (procTick >>= srcFileLookup)
-      funRef = LMGlobalVar linkageName (LMPointer llvmFunTy) Internal Nothing Nothing True
+  let funRef = LMGlobalVar linkageName (LMPointer llvmFunTy) Internal Nothing Nothing True
       local = not . externallyVisibleCLabel $ entryLabel
       procedureName = displayName
 

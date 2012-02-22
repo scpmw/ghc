@@ -282,9 +282,11 @@ strDisplayName_llvm lbl = do
 
 dropInfoSuffix :: String -> String
 dropInfoSuffix = go
-  where go "_info" = []
-        go (x:xs)  = x:go xs
-        go []      = []
+  where go "_info"        = []
+        go "_static_info" = []
+        go "_con_info"    = []
+        go (x:xs)         = x:go xs
+        go []             = []
 
 strProcedureName_llvm :: CLabel -> LlvmM LMString
 strProcedureName_llvm lbl = do
