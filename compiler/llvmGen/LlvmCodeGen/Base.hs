@@ -17,6 +17,8 @@ module LlvmCodeGen.Base (
         renderLlvm, runUs, markUsedVar, getUsedVars,
         ghcInternalFunctions,
 
+        getMetaUniqueId, setMetaSeed,
+
         cmmToLlvmType, widthToLlvmFloat, widthToLlvmInt, llvmFunTy,
         llvmFunSig, llvmStdFunAttrs, llvmFunAlign, llvmInfAlign,
         llvmPtrBits, mkLlvmFunc, tysToParams,
@@ -29,12 +31,14 @@ module LlvmCodeGen.Base (
 #include "HsVersions.h"
 
 import Llvm
+import Llvm.Types
 import LlvmCodeGen.Regs
 
 import CLabel
 import CgUtils ( activeStgRegs )
 import Config
 import Constants
+import Data.IORef
 import FastString
 import OldCmm
 import qualified Outputable as Outp
@@ -166,8 +170,11 @@ data LlvmEnv = LlvmEnv { envFunMap :: LlvmEnvMap
                        , envPlatform :: Platform
                        , envOutput :: BufHandle
                        , envUniq :: UniqSupply
+                       , envMetaSupply :: LlvmMetaSupply
                        }
 type LlvmEnvMap = UniqFM LlvmType
+
+type LlvmMetaSupply = IORef LMMetaInt
 
 -- | The Llvm monad. Wraps @LlvmEnv@ state as well as the @IO@ monad
 newtype LlvmM a = LlvmM { runLlvmM :: LlvmEnv -> IO (a, LlvmEnv) }
@@ -184,15 +191,19 @@ instance MonadIO LlvmM where
 
 -- | Get initial Llvm environment.
 runLlvm :: Platform -> LlvmVersion -> BufHandle -> UniqSupply -> LlvmM () -> IO ()
-runLlvm platform ver out us m = runLlvmM m env >> return ()
-  where env = LlvmEnv { envFunMap = emptyUFM
-                      , envVarMap = emptyUFM
-                      , envUsedVars = []
-                      , envVersion = ver
-                      , envPlatform = platform
-                      , envOutput = out
-                      , envUniq = us
-                      }
+runLlvm platform ver out us m = do
+    metaSupply <- newIORef 0
+    _ <- runLlvmM m (env metaSupply)
+    return ()
+  where env ms = LlvmEnv { envFunMap = emptyUFM
+                         , envVarMap = emptyUFM
+                         , envUsedVars = []
+                         , envVersion = ver
+                         , envPlatform = platform
+                         , envOutput = out
+                         , envUniq = us
+                         , envMetaSupply = ms
+                         }
 
 -- | Clear variables from the environment.
 withClearVars :: LlvmM a -> LlvmM a
@@ -209,6 +220,19 @@ funInsert s t = LlvmM $ \env -> return ((), env { envFunMap = addToUFM (envFunMa
 varLookup, funLookup :: Uniquable key => key -> LlvmM (Maybe LlvmType)
 varLookup s = LlvmM $ \env -> return (lookupUFM (envVarMap env) s, env)
 funLookup s = LlvmM $ \env -> return (lookupUFM (envFunMap env) s, env)
+
+-- | Replace the seed value used for creating metadata IDs
+setMetaSeed :: LMMetaInt -> LlvmM ()
+setMetaSeed seed = LlvmM $ \env@LlvmEnv{envMetaSupply = supply} -> do
+     writeIORef supply seed
+     return $! ((), env)
+
+-- | Allocate a new metadata identifier
+getMetaUniqueId :: LlvmM LMMetaInt
+getMetaUniqueId = LlvmM $ \env@LlvmEnv{envMetaSupply = supply} -> do
+     modifyIORef supply (+1)
+     val <- readIORef supply
+     return $! (val, env)
 
 -- | Here we pre-initialise some functions that are used internally by GHC
 -- so as to make sure they have the most general type in the case that

@@ -38,7 +38,6 @@ import Data.Maybe      (fromMaybe, mapMaybe, catMaybes)
 import Data.Map as Map (Map, fromList, assocs, lookup, elems)
 import Data.Set as Set (Set, fromList, member)
 import Data.Function   (on)
-import Data.IORef
 import Data.Char       (ord, isAscii, isPrint, intToDigit)
 import Data.Word       (Word16)
 
@@ -79,10 +78,8 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
 
   -- Allocate IDs. The instrumentation numbers will have been used for
   -- line annotations, so we make new IDs start right after them.
-  lastId <- liftIO $ newIORef $ fromMaybe 0 (maximum $ (Nothing:) $ map timInstr $ elems tiMap)
-  let freshId = liftIO $ do
-        modifyIORef lastId (+1)
-        fmap LMMetaInt $ readIORef lastId
+  setMetaSeed (LMMetaInt . fromMaybe 0 $ maximum (Nothing:map timInstr (elems tiMap)))
+  let freshId = getMetaUniqueId
 
   -- Emit compile unit information.
   srcPath <- liftIO $ getCurrentDirectory
