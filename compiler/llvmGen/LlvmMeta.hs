@@ -7,6 +7,7 @@
 module LlvmMeta ( cmmMetaLlvmGens, cmmDebugLlvmGens ) where
 
 import Llvm
+import Llvm.Types      ( LMMetaInt(..) )
 
 import LlvmCodeGen.Base
 import LlvmCodeGen.Ppr
@@ -56,11 +57,14 @@ dW_TAG_file_type = 41 + lLVMDebugVersion
 dW_TAG_subprogram = 46 + lLVMDebugVersion
 dW_TAG_lexical_block = 11 + lLVMDebugVersion
 dW_TAG_base_type = 36 + lLVMDebugVersion
+dW_TAG_arg_variable = 257 + lLVMDebugVersion
+dW_TAG_structure_type = 19 + lLVMDebugVersion
+dW_TAG_pointer_type = 15 + lLVMDebugVersion
 
 dW_LANG_Haskell :: Integer
 dW_LANG_Haskell  = 0x8042 -- Chosen arbitrarily
 
-pprMeta :: Int -> LlvmStatic -> SDoc
+pprMeta :: LMMetaInt -> LlvmStatic -> SDoc
 pprMeta n val = pprLlvmData ([LMGlobal (LMMetaVar n) (Just val)], [])
 
 cmmMetaLlvmGens :: DynFlags -> ModLocation -> TickMap -> [RawCmmDecl] -> LlvmM ()
@@ -76,7 +80,9 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
   -- Allocate IDs. The instrumentation numbers will have been used for
   -- line annotations, so we make new IDs start right after them.
   lastId <- liftIO $ newIORef $ fromMaybe 0 (maximum $ (Nothing:) $ map timInstr $ elems tiMap)
-  let freshId = liftIO (modifyIORef lastId (+1) >> readIORef lastId)
+  let freshId = liftIO $ do
+        modifyIORef lastId (+1)
+        fmap LMMetaInt $ readIORef lastId
 
   -- Emit compile unit information.
   srcPath <- liftIO $ getCurrentDirectory
@@ -194,7 +200,7 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
               , LMMetaRef fileId                        -- File context
               , LMStaticLit (mkI32 0)                   -- Template parameter index
               ]
-            renderLlvm $ pprMeta i $ LMMeta $
+            renderLlvm $ pprMeta (LMMetaInt i) $ LMMeta $
               [ LMStaticLit (mkI32 $ fromIntegral line) -- Source line
               , LMStaticLit (mkI32 $ fromIntegral col)  -- Source column
               , LMMetaRef blockId                       -- Block context
@@ -238,7 +244,7 @@ cmmMetaLlvmGens dflags mod_loc tiMap cmm = do
 
   return ()
 
-emitFileMeta :: Int -> Int -> FilePath -> LlvmM ()
+emitFileMeta :: LMMetaInt -> LMMetaInt -> FilePath -> LlvmM ()
 emitFileMeta fileId unitId filePath = do
   srcPath <- liftIO $ getCurrentDirectory
   renderLlvm $ pprMeta fileId $ LMMeta
@@ -248,7 +254,7 @@ emitFileMeta fileId unitId filePath = do
     , LMMetaRef unitId                           -- Reference to compile unit
     ]
 
-emitProcMeta :: Int -> Int -> Int -> CLabel -> Int
+emitProcMeta :: LMMetaInt -> LMMetaInt -> LMMetaInt -> CLabel -> LMMetaInt
              -> (Int, Int) -> DynFlags -> LlvmM ()
 emitProcMeta procId unitId srtypeId entryLabel fileId (line, _) dflags = do
   -- it seems like LLVM 3.0 (likely 2.x as well) ignores the procedureName

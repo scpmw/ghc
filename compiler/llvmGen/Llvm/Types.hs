@@ -1,3 +1,5 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 --------------------------------------------------------------------------------
 -- | The LLVM Type System.
 --
@@ -86,6 +88,9 @@ type LMSection = Maybe LMString
 type LMAlign = Maybe Int
 type LMConst = Bool -- ^ is a variable constant or not
 
+newtype LMMetaInt = LMMetaInt {unLMMetaVar :: Int}
+  deriving (Eq, Num, Outputable, Show)
+
 -- | Llvm Variables
 data LlvmVar
   -- | Variables with a global scope.
@@ -98,7 +103,7 @@ data LlvmVar
   -- | A constant variable
   | LMLitVar LlvmLit
   -- | Metadata
-  | LMMetaVar !Int
+  | LMMetaVar {-# UNPACK #-} !LMMetaInt
   | LMNamedMeta LMString
   deriving (Eq)
 
@@ -149,10 +154,10 @@ data LlvmStatic
 
   -- metadata: Used for recording debug information
     
-  | LMMeta [LlvmStatic]                -- ^ A list of literals and other metadata
-  | LMMetaString LMString              -- ^ Literal metadata string
-  | LMMetaRef !Int                     -- ^ Reference to a global metadata node
-  | LMMetaRefs [Int]                   -- ^ Collection of metadata references (for named metadata)
+  | LMMeta [LlvmStatic]                 -- ^ A list of literals and other metadata
+  | LMMetaString LMString               -- ^ Literal metadata string
+  | LMMetaRef {-# UNPACK #-} !LMMetaInt -- ^ Reference to a global metadata node
+  | LMMetaRefs [LMMetaInt]              -- ^ Collection of metadata references (for named metadata)
 
 instance Outputable LlvmStatic where
   ppr (LMComment       s) = text "; " <> ftext s
