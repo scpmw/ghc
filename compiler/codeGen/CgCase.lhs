@@ -49,6 +49,7 @@ import TyCon
 import Util
 import Outputable
 import FastString
+import CLabel
 
 import Control.Monad (when)
 \end{code}
@@ -543,12 +544,22 @@ cgAlgAlt :: GCFlag
       	 -> FCode (AltCon, CgStmts)
 
 cgAlgAlt gc_flag cc_slot alt_type (con, args, _use_mask, rhs)
-  = do	{ (abs_c, ticks) <- getCgStmts $ do
+  = do	{ instr <- freshInstr
+        ; (abs_c, ticks) <- getCgStmts $ cgInstrument instr $ do
 		{ bind_con_args con args
 		; restoreCurrentCostCentre cc_slot True
 		; maybeAltHeapCheck gc_flag alt_type (cgExpr rhs) }
-        ; mapM_ addTick ticks
-	; return (con, abs_c) }
+
+          -- Emit as new proc
+        ; uniq <- newUnique
+        ; let lbl = mkDefaultLabel uniq
+              info = CmmInfo Nothing Nothing CmmNonInfoTable
+        ; blks <- cgStmtsToBlocks abs_c
+        ; emitProc info lbl [] blks (Just instr) ticks
+
+          -- Generate jump code
+        ; (jmp_c, _) <- getCgStmts $ stmtC (CmmJump (CmmLit (CmmLabel lbl)) [])
+	; return (con, jmp_c) }
   where
     bind_con_args DEFAULT      _    = nopC
     bind_con_args (DataAlt dc) args = bindConArgs dc args
