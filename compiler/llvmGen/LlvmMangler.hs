@@ -27,6 +27,7 @@ infoSec       = B.pack infoSection
 newLine       = B.pack "\n"
 textStmt      = B.pack "\t.text"
 dataStmt      = B.pack "\t.data"
+fileStmt      = B.pack "\t.file"
 syntaxUnified = B.pack "\t.syntax unified"
 
 infoLen :: Int
@@ -77,6 +78,11 @@ readSections r w = go B.empty [] []
         Right l | l == syntaxUnified 
                   -> finishSection >>= \ss' -> writeSection w (l, B.empty)
                                    >> go B.empty ss' tys
+                -- Lift the .file directives to the top of the file. This
+                -- will prevent assembler errors like "Error: unassigned file
+                -- number x" by making sure they are assigned before used.
+                | fileStmt `B.isPrefixOf` l
+                  -> B.hPutStrLn w l >> finishSection >>= \ss' -> go hdr ss' tys
                 | any (`B.isPrefixOf` l) [secStmt, textStmt, dataStmt]
                   -> finishSection >>= \ss' -> go l ss' tys
                 | otherwise

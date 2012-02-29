@@ -26,6 +26,7 @@ module CoreSyn (
 	
 	mkIntLit, mkIntLitInt,
 	mkWordLit, mkWordLitWord,
+	mkWord64LitWord64, mkInt64LitInt64,
 	mkCharLit, mkStringLit,
 	mkFloatLit, mkFloatLitFloat,
 	mkDoubleLit, mkDoubleLitDouble,
@@ -105,6 +106,7 @@ import Util
 import SrcLoc     ( RealSrcSpan )
 
 import Data.Data hiding (TyCon)
+import Data.Int
 import Data.Word
 
 infixl 4 `mkApps`, `mkTyApps`, `mkVarApps`, `App`, `mkCoApps`
@@ -1026,6 +1028,8 @@ instance Outputable b => Outputable (TaggedBndr b) where
 
 instance Outputable b => OutputableBndr (TaggedBndr b) where
   pprBndr _ b = ppr b	-- Simple
+  pprInfixOcc  b = ppr b
+  pprPrefixOcc b = ppr b
 \end{code}
 
 
@@ -1075,6 +1079,12 @@ mkWordLitWord :: Word -> Expr b
 
 mkWordLit     w = Lit (mkMachWord w)
 mkWordLitWord w = Lit (mkMachWord (toInteger w))
+
+mkWord64LitWord64 :: Word64 -> Expr b
+mkWord64LitWord64 w = Lit (mkMachWord64 (toInteger w))
+
+mkInt64LitInt64 :: Int64 -> Expr b
+mkInt64LitInt64 w = Lit (mkMachInt64 (toInteger w))
 
 -- | Create a machine character literal expression of type @Char#@.
 -- If you want an expression of type @Char@ use 'MkCore.mkCharExpr'

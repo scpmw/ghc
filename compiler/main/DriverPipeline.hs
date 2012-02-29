@@ -1387,10 +1387,9 @@ runPhase LlvmLlc input_fn dflags
 
 runPhase LlvmMangle input_fn dflags
   = do
-      let next_phase = if dopt Opt_SplitObjs dflags then Splitter else As
-      output_fn <- phaseOutputFilename next_phase
+      output_fn <- phaseOutputFilename As
       io $ llvmFixupAsm dflags input_fn output_fn
-      return (next_phase, output_fn)
+      return (As, output_fn)
 
 -----------------------------------------------------------------------------
 -- merge in stub objects
@@ -1447,9 +1446,9 @@ runPhase_MoveBinary dflags input_fn
         return True
     | otherwise = return True
 
-mkExtraCObj :: DynFlags -> String -> IO FilePath
-mkExtraCObj dflags xs
- = do cFile <- newTempName dflags "c"
+mkExtraObj :: DynFlags -> Suffix -> String -> IO FilePath
+mkExtraObj dflags extn xs
+ = do cFile <- newTempName dflags extn
       oFile <- newTempName dflags "o"
       writeFile cFile xs
       let rtsDetails = getPackageDetails (pkgState dflags) rtsPackageId
@@ -1481,10 +1480,7 @@ mkExtraObjToLinkIntoBinary dflags dep_packages = do
       hPutStrLn stderr $ "Warning: -rtsopts and -with-rtsopts have no effect with -no-hs-main.\n" ++
                          "    Call hs_init_ghc() from your main() function to set these options."
 
-   mkExtraCObj dflags (showSDoc (vcat [main,
-                                       link_opts link_info]
-                                   <> char '\n')) -- final newline, to
-                                                  -- keep gcc happy
+   mkExtraObj dflags "c" (showSDoc main)
 
   where
     main
@@ -1502,26 +1498,35 @@ mkExtraObjToLinkIntoBinary dflags dep_packages = do
                 Just opts -> ptext (sLit "    __conf.rts_opts= ") <>
                                text (show opts) <> semi,
              ptext (sLit "    return hs_main(argc, argv, &ZCMain_main_closure,__conf);"),
-             char '}'
+             char '}',
+             char '\n' -- final newline, to keep gcc happy
            ]
 
-    link_opts info
-     | not (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
-     = empty
-     | otherwise = hcat [
-          text "__asm__(\"\\t.section ", text ghcLinkInfoSectionName,
-                                    text ",\\\"\\\",",
-                                    text elfSectionNote,
-                                    text "\\n",
+-- Write out the link info section into a new assembly file. Previously
+-- this was included as inline assembly in the main.c file but this
+-- is pretty fragile. gas gets upset trying to calculate relative offsets
+-- that span the .note section (notably .text) when debug info is present
+mkNoteObjsToLinkIntoBinary :: DynFlags -> [PackageId] -> IO [FilePath]
+mkNoteObjsToLinkIntoBinary dflags dep_packages = do
+   link_info <- getLinkInfo dflags dep_packages
 
-                    text "\\t.ascii \\\"", info', text "\\\"\\n\");" ]
+   if (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
+     then fmap (:[]) $ mkExtraObj dflags "s" (showSDoc (link_opts link_info))
+     else return []
+
+  where
+    link_opts info = hcat [
+          text "\t.section ", text ghcLinkInfoSectionName,
+                                   text ",\"\",",
+                                   text elfSectionNote,
+                                   text "\n",
+
+          text "\t.ascii \"", info', text "\"\n" ]
           where
-            -- we need to escape twice: once because we're inside a C string,
-            -- and again because we're inside an asm string.
-            info' = text $ (escape.escape) info
+            info' = text $ escape info
 
             escape :: String -> String
-            escape = concatMap (charToC.fromIntegral.ord)
+            escape = concatMap (charToC . fromIntegral . ord)
 
             elfSectionNote :: String
             elfSectionNote = case platformArch (targetPlatform dflags) of
@@ -1656,6 +1661,7 @@ linkBinary dflags o_files dep_packages = do
     let lib_path_opts = map ("-L"++) lib_paths
 
     extraLinkObj <- mkExtraObjToLinkIntoBinary dflags dep_packages
+    noteLinkObjs <- mkNoteObjsToLinkIntoBinary dflags dep_packages
 
     pkg_link_opts <- getPackageLinkOpts dflags dep_packages
 
@@ -1772,7 +1778,7 @@ linkBinary dflags o_files dep_packages = do
                       ++ framework_path_opts
                       ++ framework_opts
                       ++ pkg_lib_path_opts
-                      ++ [extraLinkObj]
+                      ++ extraLinkObj:noteLinkObjs
                       ++ pkg_link_opts
                       ++ pkg_framework_path_opts
                       ++ pkg_framework_opts

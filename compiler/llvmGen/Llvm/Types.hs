@@ -1,3 +1,5 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 --------------------------------------------------------------------------------
 -- | The LLVM Type System.
 --
@@ -7,6 +9,7 @@ module Llvm.Types where
 #include "HsVersions.h"
 
 import Data.Char
+import Data.Int
 import Numeric
 import Outputable
 
@@ -85,6 +88,9 @@ type LMSection = Maybe LMString
 type LMAlign = Maybe Int
 type LMConst = Bool -- ^ is a variable constant or not
 
+newtype LMMetaInt = LMMetaInt {unLMMetaVar :: Int}
+  deriving (Eq, Num, Outputable, Show)
+
 -- | Llvm Variables
 data LlvmVar
   -- | Variables with a global scope.
@@ -97,7 +103,7 @@ data LlvmVar
   -- | A constant variable
   | LMLitVar LlvmLit
   -- | Metadata
-  | LMMetaVar !Int
+  | LMMetaVar {-# UNPACK #-} !LMMetaInt
   | LMNamedMeta LMString
   deriving (Eq)
 
@@ -148,10 +154,10 @@ data LlvmStatic
 
   -- metadata: Used for recording debug information
     
-  | LMMeta [LlvmStatic]                -- ^ A list of literals and other metadata
-  | LMMetaString LMString              -- ^ Literal metadata string
-  | LMMetaRef !Int                     -- ^ Reference to a global metadata node
-  | LMMetaRefs [Int]                   -- ^ Collection of metadata references (for named metadata)
+  | LMMeta [LlvmStatic]                 -- ^ A list of literals and other metadata
+  | LMMetaString LMString               -- ^ Literal metadata string
+  | LMMetaRef {-# UNPACK #-} !LMMetaInt -- ^ Reference to a global metadata node
+  | LMMetaRefs [LMMetaInt]              -- ^ Collection of metadata references (for named metadata)
 
 instance Outputable LlvmStatic where
   ppr (LMComment       s) = text "; " <> ftext s
@@ -216,12 +222,14 @@ ppPlainName (LMNamedMeta n          ) = ppr n
 
 -- | Print a literal value. No type.
 ppLit :: LlvmLit -> SDoc
-ppLit (LMIntLit   i _       ) = ppr ((fromInteger i)::Int)
-ppLit (LMFloatLit r LMFloat ) = ppFloat $ realToFrac r
-ppLit (LMFloatLit r LMDouble) = ppDouble r
-ppLit f@(LMFloatLit _ _)      = error $ "Can't print this float literal!" ++ showSDoc (ppr f)
-ppLit (LMNullLit _     )      = text "null"
-ppLit (LMUndefLit _    )      = text "undef"
+getLit (LMIntLit i (LMInt 32)) = ppr (fromInteger i :: Int32)
+getLit (LMIntLit i (LMInt 64)) = ppr (fromInteger i :: Int64)
+ppLit (LMIntLit   i _       )  = ppr ((fromInteger i)::Int)
+ppLit (LMFloatLit r LMFloat )  = ppFloat $ realToFrac r
+ppLit (LMFloatLit r LMDouble)  = ppDouble r
+ppLit f@(LMFloatLit _ _)       = error $ "Can't print this float literal!" ++ showSDoc (ppr f)
+ppLit (LMNullLit _     )       = text "null"
+ppLit (LMUndefLit _    )       = text "undef"
 
 -- | Return the 'LlvmType' of the 'LlvmVar'
 getVarType :: LlvmVar -> LlvmType

@@ -192,6 +192,7 @@ initSysTools mbMinusB
                                 Nothing -> pgmError ("No entry for " ++ show key ++ " in " ++ show settingsFile)
         ; targetArch <- readSetting "target arch"
         ; targetOS <- readSetting "target os"
+        ; targetWordSize <- readSetting "target word size"
         ; targetHasGnuNonexecStack <- readSetting "target has GNU nonexec stack"
         ; targetHasIdentDirective <- readSetting "target has .ident directive"
         ; targetHasSubsectionsViaSymbols <- readSetting "target has subsections via symbols"
@@ -257,6 +258,7 @@ initSysTools mbMinusB
                         sTargetPlatform = Platform {
                                               platformArch = targetArch,
                                               platformOS   = targetOS,
+                                              platformWordSize = targetWordSize,
                                               platformHasGnuNonexecStack = targetHasGnuNonexecStack,
                                               platformHasIdentDirective = targetHasIdentDirective,
                                               platformHasSubsectionsViaSymbols = targetHasSubsectionsViaSymbols
@@ -461,8 +463,13 @@ runAs :: DynFlags -> [Option] -> IO ()
 runAs dflags args = do
   let (p,args0) = pgm_a dflags
       args1 = args0 ++ args
-  mb_env <- getGccEnv args1
-  runSomethingFiltered dflags id "Assembler" p args1 mb_env
+      args2 = filter (not . isDebugOption) args1
+
+      isDebugOption (Option str) | str `elem` ["-g", "-ggdb"] = True
+      isDebugOption _ = False
+
+  mb_env <- getGccEnv args2
+  runSomethingFiltered dflags id "Assembler" p args2 mb_env
 
 -- | Run the LLVM Optimiser
 runLlvmOpt :: DynFlags -> [Option] -> IO ()

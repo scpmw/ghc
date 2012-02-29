@@ -13,7 +13,7 @@ dnl
 # see what flags are available. (Better yet, read the documentation!)
 #
 
-AC_INIT([The Glorious Glasgow Haskell Compilation System], [7.3], [glasgow-haskell-bugs@haskell.org], [ghc])
+AC_INIT([The Glorious Glasgow Haskell Compilation System], [7.4.1], [glasgow-haskell-bugs@haskell.org], [ghc])
 
 # Set this to YES for a released version, otherwise NO
 : ${RELEASE=NO}
@@ -469,8 +469,6 @@ dnl May need to use gcc to find platform details.
 dnl --------------------------------------------------------------
 FPTOOLS_SET_HASKELL_PLATFORM_VARS
 
-FP_SETTINGS
-
 dnl ** figure out how to do context diffs
 FP_PROG_CONTEXT_DIFF
 
@@ -490,6 +488,7 @@ FP_PROG_AR_NEEDS_RANLIB
 dnl ** Check to see whether ln -s works
 AC_PROG_LN_S
 
+FP_SETTINGS
 
 dnl ** Find the path to sed
 AC_PATH_PROGS(SedCmd,gsed sed,sed)
@@ -588,6 +587,10 @@ AC_CHECK_SIZEOF(unsigned long long, 8)
 fi
 AC_CHECK_SIZEOF(unsigned short,     2)
 AC_CHECK_SIZEOF(void *,             4)
+
+dnl for use in settings.in
+WordSize=$ac_cv_sizeof_void_p
+AC_SUBST(WordSize)
 
 dnl ** what are alignment constraints on various types
 FP_CHECK_ALIGNMENT(char)

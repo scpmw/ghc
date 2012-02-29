@@ -20,7 +20,7 @@ module RnEnv (
 	HsSigCtxt(..), lookupLocalDataTcNames, lookupSigOccRn,
 
 	lookupFixityRn, lookupTyFixityRn, 
-	lookupInstDeclBndr, lookupSubBndr, greRdrName,
+	lookupInstDeclBndr, lookupSubBndrOcc, greRdrName,
         lookupSubBndrGREs, lookupConstructorFields,
 	lookupSyntaxName, lookupSyntaxTable, lookupIfThenElse,
 	lookupGreRn, lookupGreLocalRn, lookupGreRn_maybe,
@@ -39,7 +39,7 @@ module RnEnv (
 	addFvRn, mapFvRn, mapMaybeFvRn, mapFvRnCPS,
 	warnUnusedMatches,
 	warnUnusedTopBinds, warnUnusedLocalBinds,
-	dataTcOccs, unknownNameErr, kindSigErr, polyKindsErr, perhapsForallMsg,
+	dataTcOccs, unknownNameErr, kindSigErr, dataKindsErr, perhapsForallMsg,
 
         HsDocContext(..), docOfHsDocContext
     ) where
@@ -267,7 +267,7 @@ lookupInstDeclBndr cls what rdr
 	       	-- In an instance decl you aren't allowed
       	     	-- to use a qualified name for the method
 		-- (Although it'd make perfect sense.)
-       ; lookupSubBndr (ParentIs cls) doc rdr }
+       ; lookupSubBndrOcc (ParentIs cls) doc rdr }
   where
     doc = what <+> ptext (sLit "of class") <+> quotes (ppr cls)
 
@@ -304,11 +304,11 @@ lookupConstructorFields con_name
 -- unambiguous because there is only one field id 'fld' in scope.
 -- But currently it's rejected.
 
-lookupSubBndr :: Parent  -- NoParent   => just look it up as usual
-			 -- ParentIs p => use p to disambiguate
-              -> SDoc -> RdrName 
-              -> RnM Name
-lookupSubBndr parent doc rdr_name
+lookupSubBndrOcc :: Parent  -- NoParent   => just look it up as usual
+		    	    -- ParentIs p => use p to disambiguate
+                 -> SDoc -> RdrName 
+                 -> RnM Name
+lookupSubBndrOcc parent doc rdr_name
   | Just n <- isExact_maybe rdr_name   -- This happens in derived code
   = lookupExactOcc n
 
@@ -323,6 +323,7 @@ lookupSubBndr parent doc rdr_name
 		--     The latter does pickGREs, but we want to allow 'x'
 		--     even if only 'M.x' is in scope
 	    [gre] -> do { addUsedRdrName gre (used_rdr_name gre)
+                          -- Add a usage; this is an *occurrence* site
                         ; return (gre_name gre) }
 	    []    -> do { addErr (unknownSubordinateErr doc rdr_name)
 			; return (mkUnboundName rdr_name) }
@@ -468,13 +469,13 @@ lookupPromotedOccRn rdr_name = do {
       Nothing -> err
       -- 2.b let's try every thing again -> 3
       Just demoted_rdr_name -> do {
-  ; poly_kinds <- xoptM Opt_PolyKinds
+  ; data_kinds <- xoptM Opt_DataKinds
     -- 3. lookup again
   ; opt_demoted_name <- lookupOccRn_maybe demoted_rdr_name ;
   ; case opt_demoted_name of
       -- 3.a. it was implicitly promoted, but confirm that we can promote
-      -- JPM: We could try to suggest turning on PolyKinds here
-      Just demoted_name -> if poly_kinds then return demoted_name else err
+      -- JPM: We could try to suggest turning on DataKinds here
+      Just demoted_name -> if data_kinds then return demoted_name else err
       -- 3.b. use rdr_name to have a correct error message
       Nothing -> err } } }
   where err = unboundName WL_Any rdr_name
@@ -669,6 +670,11 @@ lookupBindGroupOcc ctxt what rdr_name
        ; return (Right n') }  -- Maybe we should check the side conditions
        	 	      	      -- but it's a pain, and Exact things only show
 			      -- up when you know what you are doing
+
+  | Just (rdr_mod, rdr_occ) <- isOrig_maybe rdr_name
+  = do { n' <- lookupOrig rdr_mod rdr_occ
+       ; return (Right n') }
+
   | otherwise
   = case ctxt of 
       HsBootCtxt       -> lookup_top		    
@@ -1412,10 +1418,10 @@ kindSigErr thing
   = hang (ptext (sLit "Illegal kind signature for") <+> quotes (ppr thing))
        2 (ptext (sLit "Perhaps you intended to use -XKindSignatures"))
 
-polyKindsErr :: Outputable a => a -> SDoc
-polyKindsErr thing
+dataKindsErr :: Outputable a => a -> SDoc
+dataKindsErr thing
   = hang (ptext (sLit "Illegal kind:") <+> quotes (ppr thing))
-       2 (ptext (sLit "Perhaps you intended to use -XPolyKinds"))
+       2 (ptext (sLit "Perhaps you intended to use -XDataKinds"))
 
 
 badQualBndrErr :: RdrName -> SDoc

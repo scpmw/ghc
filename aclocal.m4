@@ -174,16 +174,7 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
             GET_ARM_ISA()
             test -z "[$]2" || eval "[$]2=\"ArchARM {armISA = \$ARM_ISA, armISAExt = \$ARM_ISA_EXT}\""
             ;;
-        alpha)
-            test -z "[$]2" || eval "[$]2=ArchAlpha"
-            ;;
-        mips|mipseb)
-            test -z "[$]2" || eval "[$]2=ArchMipseb"
-            ;;
-        mipsel)
-            test -z "[$]2" || eval "[$]2=ArchMipsel"
-            ;;
-        hppa|hppa1_1|ia64|m68k|rs6000|s390|s390x|sparc64|vax)
+        alpha|mips|mipseb|mipsel|hppa|hppa1_1|ia64|m68k|rs6000|s390|s390x|sparc64|vax)
             test -z "[$]2" || eval "[$]2=ArchUnknown"
             ;;
         *)
@@ -221,13 +212,16 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
         freebsd)
             test -z "[$]2" || eval "[$]2=OSFreeBSD"
             ;;
+        kfreebsdgnu)
+            test -z "[$]2" || eval "[$]2=OSKFreeBSD"
+            ;;
         openbsd)
             test -z "[$]2" || eval "[$]2=OSOpenBSD"
             ;;
         netbsd)
             test -z "[$]2" || eval "[$]2=OSNetBSD"
             ;;
-        dragonfly|osf1|osf3|hpux|linuxaout|kfreebsdgnu|freebsd2|cygwin32|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix|haiku)
+        dragonfly|osf1|osf3|hpux|linuxaout|freebsd2|cygwin32|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix|haiku)
             test -z "[$]2" || eval "[$]2=OSUnknown"
             ;;
         *)
@@ -366,6 +360,7 @@ AC_DEFUN([FP_SETTINGS],
     then
         SettingsCCompilerCommand='$topdir/../mingw/bin/gcc.exe'
         SettingsCCompilerFlags="$CONF_CC_OPTS_STAGE2 $CONF_GCC_LINKER_OPTS_STAGE2"
+        SettingsArCommand='$topdir/../mingw/bin/ar.exe'
         SettingsPerlCommand='$topdir/../perl/perl.exe'
         SettingsDllWrapCommand='$topdir/../mingw/bin/dllwrap.exe'
         SettingsWindresCommand='$topdir/../mingw/bin/windres.exe'
@@ -373,6 +368,7 @@ AC_DEFUN([FP_SETTINGS],
     else
         SettingsCCompilerCommand="$WhatGccIsCalled"
         SettingsCCompilerFlags="$CONF_CC_OPTS_STAGE2 $CONF_GCC_LINKER_OPTS_STAGE2"
+        SettingsArCommand="$ArCmd"
         SettingsPerlCommand="$PerlCmd"
         SettingsDllWrapCommand="/bin/false"
         SettingsWindresCommand="/bin/false"
@@ -380,6 +376,7 @@ AC_DEFUN([FP_SETTINGS],
     fi
     AC_SUBST(SettingsCCompilerCommand)
     AC_SUBST(SettingsCCompilerFlags)
+    AC_SUBST(SettingsArCommand)
     AC_SUBST(SettingsPerlCommand)
     AC_SUBST(SettingsDllWrapCommand)
     AC_SUBST(SettingsWindresCommand)
@@ -1905,6 +1902,12 @@ AC_DEFUN([BOOTSTRAPPING_GHC_INFO_FIELD],[
 if test $GhcCanonVersion -ge 701
 then
     $1=`"$WithGhc" --info | grep "^ ,(\"$2\"," | sed -e 's/.*","//' -e 's/")$//'`
+    tmp=${$1#\$topdir/}
+    if test "${$1}" != "$tmp"
+    then
+        topdir=`"$WithGhc" --print-libdir | sed 's#\\\\#/#g'`
+        $1="$topdir/$tmp"
+    fi
 else
     $1=$3
 fi
@@ -1953,10 +1956,12 @@ AC_DEFUN([XCODE_VERSION],[
 # Finds where gcc is
 AC_DEFUN([FIND_GCC],[
     if test "$TargetOS_CPP" = "darwin" &&
-        test "$XCodeVersion1" -ge 4
+       test "$XCodeVersion1" -eq 4 &&
+       test "$XCodeVersion2" -lt 2
     then
-        # From Xcode 4, use 'gcc-4.2' to force the use of the gcc legacy
-        # backend (instead of the LLVM backend)
+        # In Xcode 4.1, 'gcc-4.2' is the gcc legacy backend (rather
+        # than the LLVM backend). We prefer the legacy gcc, but in
+        # Xcode 4.2 'gcc-4.2' was removed.
         FP_ARG_WITH_PATH_GNU_PROG([CC], [gcc-4.2])
     else
         FP_ARG_WITH_PATH_GNU_PROG([CC], [gcc])
