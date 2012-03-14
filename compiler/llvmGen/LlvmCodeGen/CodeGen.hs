@@ -27,7 +27,7 @@ import UniqSupply
 import Unique
 import Util
 
-import Data.List ( partition )
+import Data.List ( partition, nub )
 
 
 type LlvmStatements = OrdList LlvmStatement
@@ -50,11 +50,12 @@ genLlvmProc _ = panic "genLlvmProc: case that shouldn't reach here!"
 -- | Generate code for a list of blocks that make up a complete procedure.
 basicBlocksCodeGen :: [CmmBasicBlock] -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
 basicBlocksCodeGen cmmBlocks
-  = do (blockss, topss) <- fmap unzip $ mapM basicBlockCodeGen cmmBlocks
+  = do prologue <- funPrologue cmmBlocks
+       (blockss, topss) <- fmap unzip $ mapM basicBlockCodeGen cmmBlocks
        let (blocks', allocs) = mapAndUnzip dominateAllocs (concat blockss)
        let allocs' = concat allocs
        let ((BasicBlock id fstmts):rblks) = blocks'
-       let fblocks = (BasicBlock id $ funPrologue ++  allocs' ++ fstmts):rblks
+       let fblocks = (BasicBlock id $ prologue ++  allocs' ++ fstmts):rblks
        return (fblocks, concat topss)
 
 
@@ -162,7 +163,7 @@ genCall t@(CmmPrim (MO_PopCnt w)) [CmmHinted dst _] args _ = do
         dstTy = cmmToLlvmType $ localRegType dst
         funTy = \n -> LMFunction $ LlvmFunctionDecl n ExternallyVisible
                           CC_Ccc width FixedArgs (tysToParams [width]) Nothing
-    (dstV, stmts1, top1)        <- getCmmReg (CmmLocal dst)
+    dstV                        <- getCmmReg (CmmLocal dst)
 
     (argsV, stmts2, top2)       <- arg_vars args ([], nilOL, [])
     (fptr, stmts3, top3)        <- getFunPtr funTy t
@@ -171,9 +172,9 @@ genCall t@(CmmPrim (MO_PopCnt w)) [CmmHinted dst _] args _ = do
     ([retV'], stmts5)           <- castVars [(retV,dstTy)]
     let s2                       = Store retV' dstV
 
-    let stmts = stmts1 `appOL` stmts2 `appOL` stmts3 `appOL` stmts4 `snocOL`
+    let stmts = stmts2 `appOL` stmts3 `appOL` stmts4 `snocOL`
                 s1 `appOL` stmts5 `snocOL` s2
-    return (stmts, top1 ++ top2 ++ top3)
+    return (stmts, top2 ++ top3)
 
 -- Handle memcpy function specifically since llvm's intrinsic version takes
 -- some extra parameters.
@@ -193,10 +194,11 @@ genCall t@(CmmPrim op) [] args CmmMayReturn | op == MO_Memcpy ||
     (fptr, stmts2, top2)          <- getFunPtr funTy t
     (argVars', stmts3)            <- castVars $ zip argVars argTy
 
+    stmts4 <- trashStmts
     let arguments = argVars' ++ isVolVal
         call = Expr $ Call StdCall fptr arguments []
         stmts = stmts1 `appOL` stmts2 `appOL` stmts3
-                `appOL` trashStmts `snocOL` call
+                `appOL` stmts4 `snocOL` call
     return (stmts, top1 ++ top2)
 
 -- Handle all other foreign calls and prim ops.
@@ -258,7 +260,8 @@ genCall target res args ret = do
                 | ret == CmmNeverReturns = unitOL $ Unreachable
                 | otherwise              = nilOL
 
-    let stmts = stmts1 `appOL` stmts2 `appOL` trashStmts
+    stmts3 <- trashStmts
+    let stmts = stmts1 `appOL` stmts2 `appOL` stmts3
 
     -- make the actual call
     case retTy of
@@ -274,13 +277,13 @@ genCall target res args ret = do
                 ret_reg t = panic $ "genCall: Bad number of registers! Can only handle"
                                 ++ " 1, given " ++ show (length t) ++ "."
             let (creg, _) = ret_reg res
-            (vreg, stmts3, top3) <- getCmmReg (CmmLocal creg)
-            let allStmts = stmts `snocOL` s1 `appOL` stmts3
+            vreg <- getCmmReg (CmmLocal creg)
+            let allStmts = stmts `snocOL` s1
             if retTy == pLower (getVarType vreg)
                 then do
                     let s2 = Store v1 vreg
                     return (allStmts `snocOL` s2 `appOL` retStmt,
-                                top1 ++ top2 ++ top3)
+                                top1 ++ top2)
                 else do
                     let ty = pLower $ getVarType vreg
                     let op = case ty of
@@ -293,7 +296,7 @@ genCall target res args ret = do
                     (v2, s2) <- doExpr ty $ Cast op v1 ty
                     let s3 = Store v2 vreg
                     return (allStmts `snocOL` s2 `snocOL` s3
-                                `appOL` retStmt, top1 ++ top2 ++ top3)
+                                `appOL` retStmt, top1 ++ top2)
 
 
 -- | Create a function pointer from a target.
@@ -502,9 +505,9 @@ genJump expr = do
 -- these with registers when possible.
 genAssign :: CmmReg -> CmmExpr -> LlvmM StmtData
 genAssign reg val = do
-    (vreg, stmts1, top1) <- getCmmReg reg
+    vreg <- getCmmReg reg
     (vval, stmts2, top2) <- exprToVar val
-    let stmts = stmts1 `appOL` stmts2
+    let stmts = stmts2
 
     let ty = (pLower . getVarType) vreg
     case isPointer ty && getVarType vval == llvmWord of
@@ -512,11 +515,11 @@ genAssign reg val = do
          True -> do
              (v, s1) <- doExpr ty $ Cast LM_Inttoptr vval ty
              let s2 = Store v vreg
-             return (stmts `snocOL` s1 `snocOL` s2, top1 ++ top2)
+             return (stmts `snocOL` s1 `snocOL` s2, top2)
 
          False -> do
              let s1 = Store vval vreg
-             return (stmts `snocOL` s1, top1 ++ top2)
+             return (stmts `snocOL` s1, top2)
 
 
 -- | CmmStore operation
@@ -553,20 +556,18 @@ genStore addr val = genStore_slow addr val
 genStore_fast :: CmmExpr -> GlobalReg -> Int -> CmmExpr
               -> LlvmM StmtData
 genStore_fast addr r n val
-  = let gr  = lmGlobalRegVar r
-        grt = (pLower . getVarType) gr
-        (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
-    in case isPointer grt && rem == 0 of
+  = do (gv, grt, s1) <- getCmmRegVal (CmmGlobal r)
+       let (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
+       case isPointer grt && rem == 0 of
             True -> do
                 (vval,  stmts, top) <- exprToVar val
-                (gv,  s1) <- doExpr grt $ Load gr
                 (ptr, s2) <- doExpr grt $ GetElemPtr True gv [toI32 ix]
                 -- We might need a different pointer type, so check
                 case pLower grt == getVarType vval of
                      -- were fine
                      True  -> do
                          let s3 = Store vval ptr
-                         return (stmts `snocOL` s1 `snocOL` s2
+                         return (stmts `appOL` s1 `snocOL` s2
                                  `snocOL` s3, top)
 
                      -- cast to pointer type needed
@@ -574,7 +575,7 @@ genStore_fast addr r n val
                          let ty = (pLift . getVarType) vval
                          (ptr', s3) <- doExpr ty $ Cast LM_Bitcast ptr ty
                          let s4 = Store vval ptr'
-                         return (stmts `snocOL` s1 `snocOL` s2
+                         return (stmts `appOL` s1 `snocOL` s2
                                  `snocOL` s3 `snocOL` s4, top)
 
             -- If its a bit type then we use the slow method since
@@ -701,15 +702,14 @@ exprToVarOpt opt e = case e of
     -- Cmmreg in expression is the value, so must load. If you want actual
     -- reg pointer, call getCmmReg directly.
     CmmReg r -> do
-        (vreg, stmts, top) <- getCmmReg r
-        (v1, s1) <- doExpr (pLower $ getVarType vreg) $ Load vreg
-        case (isPointer . getVarType) v1 of
+        (v1, ty, s1) <- getCmmRegVal r
+        case isPointer ty of
              True  -> do
                  -- Cmm wants the value, so pointer types must be cast to ints
                  (v2, s2) <- doExpr llvmWord $ Cast LM_Ptrtoint v1 llvmWord
-                 return (v2, stmts `snocOL` s1 `snocOL` s2, top)
+                 return (v2, s1 `snocOL` s2, [])
 
-             False -> return (v1, stmts `snocOL` s1, top)
+             False -> return (v1, s1, [])
 
     CmmMachOp op exprs
         -> genMachOp opt op exprs
@@ -836,15 +836,13 @@ genMachOp opt op e = genMachOp_slow opt op e
 genMachOp_fast :: EOption -> MachOp -> GlobalReg -> Int -> [CmmExpr]
                -> LlvmM ExprData
 genMachOp_fast opt op r n e
-  = let gr  = lmGlobalRegVar r
-        grt = (pLower . getVarType) gr
-        (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
-    in case isPointer grt && rem == 0 of
+  = do (gv, grt, s1) <- getCmmRegVal (CmmGlobal r)
+       let (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
+       case isPointer grt && rem == 0 of
             True -> do
-                (gv,  s1) <- doExpr grt $ Load gr
                 (ptr, s2) <- doExpr grt $ GetElemPtr True gv [toI32 ix]
                 (var, s3) <- doExpr llvmWord $ Cast LM_Ptrtoint ptr llvmWord
-                return (var, unitOL s1 `snocOL` s2 `snocOL` s3, [])
+                return (var, s1 `snocOL` s2 `snocOL` s3, [])
 
             False -> genMachOp_slow opt op e
 
@@ -1034,21 +1032,19 @@ genLoad e ty = genLoad_slow e ty
 -- offset such as I32[Sp+8].
 genLoad_fast :: CmmExpr -> GlobalReg -> Int -> CmmType
                 -> LlvmM ExprData
-genLoad_fast e r n ty =
-    let gr  = lmGlobalRegVar r
-        grt = (pLower . getVarType) gr
-        ty' = cmmToLlvmType ty
+genLoad_fast e r n ty = do
+    (gv, grt, s1) <- getCmmRegVal (CmmGlobal r)
+    let ty' = cmmToLlvmType ty
         (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
-    in case isPointer grt && rem == 0 of
+    case isPointer grt && rem == 0 of
             True  -> do
-                (gv,  s1) <- doExpr grt $ Load gr
                 (ptr, s2) <- doExpr grt $ GetElemPtr True gv [toI32 ix]
                 -- We might need a different pointer type, so check
                 case grt == ty' of
                      -- were fine
                      True -> do
                          (var, s3) <- doExpr ty' $ Load ptr
-                         return (var, unitOL s1 `snocOL` s2 `snocOL` s3,
+                         return (var, s1 `snocOL` s2 `snocOL` s3,
                                      [])
 
                      -- cast to pointer type needed
@@ -1056,7 +1052,7 @@ genLoad_fast e r n ty =
                          let pty = pLift ty'
                          (ptr', s3) <- doExpr pty $ Cast LM_Bitcast ptr pty
                          (var, s4) <- doExpr ty' $ Load ptr'
-                         return (var, unitOL s1 `snocOL` s2 `snocOL` s3
+                         return (var, s1 `snocOL` s2 `snocOL` s3
                                     `snocOL` s4, [])
 
             -- If its a bit type then we use the slow method since
@@ -1089,31 +1085,49 @@ genLoad_slow e ty = do
                             ", Var: " ++ showSDoc (ppr iptr)))
 
 
--- | Handle CmmReg expression
---
--- We allocate CmmReg on the stack. This avoids having to map a CmmReg to an
--- equivalent SSA form and avoids having to deal with Phi node insertion.
--- This is also the approach recommended by LLVM developers.
-getCmmReg :: CmmReg -> LlvmM ExprData
-getCmmReg r@(CmmLocal (LocalReg un _))
+-- | Handle CmmReg expression. This will return a pointer to the stack
+-- location of the register. Throws an error if it isn't allocated on
+-- the stack.
+getCmmReg :: CmmReg -> LlvmM LlvmVar
+getCmmReg (CmmLocal (LocalReg un _))
   = do exists <- varLookup un
        case exists of
-         Just ety -> return ((LMLocalVar un $ pLift ety), nilOL, [])
-         Nothing  -> do
-           let  (newv, stmts) = allocReg r
-           varInsert un (pLower $ getVarType newv)
-           return (newv, stmts, [])
+         Just ety -> return (LMLocalVar un $ pLift ety)
+         Nothing  -> fail $ "getCmmReg: Cmm register " ++ showSDoc (ppr un) ++ " was not allocated!"
+           -- This should never happen, as every local variable should
+           -- have been assigned a value at some point, triggering
+           -- "funPrologue" to allocate it on the stack.
 
-getCmmReg (CmmGlobal g) = return (lmGlobalRegVar g, nilOL, [])
+getCmmReg (CmmGlobal g)
+  = do onStack <- checkStackReg g
+       if onStack
+         then return (lmGlobalRegVar g)
+         else fail $ "getCmmReg: Cmm register " ++ showSDoc (ppr g) ++ " not stack-allocated!"
 
+-- | Return the value of a given register, as well as its type. Might
+-- need to be load from stack.
+getCmmRegVal :: CmmReg -> LlvmM (LlvmVar, LlvmType, LlvmStatements)
+getCmmRegVal reg =
+  case reg of
+    CmmGlobal g -> do
+      onStack <- checkStackReg g
+      if onStack then loadFromStack else do
+        let r = lmGlobalRegArg g
+        return (r, getVarType r, nilOL)
+    _ -> loadFromStack
+ where loadFromStack = do
+         ptr <- getCmmReg reg
+         let ty = pLower $ getVarType ptr
+         (v, s) <- doExpr ty (Load ptr)
+         return (v, ty, unitOL s)
 
--- | Allocate a CmmReg on the stack
-allocReg :: CmmReg -> (LlvmVar, LlvmStatements)
+-- | Allocate a local CmmReg on the stack
+allocReg :: CmmReg -> (LlvmVar, [LlvmStatement])
 allocReg (CmmLocal (LocalReg un ty))
   = let ty' = cmmToLlvmType ty
         var = LMLocalVar un (LMPointer ty')
         alc = Alloca ty' 1
-    in (var, unitOL $ Assignment var alc)
+    in (var, [Assignment var alc])
 
 allocReg _ = panic $ "allocReg: Global reg encountered! Global registers should"
                     ++ " have been handled elsewhere!"
@@ -1184,23 +1198,46 @@ genLit CmmHighStackMark
 -- * Misc
 --
 
--- | Function prologue. Load STG arguments into variables for function.
-funPrologue :: [LlvmStatement]
-funPrologue = concat $ map getReg activeStgRegs
-    where getReg rr =
-            let reg   = lmGlobalRegVar rr
-                arg   = lmGlobalRegArg rr
-                alloc = Assignment reg $ Alloca (pLower $ getVarType reg) 1
-            in [alloc, Store arg reg]
+-- | Find CmmRegs that get assigned and allocate them on the stack
+--
+-- Any register that gets written needs to be allcoated on the
+-- stack. This avoids having to map a CmmReg to an equivalent SSA form
+-- and avoids having to deal with Phi node insertion.  This is also
+-- the approach recommended by LLVM developers.
+--
+-- On the other hand, this is unecessarily verbose if the register in
+-- question is never written. Therefore we skip it where we can to
+-- save a few lines in the output and hopefully speed compilation up a
+-- bit.
+funPrologue :: [CmmBasicBlock] -> LlvmM [LlvmStatement]
+funPrologue cmmBlocks = do
 
+  let getAssignedRegs (CmmAssign reg _)  = [reg]
+      -- Calls will trash all registers. Unfortunately, this needs them to
+      -- be stack-allocated in the first place.
+      getAssignedRegs (CmmCall _ rs _ _) = map CmmGlobal trashRegs ++ map formalToReg rs
+      getAssignedRegs _                  = []
+      formalToReg (CmmHinted r _)        = CmmLocal r
+      getRegsBlock (BasicBlock _ xs)     = concatMap getAssignedRegs xs
+      assignedRegs = nub $ concatMap getRegsBlock cmmBlocks
+  fmap concat $ flip mapM assignedRegs $ \reg ->
+    case reg of
+      CmmLocal (LocalReg un _) -> do
+        let (newv, stmts) = allocReg reg
+        varInsert un (pLower $ getVarType newv)
+        return stmts
+      CmmGlobal r -> do
+        let reg   = lmGlobalRegVar r
+            arg   = lmGlobalRegArg r
+            alloc = Assignment reg $ Alloca (pLower $ getVarType reg) 1
+        markStackReg r
+        return [alloc, Store arg reg]
 
 -- | Function epilogue. Load STG variables to use as argument for call.
 funEpilogue :: LlvmM ([LlvmVar], LlvmStatements)
 funEpilogue = do
-    let loadExpr r = do
-        let reg = lmGlobalRegVar r
-        (v,s) <- doExpr (pLower $ getVarType reg) $ Load reg
-        return (v, unitOL s)
+    let loadExpr r = do (v, _, s) <- getCmmRegVal (CmmGlobal r)
+                        return (v, s)
     loads <- mapM loadExpr activeStgRegs
     let (vars, stmts) = unzip loads
     return (vars, concatOL stmts)
@@ -1217,16 +1254,15 @@ funEpilogue = do
 -- before the call by assigning the 'undef' value to them. The ones we
 -- need are restored from the Cmm local var and the ones we don't need
 -- are fine to be trashed.
-trashStmts :: LlvmStatements
-trashStmts = concatOL $ map trashReg activeStgRegs
-    where trashReg r =
-            let reg   = lmGlobalRegVar r
-                ty    = (pLower . getVarType) reg
-                trash = unitOL $ Store (LMLitVar $ LMUndefLit ty) reg
-            in case callerSaves r of
-                      True  -> trash
-                      False -> nilOL
+trashStmts :: LlvmM (LlvmStatements)
+trashStmts = fmap toOL $ mapM trashReg trashRegs
+    where trashReg r = do
+            reg <- getCmmReg (CmmGlobal r)
+            let ty    = (pLower . getVarType) reg
+            return $ Store (LMLitVar $ LMUndefLit ty) reg
 
+trashRegs :: [GlobalReg]
+trashRegs = filter callerSaves activeStgRegs
 
 -- | Get a function pointer to the CLabel specified.
 --

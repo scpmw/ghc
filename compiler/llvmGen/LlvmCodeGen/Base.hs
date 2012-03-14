@@ -13,6 +13,7 @@ module LlvmCodeGen.Base (
 
         LlvmM,
         runLlvm, withClearVars, varLookup, varInsert,
+        markStackReg, checkStackReg,
         funLookup, funInsert, getLlvmVer, getLlvmPlatform,
         renderLlvm, runUs, markUsedVar, getUsedVars,
         ghcInternalFunctions,
@@ -165,6 +166,7 @@ defaultLlvmVersion = 28
 -- two maps, one for functions and one for local vars.
 data LlvmEnv = LlvmEnv { envFunMap :: LlvmEnvMap
                        , envVarMap :: LlvmEnvMap
+                       , envStackRegs :: [GlobalReg]
                        , envUsedVars :: [LlvmVar]
                        , envVersion :: LlvmVersion
                        , envPlatform :: Platform
@@ -197,6 +199,7 @@ runLlvm platform ver out us m = do
     return ()
   where env ms = LlvmEnv { envFunMap = emptyUFM
                          , envVarMap = emptyUFM
+                         , envStackRegs = []
                          , envUsedVars = []
                          , envVersion = ver
                          , envPlatform = platform
@@ -208,8 +211,8 @@ runLlvm platform ver out us m = do
 -- | Clear variables from the environment.
 withClearVars :: LlvmM a -> LlvmM a
 withClearVars m = LlvmM $ \env -> do
-    (x, env') <- runLlvmM m env { envVarMap = emptyUFM }
-    return (x, env' { envVarMap = envVarMap env })
+    (x, env') <- runLlvmM m env { envVarMap = emptyUFM, envStackRegs = [] }
+    return (x, env' { envVarMap = envVarMap env, envStackRegs = envStackRegs env })
 
 -- | Insert variables or functions into the environment.
 varInsert, funInsert :: Uniquable key => key -> LlvmType -> LlvmM ()
@@ -220,6 +223,14 @@ funInsert s t = LlvmM $ \env -> return ((), env { envFunMap = addToUFM (envFunMa
 varLookup, funLookup :: Uniquable key => key -> LlvmM (Maybe LlvmType)
 varLookup s = LlvmM $ \env -> return (lookupUFM (envVarMap env) s, env)
 funLookup s = LlvmM $ \env -> return (lookupUFM (envFunMap env) s, env)
+
+-- | Set a register as allocated on the stack
+markStackReg :: GlobalReg -> LlvmM ()
+markStackReg r = LlvmM $ \env -> return ((), env { envStackRegs = r : envStackRegs env })
+
+-- | Check whether a register is allocated on the stack
+checkStackReg :: GlobalReg -> LlvmM Bool
+checkStackReg r = LlvmM $ \env -> return (r `elem` envStackRegs env, env)
 
 -- | Replace the seed value used for creating metadata IDs
 setMetaSeed :: LMMetaInt -> LlvmM ()
