@@ -222,8 +222,8 @@ ppPlainName (LMNamedMeta n          ) = ppr n
 
 -- | Print a literal value. No type.
 ppLit :: LlvmLit -> SDoc
-getLit (LMIntLit i (LMInt 32)) = ppr (fromInteger i :: Int32)
-getLit (LMIntLit i (LMInt 64)) = ppr (fromInteger i :: Int64)
+ppLit (LMIntLit i (LMInt 32))  = ppr (fromInteger i :: Int32)
+ppLit (LMIntLit i (LMInt 64))  = ppr (fromInteger i :: Int64)
 ppLit (LMIntLit   i _       )  = ppr ((fromInteger i)::Int)
 ppLit (LMFloatLit r LMFloat )  = ppFloat $ realToFrac r
 ppLit (LMFloatLit r LMDouble)  = ppDouble r
