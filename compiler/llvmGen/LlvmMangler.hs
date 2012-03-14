@@ -97,7 +97,7 @@ writeSection w (hdr, cts) = do
   B.hPutStrLn w cts
 
 -- | Reorder and convert sections so info tables end up next to the
--- code. Also does stack fixups.
+-- code.
 fixTables :: [Section] -> [Section]
 fixTables ss = map strip sorted
   where

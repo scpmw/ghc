@@ -336,6 +336,9 @@ mkStaticString :: String -> LlvmStatic
 --
 -- Note: The terminating '\0' is now required by the RTS so it can
 -- treat pointers into the event log as null-terminated C strings.
+--
+-- Note 2: This is actually *really* inefficient and pretty much the
+-- the bottleneck of the whole LLVM meta backend now.
 mkStaticString str = LMStaticStr (mkFastString (concatMap esc str)) typ
   where typ = LMArray (length str + 1) i8
         esc '\\'   = "\\\\"
