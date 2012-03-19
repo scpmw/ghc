@@ -52,13 +52,21 @@ void *dwarf_ghc_debug_data = 0;
 
 #define GHC_DEBUG_DATA_SECTION ".debug_ghc"
 
-static void *dwarf_get_code_offset(Elf *elf, void *seg_start);
-static void dwarf_load_ghc_debug_data(Elf *elf);
-static void dwarf_load_symbols(char *file, Elf *elf, void *seg_start);
+struct seg_space_t
+{
+    void *base;         // Add this to position in file to get virtual address
+    void *start, *end;  // Limits of segment address space
+};
+typedef struct seg_space_t seg_space;
 
-static void dwarf_load_file(char *module_path, void *seg_start);
-static void dwarf_load_dies(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *seg_start);
-static void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *seg_start);
+static void *dwarf_get_code_offset(Elf *elf, seg_space *seg);
+static void dwarf_load_ghc_debug_data(Elf *elf);
+static void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg);
+
+static void dwarf_load_file(char *module_path, seg_space *seg);
+static void dwarf_load_dies(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg);
+static void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg);
+static char *dwarf_findname(Dwarf_Die die);
 
 static DwarfUnit *dwarf_new_unit(char *name, char *comp_dir);
 static DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name, void *low_pc, void *high_pc,
@@ -94,19 +102,20 @@ void dwarf_load()
 	while (!feof(map_file)) {
 
 		// Read a line
-		void *seg_start = 0;
+		void *seg_start = 0, *seg_end = 0;
 		char exec_perm = '-';
 		char module_path[255+1] = "";
 		unsigned int offset;
 		if (!fgets(line, 1024, map_file))
 			break;
-		if (!sscanf(line, "%p-%*p %*c%*c%c%*c %x %*x:%*x %*d %255s",
-		            &seg_start, &exec_perm, &offset, module_path) > 0)
+		if (!sscanf(line, "%p-%p %*c%*c%c%*c %x %*x:%*x %*d %255s",
+		            &seg_start, &seg_end, &exec_perm, &offset, module_path) > 0)
 			break;
 
 		// Load if it is an executable section
-		if (exec_perm == 'x' && module_path[0] != '[')
-			dwarf_load_file(module_path, (char *)seg_start - offset);
+		struct seg_space_t seg = { (char *)seg_start - offset, seg_start, seg_end };
+		if (exec_perm == 'x' && module_path[0] && module_path[0] != '[')
+			dwarf_load_file(module_path, &seg);
 
 	}
 
@@ -156,8 +165,6 @@ int dwarf_load_by_phdr(struct dl_phdr_info *info, size_t size, void *data)
 			void *start = (void *)(info->dlpi_addr + info->dlpi_phdr[i].p_paddr);
 			void *end = start + info->dlpi_phdr[i].p_filesz;
 
-			// Gross hack. For some reason
-
 			// Find minimum, maximum
 			if (!code_start || start < code_start)
 				code_start = start;
@@ -189,13 +196,13 @@ int dwarf_load_by_phdr(struct dl_phdr_info *info, size_t size, void *data)
 
 #endif // USE_DL_ITERATE_PHDR
 
-void dwarf_load_file(char *module_path, void *seg_start)
+void dwarf_load_file(char *module_path, seg_space *seg)
 {
 
 	// Open the module
 	int fd = open(module_path, O_RDONLY);
 	if (fd < 0) {
-		sysErrorBelch("Could not open %s for reading debug data!", module_path);
+		sysErrorBelch("Could not open %s for reading debug data", module_path);
 		return;
 	}
 
@@ -210,15 +217,16 @@ void dwarf_load_file(char *module_path, void *seg_start)
 	dwarf_load_ghc_debug_data(elf);
 
 	// Load symbols
-	dwarf_load_symbols(module_path, elf, seg_start);
+	dwarf_load_symbols(module_path, elf, seg);
 
 	// Find symbol address offset
-	void *code_offset = dwarf_get_code_offset(elf, seg_start);
+	void *code_offset = dwarf_get_code_offset(elf, seg);
+	seg_space seg2 = { code_offset, seg->start, seg->end };
 
 	// Open using libdwarf
 	Dwarf_Debug dbg; Dwarf_Error err;
 	if (dwarf_elf_init(elf, DW_DLC_READ, 0, 0, &dbg, &err) != DW_DLV_OK) {
-		sysErrorBelch("Could not read debug data from %s!", module_path);
+		errorBelch("Could not read debug data from %s: %s", module_path, dwarf_errmsg(err));
 		close(fd);
 		return;
 	}
@@ -276,7 +284,7 @@ void dwarf_load_file(char *module_path, void *seg_start)
 		if (!unit) unit = dwarf_new_unit(name, comp_dir);
 
 		// Go through tree, log all ranges found
-		dwarf_load_dies(unit, dbg, cu_die, code_offset);
+		dwarf_load_dies(unit, dbg, cu_die, &seg2);
 
 	}
 
@@ -288,7 +296,7 @@ void dwarf_load_file(char *module_path, void *seg_start)
 	close(fd);
 }
 
-void *dwarf_get_code_offset(Elf *elf, void *seg_start)
+void *dwarf_get_code_offset(Elf *elf, seg_space *seg)
 {
 
 	// Go through sections
@@ -306,13 +314,8 @@ void *dwarf_get_code_offset(Elf *elf, void *seg_start)
 			continue;
 
 		// Calculate the symbol offset.
-		//
-		// Note that just returning the right offset for the first
-		// text section we come across is actually dangerous, as there
-		// could be others with different offsets. Yet this doesn't
-		// seem to happen in practice, so we save us the effort to
-		// build a real memory map here.
-		return (char *)seg_start - hdr.sh_addr + hdr.sh_offset;
+		char *addr = (char *)seg->base - hdr.sh_addr + hdr.sh_offset;
+        return addr;
 	}
 
 	// Just assume a zero offset otherwise
@@ -385,7 +388,7 @@ void dwarf_load_ghc_debug_data(Elf *elf)
 // "file" entry in the symtab
 #define SYMTAB_UNIT_NAME "SYMTAB: %s"
 
-void dwarf_load_symbols(char *file, Elf *elf, void *seg_start)
+void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg)
 {
 
 	// Locate symbol table section
@@ -439,7 +442,7 @@ void dwarf_load_symbols(char *file, Elf *elf, void *seg_start)
 
 					Elf_Scn *sym_scn = elf_getscn(elf, sym.st_shndx);
 					if (gelf_getshdr(sym_scn, &sym_shdr) == &sym_shdr) {
-						sym_offset = (char *)seg_start - sym_shdr.sh_addr + sym_shdr.sh_offset;
+						sym_offset = (char *)seg->base - sym_shdr.sh_addr + sym_shdr.sh_offset;
 					} else {
 						sym_offset = 0;
 						memset(&sym_shdr, 0, sizeof(sym_shdr));
@@ -476,11 +479,22 @@ void dwarf_load_symbols(char *file, Elf *elf, void *seg_start)
 				if (!unit)
 					break;
 
-				// Add procedure
-				dwarf_new_proc(unit, name,
-				               (char *)sym_offset+sym.st_value,
-				               (char *)sym_offset+sym.st_value+sym.st_size,
-				               DwarfSourceSymtab, 0);
+				{
+					void *start = (char *)sym_offset+sym.st_value;
+					void *end = (char *)start+sym.st_size;
+
+					// Finally, range-check the symbol so we don't
+					// associate it with the wrong memory region.
+					if ((char *)start < (char *)seg->start ||
+						(char *)end > (char *)seg->end)
+						break;
+
+					// Add procedure
+					dwarf_new_proc(unit, name,
+					               start, end,
+					               DwarfSourceSymtab, 0);
+
+				}
 				break;
 			}
 		}
@@ -489,11 +503,11 @@ void dwarf_load_symbols(char *file, Elf *elf, void *seg_start)
 }
 
 
-void dwarf_load_dies(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *code_offset)
+void dwarf_load_dies(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg)
 {
 
 	// Load data from node
-	dwarf_load_die(unit, dbg, die, code_offset);
+	dwarf_load_die(unit, dbg, die, seg);
 
 	// Recurse
 	Dwarf_Error error; Dwarf_Die child;
@@ -502,13 +516,30 @@ void dwarf_load_dies(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *code
 	     res == DW_DLV_OK;
 	     res = dwarf_siblingof(dbg, child, &child, &error)) {
 
-		dwarf_load_dies(unit, dbg, child, code_offset);
+		dwarf_load_dies(unit, dbg, child, seg);
 
 	}
 
 }
 
-void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *code_offset)
+static char *dwarf_findname(Dwarf_Die die) {
+
+	// Try MIPS_linkage_name first
+	char *name;
+	Dwarf_Attribute attr;
+	Dwarf_Error error;
+	if (dwarf_attr(die, DW_AT_MIPS_linkage_name, &attr, &error) == DW_DLV_OK
+	    && dwarf_formstring(attr, &name, &error) == DW_DLV_OK)
+		return name;
+
+	// Then the "normal" name
+	if (dwarf_diename(die, &name, &error) == DW_DLV_OK)
+		return name;
+
+	return 0;
+}
+
+void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg)
 {
 
 	// Get node tag
@@ -523,14 +554,15 @@ void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *code_
 		return;
 
 	// Try to get name directly
-	if (dwarf_diename(die, &name, &error) != DW_DLV_OK) {
+	Dwarf_Attribute attr;
+	if ( !(name = dwarf_findname(die)) ) {
 
 		// Locate abstract origin node, get name from there
-		Dwarf_Attribute attr; Dwarf_Off ref; Dwarf_Die proc_die;
+		Dwarf_Off ref; Dwarf_Die proc_die;
 		if (dwarf_attr(die, DW_AT_abstract_origin, &attr, &error) != DW_DLV_OK
 		    || dwarf_global_formref(attr, &ref, &error) != DW_DLV_OK
 		    || dwarf_offdie(dbg, ref, &proc_die, &error) != DW_DLV_OK
-		    || dwarf_diename(proc_die, &name, &error) != DW_DLV_OK) {
+		    || !(name = dwarf_findname(proc_die))) {
 
 			ref = 0;
 			dwarf_dieoffset(die, &ref, &error);
@@ -541,7 +573,6 @@ void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *code_
 
 	// Get IP range
 	Dwarf_Addr low_pc, high_pc;
-	Dwarf_Attribute attr;
 	if (dwarf_attr(die, DW_AT_low_pc, &attr, &error) != DW_DLV_OK
 	    || dwarf_formaddr(attr, &low_pc, &error) != DW_DLV_OK
 	    || dwarf_attr(die, DW_AT_high_pc, &attr, &error) != DW_DLV_OK
@@ -557,8 +588,13 @@ void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, void *code_
 	// Apply offset to translate into our address space
 	// TODO: Check this is actually doing the right thing, haven't
 	//       tested with dynamic libs so far
-	void *low_pc_ptr = (char *)code_offset + low_pc;
-	void *high_pc_ptr = (char *)code_offset + high_pc;
+	void *low_pc_ptr = (char *)seg->base + low_pc;
+	void *high_pc_ptr = (char *)seg->base + high_pc;
+
+	// Outside of range?
+	if ((char *)low_pc_ptr < (char *)seg->start ||
+	    (char *)high_pc_ptr > (char *)seg->end)
+		return;
 
 	// Already have the proc? This can happen when there are multiple
 	// inlinings.
