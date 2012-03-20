@@ -15,11 +15,11 @@ import LlvmMangler
 
 import LlvmMeta
 
-import CLabel
 import CgUtils ( fixStgRegisters )
 import OldCmm
 import OldPprCmm
 import Module
+import Debug
 
 import BufWrite
 import DynFlags

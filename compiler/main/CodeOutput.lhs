@@ -30,7 +30,7 @@ import HscTypes
 import DynFlags
 import Config
 import SysTools
-import CLabel           ( TickMap )
+import Debug
 
 import ErrUtils		( dumpIfSet_dyn, showPass, ghcExit )
 import Outputable

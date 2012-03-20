@@ -85,7 +85,7 @@ import OrdList
 import Unique
 import UniqSupply
 import Outputable
-import CoreSyn (Tickish)
+import Debug
 
 import Control.Monad
 import Data.List

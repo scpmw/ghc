@@ -130,7 +130,7 @@ import NameSet          ( emptyNameSet )
 import InstEnv
 import FamInstEnv
 import Fingerprint      ( Fingerprint )
-import CLabel           ( TickMap )
+import Debug
 
 import DynFlags
 import ErrUtils

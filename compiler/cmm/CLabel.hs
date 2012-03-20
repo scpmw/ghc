@@ -101,8 +101,6 @@ module CLabel (
         -- * Conversions
         toClosureLbl, toSlowEntryLbl, toEntryLbl, toInfoLbl, toRednCountsLbl,
 
-        TickMapEntry(..), TickMap,
-
         pprCLabel
     ) where
 
@@ -122,10 +120,7 @@ import FastString
 import DynFlags
 import Platform
 import UniqSet
-import CoreSyn ( Tickish )
 import PprCore ( {- instances -} )
-
-import Data.Map    ( Map )
 
 -- -----------------------------------------------------------------------------
 -- The CLabel type
@@ -1153,14 +1148,3 @@ pprDynamicLinkerAsmLabel platform dllInfo lbl
              SymbolPtr -> text "__imp_" <> pprCLabel platform lbl
              _         -> panic "pprDynamicLinkerAsmLabel"
    else panic "pprDynamicLinkerAsmLabel"
-
--- This is clearly a terrible place to put this.
-data TickMapEntry = TickMapEntry {
-  timInstr :: Maybe Int,    -- ^ The ID of the instrumentation added to the proc
-  timParent :: Maybe Int,   -- ^ Instrumentation of parent context, if any
-  timTicks :: [Tickish ()]  -- ^ Debug ticks found in the context
-  }
-type TickMap = Map CLabel TickMapEntry
-
-instance PlatformOutputable TickMapEntry where
-  pprPlatform _ (TickMapEntry instr ctx ts) = ppr (instr, ctx, ts)

@@ -16,32 +16,30 @@ import CLabel
 import Module
 import DynFlags
 import FastString
-import UniqSet
+import Debug
+import Binary
 
 import Config          ( cProjectName, cProjectVersion )
-import Literal         ( Literal(..) )
-import Var             ( Var, varName )
 import OldCmm
 import Outputable
-import CoreSyn
 import Platform
 import SrcLoc          (srcSpanFile,
                         srcSpanStartLine, srcSpanStartCol,
                         srcSpanEndLine, srcSpanEndCol)
 import MonadUtils      ( MonadIO(..) )
-import PprCore         ( pprCoreAlt )
 
 import System.Directory(getCurrentDirectory)
-import Control.Monad   (forM)
+import Control.Monad   (forM, replicateM_)
 import Data.List       (nub, maximumBy)
 import Data.Maybe      (fromMaybe, mapMaybe, catMaybes)
 import Data.Map as Map (Map, fromList, assocs, lookup, elems)
 import Data.Function   (on)
-import Data.Char       (ord, isAscii, isPrint, intToDigit)
-import Data.Word       (Word16)
+import Data.Char       (ord, chr, isAscii, isPrint, intToDigit)
+import Data.Word       (Word8)
 
-#define EVENTLOG_CONSTANTS_ONLY
-#include "../../includes/rts/EventLogFormat.h"
+import Foreign.Ptr
+import Foreign.ForeignPtr
+import Foreign.Storable
 
 -- Constants
 
@@ -324,139 +322,62 @@ mkStaticStruct :: [LlvmStatic] -> LlvmStatic
 mkStaticStruct elems = LMStaticStruc elems typ
   where typ = LMStruct $ map getStatType elems
 
--- | Automatically calculates the correct size of the string
-mkStaticString :: String -> LlvmStatic
--- It seems strings aren't really supported in the LLVM back-end right
--- now - probably mainly because LLVM outputs Haskell strings as
--- arrays. So this is a bit bizarre: We need to escape the string
--- first, as well as account for the fact that the backend adds a
--- "\\00" that we actually neither want nor need. I am a bit unsure
--- though what the "right thing to do" is here, therefore I'll just
--- hack around it for the moment. Also: This is inefficient. -- PMW
---
--- Note: The terminating '\0' is now required by the RTS so it can
--- treat pointers into the event log as null-terminated C strings.
---
--- Note 2: This is actually *really* inefficient and pretty much the
--- the bottleneck of the whole LLVM meta backend now.
-mkStaticString str = LMStaticStr (mkFastString (concatMap esc str)) typ
-  where typ = LMArray (length str + 1) i8
-        esc '\\'   = "\\\\"
-        esc '\"'   = "\\22"
-        esc '\n'   = "\\0a"
-        esc c | isAscii c && isPrint c = [c]
-        esc c      = ['\\', intToDigit (ord c `div` 16), intToDigit (ord c `mod` 16)]
+-- | Return buffer contents as a LLVM string
+bufferAsString :: (Int, ForeignPtr Word8) -> LlvmM LlvmStatic
+bufferAsString (len, buf) = liftIO $ do
 
--- | Collapses a tree of structures into a single structure, which has the same
--- data layout, but is quicker to produce
-flattenStruct :: LlvmStatic -> LlvmStatic
-flattenStruct start = mkStaticStruct $ go start []
-  where go (LMStaticStruc elems _) xs = foldr go xs elems
-        go other                   xs = other:xs
+  -- As we output a string, we need to do escaping. We approximate
+  -- here that the escaped string will have double the size of the
+  -- original buffer. That should be plenty of space given the fact
+  -- that we expect to be converting a lot of text.
+  bh <- openBinMem (len * 2)
+  let go p q | p == q    = return ()
+             | otherwise = peek p >>= escape . fromIntegral >> go (p `plusPtr` 1) q
 
--- | Outputs a 16 bit word in big endian. This is required for all
--- values that the RTS will just copy into the event log later
-mkLit16BE :: Int -> LlvmStatic
- -- This is obviously not portable. I suppose you'd have to either
- -- generate a structure or detect our current alignment.
-mkLit16BE n = LMStaticLit $ mkI16 $ fromIntegral $ (b1 + 256 * b2)
-  where (b1, b2) = (fromIntegral n :: Word16) `divMod` 256
+      -- Note that LLVM esaping is special: The only valid forms are
+      -- "\\" and "\xx", where xx is the hexadecimal ASCII code.
+      --
+      -- Note that we are actually too careful here - the way LLVM
+      -- reads strings in, we could actually output arbitrary garbage as
+      -- long as it's not '\\' or '\"'. In the interest of readability
+      -- and all-around saneness, we don't take advantage of that.
+      escape c
+        | c == ord '\\'  = putByte bh (ordB '\\') >> putByte bh (ordB '\\')
+        | c == ord '\"'  = putByte bh (ordB '\\') >> putByte bh (ordB '2') >> putByte bh (ordB '2')
+        | c == ord '\n'  = putByte bh (ordB '\\') >> putByte bh (ordB '0') >> putByte bh (ordB 'a')
+        | isAscii (chr c) && isPrint (chr c)
+                         = putByte bh $ fromIntegral c
+        | otherwise      = do putByte bh (ordB '\\')
+                              putByte bh $ ordB $ intToDigit (c `div` 16)
+                              putByte bh $ ordB $ intToDigit (c `mod` 16)
+      ordB = (fromIntegral . ord) :: Char -> Word8
+  withForeignPtr buf $ \p ->
+    go p (p `plusPtr` len)
 
--- | Packs the given static value into a (variable-length) event-log
--- packet.
-mkEvent :: Int -> LlvmStatic -> LlvmStatic
-mkEvent id cts
-  = mkStaticStruct [ LMStaticLit $ mkI8 $ fromIntegral id
-                   , LMStaticLit $ mkI16 $ fromIntegral size
-                   , cts]
-  where size = (llvmWidthInBits (getStatType cts) + 7) `div` 8
+  -- Pack result into a string
+  (elen, ebuf) <- getBinMemBuf bh
+  str <- withForeignPtr ebuf $ \p ->
+    mkFastStringForeignPtr p ebuf elen
 
-mkModuleEvent :: ModLocation -> LlvmStatic
-mkModuleEvent mod_loc
-  = mkEvent EVENT_DEBUG_MODULE $ mkStaticStruct
-      [ mkStaticString $ case ml_hs_file mod_loc of
-           Just file -> file
-           _         -> "??"
-      ]
-
-mkProcedureEvent :: Platform -> TickMapEntry -> CLabel -> LlvmStatic
-mkProcedureEvent platform tim lbl
-  = mkEvent EVENT_DEBUG_PROCEDURE $ mkStaticStruct
-      [ mkLit16BE $ fromMaybe none $ timInstr tim
-      , mkLit16BE $ fromMaybe none $ timParent tim
-      , mkStaticString $ showSDocC  $ pprCLabel platform lbl
-      ]
-  where none = 0xffff
-        showSDocC = flip renderWithStyle (mkCodeStyle CStyle)
-
-mkAnnotEvent :: UniqSet Var -> Maybe Var -> Tickish () -> [LlvmStatic]
-mkAnnotEvent _ _ (SourceNote ss names)
-  = [mkEvent EVENT_DEBUG_SOURCE $ mkStaticStruct
-      [ mkLit16BE $ srcSpanStartLine ss
-      , mkLit16BE $ srcSpanStartCol ss
-      , mkLit16BE $ srcSpanEndLine ss
-      , mkLit16BE $ srcSpanEndCol ss
-      , mkStaticString $ unpackFS $ srcSpanFile ss
-      , mkStaticString names
-      ]]
-
-mkAnnotEvent bnds mbind (CoreNote lbl corePtr)
-  | mbind == Just lbl
-  = [mkEvent EVENT_DEBUG_CORE $ mkStaticStruct
-      [ mkStaticString $ showSDocDump $ ppr lbl
-      , -- Core might be too big to fit into an event log
-        -- packet. Impose a limit.
-        let sDocStr = mkStaticString . take 0x8000 . showSDoc
-        in case corePtr of
-          ExprPtr core -> sDocStr $ ppr $ stripCore bnds core
-          AltPtr  alt  -> sDocStr $ pprCoreAlt $ stripAlt bnds alt
-      ]]
-mkAnnotEvent _ _ _ = []
-
-mkEvents :: Platform -> UniqSet Var ->
-            ModLocation -> TickMap -> [RawCmmDecl] -> LlvmStatic
-mkEvents platform bnds mod_loc tick_map cmm
-  = mkStaticStruct $
-      [ mkModuleEvent mod_loc ] ++
-      concat [ mkProcedureEvent platform tim (proc_lbl i l)
-               : let mbind = getMainCoreBind (timTicks tim)
-                 in concatMap (mkAnnotEvent bnds mbind) (timTicks tim)
-             | CmmProc i l _ <- cmm
-             , Just tim <- [Map.lookup l tick_map]] ++
-      [ LMStaticLit $ mkI8 0 ]
-  where proc_lbl (Just (Statics info_lbl _)) _ = info_lbl
-        proc_lbl _                           l = l
-
--- | Get core name from tickishs. Note that we might often have many,
--- many core notes in the list, as Core2Stg annotates every point
--- where it could see code generation generating a new proc. On the
--- other hand, if codegen does its job right, many of these will
--- actually be "inlined", leaving us with rather unwieldingly
--- fine-grained core annotations.
---
--- Luckily, we know that the first core tick we find (more often than
--- not even the first tickish we have) will be one of the top-level
--- ticks. If we just ignore all with other names, we cover all
--- interesting Core without having to split everything in millions of
--- tiny core pieces.
-getMainCoreBind :: [Tickish ()] -> Maybe Var
-getMainCoreBind (CoreNote bnd _:_) = Just bnd
-getMainCoreBind (_:xs)             = getMainCoreBind xs
-getMainCoreBind _                  = Nothing
+  -- Return static string. Note we need to increment the size by one
+  -- because the pretty-printing will append a zero byte.
+  return $ LMStaticStr str $ LMArray (len + 1) i8
 
 cmmDebugLlvmGens :: DynFlags -> ModLocation ->
                     TickMap -> [RawCmmDecl] -> LlvmM ()
 cmmDebugLlvmGens dflags mod_loc tick_map cmm = do
 
-  -- Collect all bindings that we want to output core pieces for. We
-  -- will use this map to make sure that we don't output a piece of
-  -- core twice.
-  let collect tim = getMainCoreBind (timTicks tim)
-      binds = mkUniqSet $ mapMaybe collect $ elems tick_map
+  -- Build a list mapping Cmm labels to linker labels
+  let proc_lbl (Just (Statics info_lbl _)) _ = info_lbl
+      proc_lbl _                           l = l
+      lbls = [(l, proc_lbl i l) | CmmProc i l _ <- cmm]
 
+  -- Write debug data as event log
   let platform = targetPlatform dflags
+  dbg <- liftIO $ debugWriteEventlog platform mod_loc tick_map lbls
 
-  let events = flattenStruct $ mkEvents platform binds mod_loc tick_map cmm
+  -- Convert to a string
+  dbgStr <- bufferAsString dbg
 
   -- Names for symbol / section
   let debug_sym  = fsLit $ "__debug_ghc"
@@ -464,8 +385,8 @@ cmmDebugLlvmGens dflags mod_loc tick_map cmm = do
         OSDarwin -> "__DWARF,"
         _        -> "."
       sectName   = Just $ fsLit (sectPrefix ++ "debug_ghc")
-      lmDebugVar = LMGlobalVar debug_sym (getStatType events) Internal sectName Nothing False
-      lmDebug    = LMGlobal lmDebugVar (Just events)
+      lmDebugVar = LMGlobalVar debug_sym (getStatType dbgStr) Internal sectName Nothing False
+      lmDebug    = LMGlobal lmDebugVar (Just dbgStr)
 
   renderLlvm $ pprLlvmData ([lmDebug], [])
   markUsedVar lmDebugVar
@@ -477,36 +398,3 @@ mkI32 n = LMIntLit n (LMInt 32)
 mkI64 n = LMIntLit n (LMInt 64)
 mkI1 :: Bool -> LlvmLit
 mkI1 f = LMIntLit (if f then 1 else 0) (LMInt 1)
-
-placeholder :: Var -> CoreExpr
-placeholder = Lit . MachStr . mkFastString .
-              ("__Core__" ++) . showSDocDump . ppr . varName
-
-stripCore :: UniqSet Var -> CoreExpr -> CoreExpr
-stripCore bs (App e1 e2) = App (stripCore bs e1) (stripCore bs e2)
-stripCore bs (Lam b e)
-  | b `elemSet` bs       = Lam b (placeholder b)
-  | otherwise            = Lam b (stripCore bs e)
-stripCore bs (Let es e)  = Let (stripLet bs es) (stripCore bs e)
-stripCore bs (Tick _ e)  = stripCore bs e -- strip out
-stripCore bs (Case e b t as)
-  | b `elemSet` bs       = Case (stripCore bs e) b t [(DEFAULT,[],placeholder b)]
-  | otherwise            = Case (stripCore bs e) b t (map (stripAlt bs) as)
-stripCore bs (CoreSyn.Cast e _)  = stripCore bs e -- strip out
-stripCore _  other       = other
-
-stripAlt :: UniqSet Var -> CoreAlt -> CoreAlt
-stripAlt bs (a, bn, e) = (a, bn, stripCore bs e)
-
-stripLet :: UniqSet Var -> CoreBind -> CoreBind
-stripLet bs (NonRec b e)
-  | b `elemSet` bs       = NonRec b (placeholder b)
-  | otherwise            = NonRec b (stripCore bs e)
-stripLet bs (Rec ps)     = Rec (map f ps)
-  where
-    f (b, e)
-      | b `elemSet` bs   = (b, placeholder b)
-      | otherwise        = (b, stripCore bs e)
-
-elemSet :: Var -> UniqSet Var -> Bool
-elemSet = elementOfUniqSet

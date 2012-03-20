@@ -37,6 +37,7 @@ import CgHpc
 import CLabel
 import OldCmm
 import OldPprCmm
+import Debug
 
 import Outputable
 

@@ -14,6 +14,7 @@ import LlvmCodeGen.Data
 
 import CLabel
 import OldCmm
+import Debug
 
 import FastString
 import Outputable

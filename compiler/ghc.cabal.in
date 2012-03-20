@@ -150,6 +150,7 @@ Library
         BasicTypes
         DataCon
         Demand
+        Debug
         Exception
         GhcMonad
         Id
