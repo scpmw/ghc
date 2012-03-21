@@ -18,6 +18,7 @@ import OldCmm
 import qualified OldPprCmm as PprCmm
 import OrdList
 
+import DynFlags
 import FastString
 import ForeignCall
 import Outputable hiding ( panic, pprPanic )
@@ -113,7 +114,7 @@ stmtToInstrs stmt = case stmt of
         -> genCall target res args ret
 
     -- Tail call
-    CmmJump arg -> genJump arg
+    CmmJump arg live     -> genJump arg live
 
     -- CPS, only tail calls, no return's
     -- Actually, there are a few return statements that occur because of hand
@@ -469,19 +470,19 @@ cmmPrimOpFunctions mop = do
 
 
 -- | Tail function calls
-genJump :: CmmExpr -> LlvmM StmtData
+genJump :: CmmExpr -> Maybe [GlobalReg] -> LlvmM StmtData
 
 -- Call to known function
-genJump (CmmLit (CmmLabel lbl)) = do
+genJump (CmmLit (CmmLabel lbl)) live = do
     (vf, stmts, top) <- getHsFunc lbl
-    (stgRegs, stgStmts) <- funEpilogue
+    (stgRegs, stgStmts) <- funEpilogue live
     let s1  = Expr $ Call TailCall vf stgRegs llvmStdFunAttrs
     let s2  = Return Nothing
     return (stmts `appOL` stgStmts `snocOL` s1 `snocOL` s2, top)
 
 
 -- Call to unknown function / address
-genJump expr = do
+genJump expr live = do
     let fty = llvmFunTy
     (vf, stmts, top) <- exprToVar expr
 
@@ -493,7 +494,7 @@ genJump expr = do
                      ++ showSDoc (ppr ty) ++ ")"
 
     (v1, s1) <- doExpr (pLift fty) $ Cast cast vf (pLift fty)
-    (stgRegs, stgStmts) <- funEpilogue
+    (stgRegs, stgStmts) <- funEpilogue live
     let s2 = Expr $ Call TailCall v1 stgRegs llvmStdFunAttrs
     let s3 = Return Nothing
     return (stmts `snocOL` s1 `appOL` stgStmts `snocOL` s2 `snocOL` s3,
@@ -1235,11 +1236,27 @@ funPrologue cmmBlocks = do
         return [alloc, Store arg reg]
 
 -- | Function epilogue. Load STG variables to use as argument for call.
-funEpilogue :: LlvmM ([LlvmVar], LlvmStatements)
-funEpilogue = do
-    let loadExpr r = do (v, _, s) <- getCmmRegVal (CmmGlobal r)
-                        return (v, s)
-    loads <- mapM loadExpr activeStgRegs
+-- STG Liveness optimisation done here.
+funEpilogue :: Maybe [GlobalReg] -> LlvmM ([LlvmVar], LlvmStatements)
+funEpilogue live = do
+
+    -- Have information and liveness optimisation is enabled?
+    doRegLiveness <- getDynFlag (dopt Opt_RegLiveness)
+    let liveRegs = if doRegLiveness then fmap (alwaysLive ++) live else Nothing
+
+    -- Set to value or "undef" depending on whether the register is
+    -- actually live
+    let loadExpr r = do
+          (v, _, s) <- getCmmRegVal (CmmGlobal r)
+          return (v, s)
+        loadUndef r = do
+          let ty = (pLower . getVarType $ lmGlobalRegVar r)
+          return (LMLitVar $ LMUndefLit ty, unitOL Nop)
+    loads <- flip mapM activeStgRegs $ \r -> case liveRegs of
+      Nothing               -> loadExpr r
+      Just rs | r `elem` rs -> loadExpr r
+              | otherwise   -> loadUndef r
+
     let (vars, stmts) = unzip loads
     return (vars, concatOL stmts)
 

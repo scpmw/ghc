@@ -36,14 +36,10 @@ import FastString ( sLit )
 -- | Print out a whole LLVM module.
 ppLlvmModule :: LlvmModule -> SDoc
 ppLlvmModule (LlvmModule comments aliases globals decls funcs)
-  = ppLlvmComments comments
-    $+$ empty
-    $+$ ppLlvmAliases aliases
-    $+$ empty
-    $+$ ppLlvmGlobals globals
-    $+$ empty
-    $+$ ppLlvmFunctionDecls decls
-    $+$ empty
+  = ppLlvmComments comments $+$ newLine
+    $+$ ppLlvmAliases aliases $+$ newLine
+    $+$ ppLlvmGlobals globals $+$ newLine
+    $+$ ppLlvmFunctionDecls decls $+$ newLine
     $+$ ppLlvmFunctions funcs
 
 -- | Print out a multi-line comment, can be inside a function or on its own
@@ -77,6 +73,7 @@ ppLlvmGlobal (LMGlobal var@(LMGlobalVar _ _ link x a c) dat) =
         const' = if c then text "constant" else text "global"
 
     in ppAssignment var $ ppr link <+> const' <+> rhs <> sect <> align
+       $+$ newLine
 
 ppLlvmGlobal (LMGlobal var@(LMMetaVar _) (Just val)) =
   ppAssignment var (ppr val)
@@ -113,6 +110,8 @@ ppLlvmFunction (LlvmFunction dec args attrs sec body) =
         $+$ lbrace
         $+$ ppLlvmBlocks body
         $+$ rbrace
+        $+$ newLine
+        $+$ newLine
 
 -- | Print out a function defenition header.
 ppLlvmFunctionHeader :: LlvmFunctionDecl -> [LMString] -> SDoc
@@ -129,7 +128,6 @@ ppLlvmFunctionHeader (LlvmFunctionDecl n l c r varg p a) args
                     (zip p args)
     in ppr l <+> ppr c <+> ppr r <+> char '@' <> ftext n <> lparen <>
         (hsep $ punctuate comma args') <> ptext varg' <> rparen <> align
-
 
 -- | Print out a list of function declaration.
 ppLlvmFunctionDecls :: LlvmFunctionDecls -> SDoc
@@ -150,7 +148,7 @@ ppLlvmFunctionDecl (LlvmFunctionDecl n l c r varg p a)
         args = hcat $ intersperse (comma <> space) $
                   map (\(t,a) -> ppr t <+> ppSpaceJoin a) p
     in text "declare" <+> ppr l <+> ppr c <+> ppr r <+> text "@" <>
-        ftext n <> lparen <> args <> ptext varg' <> rparen <> align
+        ftext n <> lparen <> args <> ptext varg' <> rparen <> align $+$ newLine
 
 
 -- | Print out a list of LLVM blocks.
@@ -160,24 +158,38 @@ ppLlvmBlocks blocks = vcat $ map ppLlvmBlock blocks
 -- | Print out an LLVM block.
 -- It must be part of a function definition.
 ppLlvmBlock :: LlvmBlock -> SDoc
-ppLlvmBlock (LlvmBlock blockId stmts)
-  = ppLlvmStatement (MkLabel blockId)
-        $+$ nest 4 (vcat $ map ppLlvmStatement stmts)
+ppLlvmBlock (LlvmBlock blockId stmts) =
+  let isLabel (MkLabel _) = True
+      isLabel _           = False
+      (block, rest)        = break isLabel stmts
+      ppRest = case rest of
+        MkLabel id:xs -> ppLlvmBlock (LlvmBlock id xs)
+        _             -> empty
+  in ppLlvmBlockLabel blockId
+           $+$ (vcat $ map ppLlvmStatement block)
+           $+$ newLine
+           $+$ ppRest
+
+-- | Print out an LLVM block label.
+ppLlvmBlockLabel :: LlvmBlockId -> SDoc
+ppLlvmBlockLabel id = pprUnique id <> colon
+
 
 -- | Print out an LLVM statement.
 ppLlvmStatement :: LlvmStatement -> SDoc
-ppLlvmStatement stmt
-  = case stmt of
-        Assignment  dst expr      -> ppAssignment dst (ppLlvmExpression expr)
-        Branch      target        -> ppBranch target
-        BranchIf    cond ifT ifF  -> ppBranchIf cond ifT ifF
-        Comment     comments      -> ppLlvmComments comments
-        MkLabel     label         -> pprUnique label <> colon
-        Store       value ptr     -> ppStore value ptr
-        Switch      scrut def tgs -> ppSwitch scrut def tgs
-        Return      result        -> ppReturn result
-        Expr        expr          -> ppLlvmExpression expr
-        Unreachable               -> text "unreachable"
+ppLlvmStatement stmt =
+  let ind = (text "  " <>)
+  in case stmt of
+        Assignment  dst expr      -> ind $ ppAssignment dst (ppLlvmExpression expr)
+        Branch      target        -> ind $ ppBranch target
+        BranchIf    cond ifT ifF  -> ind $ ppBranchIf cond ifT ifF
+        Comment     comments      -> ind $ ppLlvmComments comments
+        MkLabel     label         -> ppLlvmBlockLabel label
+        Store       value ptr     -> ind $ ppStore value ptr
+        Switch      scrut def tgs -> ind $ ppSwitch scrut def tgs
+        Return      result        -> ind $ ppReturn result
+        Expr        expr          -> ind $ ppLlvmExpression expr
+        Unreachable               -> ind $ text "unreachable"
         Nop                       -> empty
 
 
@@ -326,4 +338,12 @@ ppAsm asm constraints rty vars sideeffect alignstack =
       align = if alignstack then text "alignstack" else empty
   in text "call" <+> rty' <+> text "asm" <+> side <+> align <+> asm' <> comma
         <+> cons <> vars'
+
+--------------------------------------------------------------------------------
+-- * Misc functions
+--------------------------------------------------------------------------------
+
+-- | Blank line.
+newLine :: SDoc
+newLine = empty
 
