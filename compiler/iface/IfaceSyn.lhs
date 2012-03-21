@@ -20,13 +20,13 @@ module IfaceSyn (
         IfaceBinding(..), IfaceConAlt(..),
         IfaceIdInfo(..), IfaceIdDetails(..), IfaceUnfolding(..),
         IfaceInfoItem(..), IfaceRule(..), IfaceAnnotation(..), IfaceAnnTarget,
-        IfaceInst(..), IfaceFamInst(..), IfaceTickish(..),
+        IfaceClsInst(..), IfaceFamInst(..), IfaceTickish(..),
 
         -- Misc
-        ifaceDeclSubBndrs, visibleIfConDecls,
+        ifaceDeclImplicitBndrs, visibleIfConDecls,
 
         -- Free Names
-        freeNamesIfDecl, freeNamesIfRule,
+        freeNamesIfDecl, freeNamesIfRule, freeNamesIfFamInst,
 
         -- Pretty printing
         pprIfaceExpr, pprIfaceDeclHead
@@ -71,26 +71,19 @@ data IfaceDecl
   | IfaceData { ifName       :: OccName,        -- Type constructor
                 ifTyVars     :: [IfaceTvBndr],  -- Type variables
                 ifCtxt       :: IfaceContext,   -- The "stupid theta"
-                ifCons       :: IfaceConDecls,  -- Includes new/data info
+                ifCons       :: IfaceConDecls,  -- Includes new/data/data family info
                 ifRec        :: RecFlag,        -- Recursive or not?
                 ifGadtSyntax :: Bool,           -- True <=> declared using
                                                 -- GADT syntax
-                ifFamInst    :: Maybe (IfaceTyCon, [IfaceType])
-                                                -- Just <=> instance of family
-                                                -- Invariant:
-                                                --   ifCons /= IfOpenDataTyCon
-                                                --   for family instances
+                ifAxiom      :: Maybe IfExtName -- The axiom, for a newtype, 
+                                                -- or data/newtype family instance
     }
 
   | IfaceSyn  { ifName    :: OccName,           -- Type constructor
                 ifTyVars  :: [IfaceTvBndr],     -- Type variables
                 ifSynKind :: IfaceKind,         -- Kind of the *rhs* (not of the tycon)
-                ifSynRhs  :: Maybe IfaceType,   -- Just rhs for an ordinary synonyn
-                                                -- Nothing for an open family
-                ifFamInst :: Maybe (IfaceTyCon, [IfaceType])
-                                                -- Just <=> instance of family
-                                                -- Invariant: ifOpenSyn == False
-                                                --   for family instances
+                ifSynRhs  :: Maybe IfaceType    -- Just rhs for an ordinary synonyn
+                                                -- Nothing for an type family declaration
     }
 
   | IfaceClass { ifCtxt    :: IfaceContext,     -- Context...
@@ -102,6 +95,11 @@ data IfaceDecl
                  ifRec     :: RecFlag           -- Is newtype/datatype associated
                                                 --   with the class recursive?
     }
+
+  | IfaceAxiom { ifName   :: OccName       -- Axiom name
+               , ifTyVars :: [IfaceTvBndr] -- Axiom tyvars
+               , ifLHS    :: IfaceType     -- Axiom LHS
+               , ifRHS    :: IfaceType }   -- and RHS
 
   | IfaceForeign { ifName :: OccName,           -- Needs expanding when we move
                                                 -- beyond .NET
@@ -124,13 +122,13 @@ data IfaceATDefault = IfaceATD [IfaceTvBndr] [IfaceType] IfaceType
 
 data IfaceConDecls
   = IfAbstractTyCon Bool        -- c.f TyCon.AbstractTyCon
-  | IfOpenDataTyCon             -- Open data family
-  | IfDataTyCon [IfaceConDecl]  -- data type decls
-  | IfNewTyCon  IfaceConDecl    -- newtype decls
+  | IfDataFamTyCon              -- Data family
+  | IfDataTyCon [IfaceConDecl]  -- Data type decls
+  | IfNewTyCon  IfaceConDecl    -- Newtype decls
 
 visibleIfConDecls :: IfaceConDecls -> [IfaceConDecl]
 visibleIfConDecls (IfAbstractTyCon {}) = []
-visibleIfConDecls IfOpenDataTyCon      = []
+visibleIfConDecls IfDataFamTyCon      = []
 visibleIfConDecls (IfDataTyCon cs)     = cs
 visibleIfConDecls (IfNewTyCon c)       = [c]
 
@@ -148,12 +146,12 @@ data IfaceConDecl
         ifConStricts :: [HsBang]}               -- Empty (meaning all lazy),
                                                 -- or 1-1 corresp with arg tys
 
-data IfaceInst
-  = IfaceInst { ifInstCls  :: IfExtName,                -- See comments with
-                ifInstTys  :: [Maybe IfaceTyCon],       -- the defn of Instance
-                ifDFun     :: IfExtName,                -- The dfun
-                ifOFlag    :: OverlapFlag,              -- Overlap flag
-                ifInstOrph :: Maybe OccName }           -- See Note [Orphans]
+data IfaceClsInst
+  = IfaceClsInst { ifInstCls  :: IfExtName,                -- See comments with
+                   ifInstTys  :: [Maybe IfaceTyCon],       -- the defn of ClsInst
+                   ifDFun     :: IfExtName,                -- The dfun
+                   ifOFlag    :: OverlapFlag,              -- Overlap flag
+                   ifInstOrph :: Maybe OccName }           -- See Note [Orphans]
         -- There's always a separate IfaceDecl for the DFun, which gives
         -- its IdInfo with its full type and version number.
         -- The instance declarations taken together have a version number,
@@ -162,9 +160,10 @@ data IfaceInst
         -- and if the head does not change it won't be used if it wasn't before
 
 data IfaceFamInst
-  = IfaceFamInst { ifFamInstFam   :: IfExtName                -- Family tycon
+  = IfaceFamInst { ifFamInstFam   :: IfExtName           -- Family name
                  , ifFamInstTys   :: [Maybe IfaceTyCon]  -- Rough match types
-                 , ifFamInstTyCon :: IfaceTyCon          -- Instance decl
+                 , ifFamInstAxiom :: IfExtName           -- The axiom
+                 , ifFamInstOrph  :: Maybe OccName       -- Just like IfaceClsInst
                  }
 
 data IfaceRule
@@ -176,7 +175,7 @@ data IfaceRule
         ifRuleArgs   :: [IfaceExpr],    -- Args of LHS
         ifRuleRhs    :: IfaceExpr,
         ifRuleAuto   :: Bool,
-        ifRuleOrph   :: Maybe OccName   -- Just like IfaceInst
+        ifRuleOrph   :: Maybe OccName   -- Just like IfaceClsInst
     }
 
 data IfaceAnnotation
@@ -300,8 +299,32 @@ that is what is seen by importing module with --make
 
 Note [Orphans]: the ifInstOrph and ifRuleOrph fields
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-If a module contains any "orphans", then its interface file is read
-regardless, so that its instances are not missed. 
+Class instances, rules, and family instances are divided into orphans
+and non-orphans.  Roughly speaking, an instance/rule is an orphan if
+its left hand side mentions nothing defined in this module.  Orphan-hood
+has two major consequences
+
+ * A non-orphan is not finger-printed separately.  Instead, for
+   fingerprinting purposes it is treated as part of the entity it
+   mentions on the LHS.  For example
+      data T = T1 | T2
+      instance Eq T where ....
+   The instance (Eq T) is incorprated as part of T's fingerprint.
+
+   In constrast, orphans are all fingerprinted together in the 
+   mi_orph_hash field of the ModIface. 
+  
+   See MkIface.addFingerprints.
+
+ * A module that contains orphans is called an "orphan module".  If
+   the module being compiled depends (transitively) on an oprhan
+   module M, then M.hi is read in regardless of whether M is oherwise
+   needed. This is to ensure that we don't miss any instance decls in
+   M.  But it's painful, because it means we need to keep track of all
+   the orphan modules below us.
+
+Orphan-hood is computed when we generate an IfaceInst, IfaceRule, or
+IfaceFamInst respectively: 
 
  - If an instance is an orphan its ifInstOprh field is Nothing
    Otherwise ifInstOrph is (Just n) where n is the Name of a
@@ -311,9 +334,13 @@ regardless, so that its instances are not missed.
  - Similarly for ifRuleOrph
    The computation is done by MkIface.coreRuleToIfaceRule
 
+Note [When exactly is an instance decl an orphan?]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  (see MkIface.instanceToIfaceInst, which implements this)
 Roughly speaking, an instance is an orphan if its head (after the =>)
-mentions nothing defined in this module.  Functional dependencies
-complicate the situation though. Consider
+mentions nothing defined in this module.  
+
+Functional dependencies complicate the situation though. Consider
 
   module M where { class C a b | a -> b }
 
@@ -339,7 +366,7 @@ More precisely, an instance is an orphan iff
   defined in this module.
 
 (Note that these conditions hold trivially if the class is locally
-defined.)
+defined.)  
 
 Note [Versioning of instances]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -349,38 +376,34 @@ See [http://hackage.haskell.org/trac/ghc/wiki/Commentary/Compiler/RecompilationA
 -- -----------------------------------------------------------------------------
 -- Utils on IfaceSyn
 
-ifaceDeclSubBndrs :: IfaceDecl -> [OccName]
+ifaceDeclImplicitBndrs :: IfaceDecl -> [OccName]
 --  *Excludes* the 'main' name, but *includes* the implicitly-bound names
 -- Deeply revolting, because it has to predict what gets bound,
 -- especially the question of whether there's a wrapper for a datacon
+-- See Note [Implicit TyThings] in HscTypes
 
 -- N.B. the set of names returned here *must* match the set of
 -- TyThings returned by HscTypes.implicitTyThings, in the sense that
 -- TyThing.getOccName should define a bijection between the two lists.
 -- This invariant is used in LoadIface.loadDecl (see note [Tricky iface loop])
 -- The order of the list does not matter.
-ifaceDeclSubBndrs IfaceData {ifCons = IfAbstractTyCon {}}  = []
+ifaceDeclImplicitBndrs IfaceData {ifCons = IfAbstractTyCon {}}  = []
 
 -- Newtype
-ifaceDeclSubBndrs (IfaceData {ifName = tc_occ,
+ifaceDeclImplicitBndrs (IfaceData {ifName = tc_occ,
                               ifCons = IfNewTyCon (
-                                        IfCon { ifConOcc = con_occ }),
-                              ifFamInst = famInst})
-  =   -- implicit coerion and (possibly) family instance coercion
-    (mkNewTyCoOcc tc_occ) : (famInstCo famInst tc_occ) ++
+                                        IfCon { ifConOcc = con_occ })})
+  =   -- implicit newtype coercion
+    (mkNewTyCoOcc tc_occ) : -- JPM: newtype coercions shouldn't be implicit
       -- data constructor and worker (newtypes don't have a wrapper)
     [con_occ, mkDataConWorkerOcc con_occ]
 
 
-ifaceDeclSubBndrs (IfaceData {ifName = tc_occ,
-                              ifCons = IfDataTyCon cons,
-                              ifFamInst = famInst})
-  =   -- (possibly) family instance coercion;
-      -- there is no implicit coercion for non-newtypes
-    famInstCo famInst tc_occ
-      -- for each data constructor in order,
-      --    data constructor, worker, and (possibly) wrapper
-    ++ concatMap dc_occs cons
+ifaceDeclImplicitBndrs (IfaceData {ifName = _tc_occ,
+                              ifCons = IfDataTyCon cons })
+  = -- for each data constructor in order,
+    --    data constructor, worker, and (possibly) wrapper
+    concatMap dc_occs cons
   where
     dc_occs con_decl
         | has_wrapper = [con_occ, work_occ, wrap_occ]
@@ -392,7 +415,7 @@ ifaceDeclSubBndrs (IfaceData {ifName = tc_occ,
           has_wrapper = ifConWrapper con_decl     -- This is the reason for
                                                   -- having the ifConWrapper field!
 
-ifaceDeclSubBndrs (IfaceClass {ifCtxt = sc_ctxt, ifName = cls_tc_occ,
+ifaceDeclImplicitBndrs (IfaceClass {ifCtxt = sc_ctxt, ifName = cls_tc_occ,
                                ifSigs = sigs, ifATs = ats })
   = --   (possibly) newtype coercion
     co_occs ++
@@ -415,16 +438,7 @@ ifaceDeclSubBndrs (IfaceClass {ifCtxt = sc_ctxt, ifName = cls_tc_occ,
     dc_occ = mkClassDataConOcc cls_tc_occ
     is_newtype = n_sigs + n_ctxt == 1 -- Sigh
 
-ifaceDeclSubBndrs (IfaceSyn {ifName = tc_occ,
-                             ifFamInst = famInst})
-  = famInstCo famInst tc_occ
-
-ifaceDeclSubBndrs _ = []
-
--- coercion for data/newtype family instances
-famInstCo :: Maybe (IfaceTyCon, [IfaceType]) -> OccName -> [OccName]
-famInstCo Nothing  _       = []
-famInstCo (Just _) baseOcc = [mkInstTyCoOcc baseOcc]
+ifaceDeclImplicitBndrs _ = []
 
 ----------------------------- Printing IfaceDecl ------------------------------
 
@@ -442,10 +456,9 @@ pprIfaceDecl (IfaceForeign {ifName = tycon})
   = hsep [ptext (sLit "foreign import type dotnet"), ppr tycon]
 
 pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars,
-                        ifSynRhs = Just mono_ty,
-                        ifFamInst = mbFamInst})
+                        ifSynRhs = Just mono_ty})
   = hang (ptext (sLit "type") <+> pprIfaceDeclHead [] tycon tyvars)
-       4 (vcat [equals <+> ppr mono_ty, pprFamily mbFamInst])
+       4 (vcat [equals <+> ppr mono_ty])
 
 pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars,
                         ifSynRhs = Nothing, ifSynKind = kind })
@@ -454,14 +467,14 @@ pprIfaceDecl (IfaceSyn {ifName = tycon, ifTyVars = tyvars,
 
 pprIfaceDecl (IfaceData {ifName = tycon, ifCtxt = context,
                          ifTyVars = tyvars, ifCons = condecls,
-                         ifRec = isrec, ifFamInst = mbFamInst})
+                         ifRec = isrec, ifAxiom = mbAxiom})
   = hang (pp_nd <+> pprIfaceDeclHead context tycon tyvars)
        4 (vcat [pprRec isrec, pp_condecls tycon condecls,
-                pprFamily mbFamInst])
+                pprAxiom mbAxiom])
   where
     pp_nd = case condecls of
                 IfAbstractTyCon dis -> ptext (sLit "abstract") <> parens (ppr dis)
-                IfOpenDataTyCon     -> ptext (sLit "data family")
+                IfDataFamTyCon     -> ptext (sLit "data family")
                 IfDataTyCon _       -> ptext (sLit "data")
                 IfNewTyCon _        -> ptext (sLit "newtype")
 
@@ -473,12 +486,17 @@ pprIfaceDecl (IfaceClass {ifCtxt = context, ifName = clas, ifTyVars = tyvars,
                 sep (map ppr ats),
                 sep (map ppr sigs)])
 
+pprIfaceDecl (IfaceAxiom {ifName = name, ifTyVars = tyvars,
+                          ifLHS = lhs, ifRHS = rhs})
+  = hang (ptext (sLit "axiom") <+> ppr name <+> ppr tyvars)
+       2 (dcolon <+> ppr lhs <+> text "~#" <+> ppr rhs)
+
 pprRec :: RecFlag -> SDoc
 pprRec isrec = ptext (sLit "RecFlag") <+> ppr isrec
 
-pprFamily :: Maybe (IfaceTyCon, [IfaceType]) -> SDoc
-pprFamily Nothing        = ptext (sLit "FamilyInstance: none")
-pprFamily (Just famInst) = ptext (sLit "FamilyInstance:") <+> ppr famInst
+pprAxiom :: Maybe Name -> SDoc
+pprAxiom Nothing   = ptext (sLit "FamilyInstance: none")
+pprAxiom (Just ax) = ptext (sLit "FamilyInstance:") <+> ppr ax
 
 instance Outputable IfaceClassOp where
    ppr (IfaceClassOp n dm ty) = ppr n <+> ppr dm <+> dcolon <+> ppr ty
@@ -496,7 +514,7 @@ pprIfaceDeclHead context thing tyvars
 
 pp_condecls :: OccName -> IfaceConDecls -> SDoc
 pp_condecls _  (IfAbstractTyCon {}) = empty
-pp_condecls _  IfOpenDataTyCon      = empty
+pp_condecls _  IfDataFamTyCon      = empty
 pp_condecls tc (IfNewTyCon c)   = equals <+> pprIfaceConDecl tc c
 pp_condecls tc (IfDataTyCon cs) = equals <+> sep (punctuate (ptext (sLit " |"))
                                                             (map (pprIfaceConDecl tc) cs))
@@ -545,8 +563,8 @@ instance Outputable IfaceRule where
                         ptext (sLit "=") <+> ppr rhs])
       ]
 
-instance Outputable IfaceInst where
-  ppr (IfaceInst {ifDFun = dfun_id, ifOFlag = flag,
+instance Outputable IfaceClsInst where
+  ppr (IfaceClsInst {ifDFun = dfun_id, ifOFlag = flag,
                   ifInstCls = cls, ifInstTys = mb_tcs})
     = hang (ptext (sLit "instance") <+> ppr flag
                 <+> ppr cls <+> brackets (pprWithCommas ppr_rough mb_tcs))
@@ -554,10 +572,10 @@ instance Outputable IfaceInst where
 
 instance Outputable IfaceFamInst where
   ppr (IfaceFamInst {ifFamInstFam = fam, ifFamInstTys = mb_tcs,
-                     ifFamInstTyCon = tycon_id})
+                     ifFamInstAxiom = tycon_ax})
     = hang (ptext (sLit "family instance") <+>
             ppr fam <+> brackets (pprWithCommas ppr_rough mb_tcs))
-         2 (equals <+> ppr tycon_id)
+         2 (equals <+> ppr tycon_ax)
 
 ppr_rough :: Maybe IfaceTyCon -> SDoc
 ppr_rough Nothing   = dot
@@ -717,13 +735,12 @@ freeNamesIfDecl IfaceForeign{} =
   emptyNameSet
 freeNamesIfDecl d@IfaceData{} =
   freeNamesIfTvBndrs (ifTyVars d) &&&
-  freeNamesIfTcFam (ifFamInst d) &&&
+  maybe emptyNameSet unitNameSet (ifAxiom d) &&&
   freeNamesIfContext (ifCtxt d) &&&
   freeNamesIfConDecls (ifCons d)
 freeNamesIfDecl d@IfaceSyn{} =
   freeNamesIfTvBndrs (ifTyVars d) &&&
   freeNamesIfSynRhs (ifSynRhs d) &&&
-  freeNamesIfTcFam (ifFamInst d) &&&
   freeNamesIfKind (ifSynKind d) -- IA0_NOTE: because of promotion, we
                                 -- return names in the kind signature
 freeNamesIfDecl d@IfaceClass{} =
@@ -731,6 +748,10 @@ freeNamesIfDecl d@IfaceClass{} =
   freeNamesIfContext (ifCtxt d) &&&
   fnList freeNamesIfAT     (ifATs d) &&&
   fnList freeNamesIfClsSig (ifSigs d)
+freeNamesIfDecl d@IfaceAxiom{} =
+  freeNamesIfTvBndrs (ifTyVars d) &&&
+  freeNamesIfType (ifLHS d) &&&
+  freeNamesIfType (ifRHS d)
 
 freeNamesIfIdDetails :: IfaceIdDetails -> NameSet
 freeNamesIfIdDetails (IfRecSelId tc _) = freeNamesIfTc tc
@@ -740,12 +761,6 @@ freeNamesIfIdDetails _                 = emptyNameSet
 freeNamesIfSynRhs :: Maybe IfaceType -> NameSet
 freeNamesIfSynRhs (Just ty) = freeNamesIfType ty
 freeNamesIfSynRhs Nothing   = emptyNameSet
-
-freeNamesIfTcFam :: Maybe (IfaceTyCon, [IfaceType]) -> NameSet
-freeNamesIfTcFam (Just (tc,tys)) =
-  freeNamesIfTc tc &&& fnList freeNamesIfType tys
-freeNamesIfTcFam Nothing =
-  emptyNameSet
 
 freeNamesIfContext :: IfaceContext -> NameSet
 freeNamesIfContext = fnList freeNamesIfType
@@ -878,6 +893,12 @@ freeNamesIfRule (IfaceRule { ifRuleBndrs = bs, ifRuleHead = f
     fnList freeNamesIfBndr bs &&&
     fnList freeNamesIfExpr es &&&
     freeNamesIfExpr rhs
+    
+freeNamesIfFamInst :: IfaceFamInst -> NameSet
+freeNamesIfFamInst (IfaceFamInst { ifFamInstFam = famName
+                                 , ifFamInstAxiom = axName })
+  = unitNameSet famName &&&
+    unitNameSet axName
 
 -- helpers
 (&&&) :: NameSet -> NameSet -> NameSet

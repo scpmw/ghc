@@ -66,7 +66,8 @@ module TcRnTypes(
         Implication(..),
         CtLoc(..), ctLocSpan, ctLocOrigin, setCtLocOrigin,
 	CtOrigin(..), EqOrigin(..), 
-        WantedLoc, GivenLoc, GivenKind(..), pushErrCtxt,
+        WantedLoc, GivenLoc, GivenKind(..), pushErrCtxt, 
+        pushErrCtxtSameOrigin,
 
 	SkolemInfo(..),
 
@@ -304,7 +305,7 @@ data TcGblEnv
 	tcg_warns     :: Warnings,	    -- ...Warnings and deprecations
 	tcg_anns      :: [Annotation],      -- ...Annotations
         tcg_tcs       :: [TyCon],           -- ...TyCons and Classes
-	tcg_insts     :: [Instance],	    -- ...Instances
+	tcg_insts     :: [ClsInst],	    -- ...Instances
         tcg_fam_insts :: [FamInst],         -- ...Family instances
         tcg_rules     :: [LRuleDecl Id],    -- ...Rules
         tcg_fords     :: [LForeignDecl Id], -- ...Foreign import & exports
@@ -1295,6 +1296,10 @@ setCtLocOrigin (CtLoc _ s c) o = CtLoc o s c
 
 pushErrCtxt :: orig -> ErrCtxt -> CtLoc orig -> CtLoc orig
 pushErrCtxt o err (CtLoc _ s errs) = CtLoc o s (err:errs)
+
+pushErrCtxtSameOrigin :: ErrCtxt -> CtLoc orig -> CtLoc orig
+-- Just add information w/o updating the origin!
+pushErrCtxtSameOrigin err (CtLoc o s errs) = CtLoc o s (err:errs)
 
 pprArising :: CtOrigin -> SDoc
 -- Used for the main, top-level error message

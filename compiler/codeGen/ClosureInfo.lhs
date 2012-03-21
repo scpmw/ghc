@@ -43,7 +43,7 @@ module ClosureInfo (
         closureFunInfo, isKnownFun,
         funTag, funTagLFInfo, tagForArity, clHasCafRefs,
 
-	enterIdLabel, enterLocalIdLabel, enterReturnPtLabel,
+        enterIdLabel, enterReturnPtLabel,
 
 	nodeMustPointToIt, 
 	CallMethod(..), getCallMethod,
@@ -1034,11 +1034,6 @@ enterIdLabel :: Name -> CafInfo -> CLabel
 enterIdLabel id
   | tablesNextToCode = mkInfoTableLabel id
   | otherwise        = mkEntryLabel id
-
-enterLocalIdLabel :: Name -> CafInfo -> CLabel
-enterLocalIdLabel id
-  | tablesNextToCode = mkLocalInfoTableLabel id
-  | otherwise        = mkLocalEntryLabel id
 
 enterReturnPtLabel :: Unique -> CLabel
 enterReturnPtLabel name

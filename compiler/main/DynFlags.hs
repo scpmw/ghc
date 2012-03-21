@@ -29,6 +29,7 @@ module DynFlags (
         xopt_set,
         xopt_unset,
         DynFlags(..),
+        HasDynFlags(..),
         RtsOptsEnabled(..),
         HscTarget(..), isObjectTarget, defaultObjectTarget,
         GhcMode(..), isOneShot,
@@ -403,7 +404,8 @@ data ExtensionFlag
    | Opt_ConstraintKinds
    | Opt_PolyKinds                -- Kind polymorphism
    | Opt_DataKinds                -- Datatype promotion
-
+   | Opt_InstanceSigs
+ 
    | Opt_StandaloneDeriving
    | Opt_DeriveDataTypeable
    | Opt_DeriveFunctor
@@ -585,6 +587,9 @@ data DynFlags = DynFlags {
   -- | what kind of {-# SCC #-} to add automatically
   profAuto              :: ProfAuto
  }
+
+class HasDynFlags m where
+    getDynFlags :: m DynFlags
 
 data ProfAuto
   = NoProfAuto         -- ^ no SCC annotations added
@@ -1947,6 +1952,7 @@ xFlags = [
   ( "ConstraintKinds",                  Opt_ConstraintKinds, nop ),
   ( "PolyKinds",                        Opt_PolyKinds, nop ),
   ( "DataKinds",                        Opt_DataKinds, nop ),
+  ( "InstanceSigs",                     Opt_InstanceSigs, nop ),
   ( "MonoPatBinds",                     Opt_MonoPatBinds,
     \ turn_on -> when turn_on $ deprecate "Experimental feature now removed; has no effect" ),
   ( "ExplicitForAll",                   Opt_ExplicitForAll, nop ),

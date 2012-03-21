@@ -113,12 +113,12 @@ stmtToInstrs stmt = case stmt of
         -> genCall target res args ret
 
     -- Tail call
-    CmmJump arg _ -> genJump arg
+    CmmJump arg -> genJump arg
 
     -- CPS, only tail calls, no return's
     -- Actually, there are a few return statements that occur because of hand
     -- written Cmm code.
-    CmmReturn _
+    CmmReturn
         -> return (unitOL $ Return Nothing, [])
 
 

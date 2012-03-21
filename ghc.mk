@@ -666,17 +666,12 @@ $(foreach p,$(PACKAGES_STAGE0),$(eval libraries/$p_dist-boot_DO_HADDOCK = NO))
 
 # Build the Haddock contents and index
 ifeq "$(HADDOCK_DOCS)" "YES"
-libraries/index.html: inplace/bin/haddock$(exeext) $(ALL_HADDOCK_FILES)
+libraries/dist-haddock/index.html: inplace/bin/haddock$(exeext) $(ALL_HADDOCK_FILES)
 	cd libraries && sh gen_contents_index --inplace
 ifeq "$(phase)" "final"
-$(eval $(call all-target,library_doc_index,libraries/index.html))
+$(eval $(call all-target,library_doc_index,libraries/dist-haddock/index.html))
 endif
-INSTALL_LIBRARY_DOCS += libraries/*.html libraries/*.gif libraries/*.css libraries/*.js
-CLEAN_FILES += $(wildcard libraries/doc-index*   \
-                          libraries/haddock*.css \
-                          libraries/haddock*.js  \
-                          libraries/index*.html  \
-                          libraries/*.gif)
+INSTALL_LIBRARY_DOCS += libraries/dist-haddock/*
 endif
 
 # -----------------------------------------------------------------------------
@@ -1118,9 +1113,8 @@ sdist-testsuite-prep :
 	$(call removeTrees,$(SRC_DIST_TESTSUITE_DIR)/testsuite/.git)
 
 .PHONY: sdist
-sdist : sdist-ghc-prep sdist-testsuite-prep
-	cd $(SRC_DIST_GHC_ROOT) && "$(TAR_CMD)" chf - $(SRC_DIST_BASE_NAME) 2> src_ghc_log | bzip2 > $(TOP)/$(SRC_DIST_GHC_TARBALL)
-	cd $(SRC_DIST_TESTSUITE_ROOT) && "$(TAR_CMD)" chf - $(SRC_DIST_BASE_NAME) 2> src_ghc_log | bzip2 > $(TOP)/$(SRC_DIST_TESTSUITE_TARBALL)
+sdist : sdist-prep
+	"$(TAR_CMD)" chf - $(SRC_DIST_NAME) 2>src_log | bzip2 >$(TOP)/$(SRC_DIST_TARBALL)
 
 sdist-manifest : $(SRC_DIST_GHC_TARBALL)
 	tar tjf $(SRC_DIST_GHC_TARBALL) | sed "s|^ghc-$(ProjectVersion)/||" | sort >sdist-manifest
@@ -1141,7 +1135,7 @@ ifeq "$(BootingFromHc)" "YES"
 # flags explicitly to C compilations.
 SRC_CC_OPTS += -DNO_REGS -DUSE_MINIINTERPRETER
 SRC_CC_OPTS += -D__GLASGOW_HASKELL__=$(ProjectVersionInt)
-SRC_CC_OPTS += -I$(GHC_INCLUDE_DIR)
+SRC_CC_OPTS += $(addprefix -I,$(GHC_INCLUDE_DIRS))
 endif
 
 # -----------------------------------------------------------------------------
@@ -1162,10 +1156,12 @@ CLEAN_FILES += libraries/bootstrapping.conf
 CLEAN_FILES += libraries/integer-gmp/cbits/GmpDerivedConstants.h
 CLEAN_FILES += libraries/integer-gmp/cbits/mkGmpDerivedConstants
 
-# These two are no longer generated, but we still clean them for a while
+# These four are no longer generated, but we still clean them for a while
 # as they may still be in old GHC trees:
 CLEAN_FILES += includes/GHCConstants.h
 CLEAN_FILES += includes/DerivedConstants.h
+CLEAN_FILES += includes/ghcautoconf.h
+CLEAN_FILES += includes/ghcplatform.h
 
 clean : clean_files clean_libraries
 
@@ -1189,6 +1185,11 @@ $(foreach lib,$(PACKAGES_STAGE0),\
 $(foreach lib,$(PACKAGES_STAGE1) $(PACKAGES_STAGE2),\
   $(eval $(call clean-target,libraries/$(lib),dist-install,libraries/$(lib)/dist-install)))
 endif
+
+clean : clean_haddock_index
+.PHONY: clean_haddock_index
+clean_haddock_index:
+	$(call removeTrees,libraries/dist-haddock)
 
 clean : clean_bindistprep
 .PHONY: clean_bindistprep

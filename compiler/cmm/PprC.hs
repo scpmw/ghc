@@ -172,7 +172,7 @@ pprLocalness lbl | not $ externallyVisibleCLabel lbl = ptext (sLit "static ")
 pprStmt :: Platform -> CmmStmt -> SDoc
 
 pprStmt platform stmt = case stmt of
-    CmmReturn _  -> panic "pprStmt: return statement should have been cps'd away"
+    CmmReturn    -> panic "pprStmt: return statement should have been cps'd away"
     CmmNop       -> empty
     CmmComment _ -> empty -- (hang (ptext (sLit "/*")) 3 (ftext s)) $$ ptext (sLit "*/")
                           -- XXX if the string contains "*/", we need to fix it
@@ -248,7 +248,7 @@ pprStmt platform stmt = case stmt of
 
     CmmBranch ident          -> pprBranch ident
     CmmCondBranch expr ident -> pprCondBranch platform expr ident
-    CmmJump lbl _params      -> mkJMP_(pprExpr platform lbl) <> semi
+    CmmJump lbl              -> mkJMP_(pprExpr platform lbl) <> semi
     CmmSwitch arg ids        -> pprSwitch platform arg ids
 
 pprCFunType :: SDoc -> CCallConv -> [HintedCmmFormal] -> [HintedCmmActual] -> SDoc
@@ -931,7 +931,7 @@ te_Stmt (CmmCall _ rs es _)     = mapM_ (te_temp.hintlessCmm) rs >>
                                   mapM_ (te_Expr.hintlessCmm) es
 te_Stmt (CmmCondBranch e _)     = te_Expr e
 te_Stmt (CmmSwitch e _)         = te_Expr e
-te_Stmt (CmmJump e _)           = te_Expr e
+te_Stmt (CmmJump e)             = te_Expr e
 te_Stmt _                       = return ()
 
 te_Expr :: CmmExpr -> TE ()
