@@ -105,10 +105,10 @@ cmmMetaLlvmUnit mod_loc = do
   procTypeId <- getProcTypeMeta
   procIds <- getProcMetaIds
   let toMetaList      = LMMeta . map LMMetaRef
-      enumTypeMetas   = toMetaList []
-      retainTypeMetas = toMetaList [procTypeId]
-      subprogramMetas = toMetaList procIds
-      globalMetas     = toMetaList []
+      enumTypeMetas   = []
+      retainTypeMetas = [procTypeId]
+      subprogramMetas = procIds
+      globalMetas     = []
 
   -- Data about compilation
   srcPath <- liftIO $ getCurrentDirectory
@@ -129,16 +129,24 @@ cmmMetaLlvmUnit mod_loc = do
     , LMStaticLit (mkI1 $ opt > 0)               -- Optimized?
     , LMMetaString (fsLit "")                    -- Flags (?)
     , LMStaticLit (mkI32 0)                      -- Runtime version (?)
-    , enumTypeMetas                              -- List of enums types
-    , retainTypeMetas                            -- List of retained types
-    , subprogramMetas                            -- List of subprograms
-    , globalMetas                                -- List of global variables
+    , toMetaList enumTypeMetas                   -- List of enums types
+    , toMetaList retainTypeMetas                 -- List of retained types
+    , toMetaList subprogramMetas                 -- List of subprograms
+    , toMetaList globalMetas                     -- List of global variables
     ]
 
-  -- Generate a list of all compilation units defined (just one)
-  renderLlvm $ pprLlvmData
-    ([LMGlobal (LMNamedMeta (fsLit "llvm.dbg.cu"))
-               (Just (LMMetaRefs [unitId]))], [])
+  let mkNamedMeta name xs =
+        renderLlvm $ pprLlvmData
+          ([LMGlobal (LMNamedMeta (fsLit name))
+                     (Just (LMMetaRefs xs))], [])
+
+  -- This is probably redundant. But judging by what clang produces,
+  -- just emitting "llvm.dbg.cu" isn't the only option. So let's be
+  -- extra-safe here.
+  mkNamedMeta "llvm.dbg.cu"   [unitId]
+  mkNamedMeta "llvm.dbg.sp"   subprogramMetas
+  mkNamedMeta "llvm.dbg.enum" enumTypeMetas
+  mkNamedMeta "llvm.dbg.gv"   globalMetas
 
   return ()
 
@@ -160,6 +168,7 @@ emitFileMeta filePath = do
         , LMMetaString (mkFastString srcPath)        -- Source file directory
         , LMMetaRef unitId                           -- Reference to compile unit
         ]
+      setFileMeta filePath fileId
 
       return fileId
 
@@ -212,6 +221,7 @@ cmmMetaLlvmProc cmmLabel entryLabel mod_loc tiMap = do
     , LMStaticLit (mkI1 $ opt > 0)               -- Optimized
     , LMStaticPointer funRef                     -- Function pointer
     ]
+  addProcMeta procId
 
   -- Generate source annotation using the given ID (this is used to
   -- reference it from LLVM code).

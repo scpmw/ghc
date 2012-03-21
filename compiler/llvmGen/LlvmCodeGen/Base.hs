@@ -21,7 +21,7 @@ module LlvmCodeGen.Base (
         getMetaUniqueId,
         setGlobalMetas, getUnitMeta, getProcTypeMeta,
         setFileMeta, getFileMeta,
-        setProcMeta, getProcMeta, getProcMetaIds,
+        addProcMeta, getProcMetaIds,
 
         cmmToLlvmType, widthToLlvmFloat, widthToLlvmInt, llvmFunTy,
         llvmFunSig, llvmStdFunAttrs, llvmFunAlign, llvmInfAlign,
@@ -180,7 +180,7 @@ data LlvmEnv = LlvmEnv
   , envUnitMeta :: LMMetaInt
   , envProcTypeMeta :: LMMetaInt
   , envFileMeta :: UniqFM LMMetaInt
-  , envProcMeta :: UniqFM LMMetaInt
+  , envProcMeta :: [LMMetaInt]
   }
 
 type LlvmEnvMap = UniqFM LlvmType
@@ -215,7 +215,7 @@ runLlvm dflags ver out us m = do
                       , envUnitMeta = (-1)
                       , envProcTypeMeta = (-1)
                       , envFileMeta = emptyUFM
-                      , envProcMeta = emptyUFM
+                      , envProcMeta = []
                       }
 
 -- | Clear variables from the environment.
@@ -332,14 +332,11 @@ getFileMeta :: LMString -> LlvmM (Maybe LMMetaInt)
 getFileMeta = getLlvmEnvUFM envFileMeta
 
 -- | Sets metadata node for given procedure
-setProcMeta :: LMString -> LMMetaInt -> LlvmM ()
-setProcMeta f m = LlvmM $ \env -> return ((), env { envProcMeta = addToUFM (envProcMeta env) f m })
--- | Gets metadata node for given procedure (if any)
-getProcMeta :: LMString -> LlvmM (Maybe LMMetaInt)
-getProcMeta = getLlvmEnvUFM envProcMeta
+addProcMeta :: LMMetaInt -> LlvmM ()
+addProcMeta m = LlvmM $ \env -> return ((), env { envProcMeta = m:envProcMeta env })
 -- | Returns all procedure meta data IDs
 getProcMetaIds :: LlvmM [LMMetaInt]
-getProcMetaIds = getLlvmEnv (eltsUFM . envProcMeta)
+getProcMetaIds = getLlvmEnv (reverse . envProcMeta)
 
 -- ----------------------------------------------------------------------------
 -- * Label handling
