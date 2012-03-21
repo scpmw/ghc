@@ -1462,7 +1462,7 @@ mkExtraObj dflags extn xs
 --
 mkExtraObjToLinkIntoBinary :: DynFlags -> [PackageId] -> IO FilePath
 mkExtraObjToLinkIntoBinary dflags dep_packages = do
-   link_info <- getLinkInfo dflags dep_packages
+   _link_info <- getLinkInfo dflags dep_packages
 
    let have_rts_opts_flags =
          isJust (rtsOpts dflags) || case rtsOptsEnabled dflags of

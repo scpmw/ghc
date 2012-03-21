@@ -47,7 +47,6 @@ import Name
 import TyCon
 import Module
 import ErrUtils
-import Panic
 
 codeGen :: DynFlags
         -> Module                     -- Module we are compiling

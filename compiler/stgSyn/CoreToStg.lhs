@@ -363,7 +363,7 @@ coreToStgExpr (Cast expr _)
 
 -- Cases require a little more real work.
 
-coreToStgExpr (Case scrut bndr ty alts) = do
+coreToStgExpr (Case scrut bndr _ alts) = do
     (alts2, alts_fvs, alts_escs)
        <- extendVarEnvLne [(bndr, LambdaBound)] $ do
             (alts2, fvs_s, escs_s) <- mapAndUnzip3M vars_alt alts
