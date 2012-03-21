@@ -10,8 +10,8 @@ module Llvm.PpLlvm (
     ppLlvmComment,
     ppLlvmGlobals,
     ppLlvmGlobal,
-    ppLlvmAlias,
     ppLlvmAliases,
+    ppLlvmAlias,
     ppLlvmFunctionDecls,
     ppLlvmFunctionDecl,
     ppLlvmFunctions,
@@ -75,10 +75,10 @@ ppLlvmGlobal (LMGlobal var@(LMGlobalVar _ _ link x a c) dat) =
     in ppAssignment var $ ppr link <+> const' <+> rhs <> sect <> align
        $+$ newLine
 
-ppLlvmGlobal (LMGlobal var@(LMMetaVar _) (Just val)) =
+ppLlvmGlobal (LMGlobal var@(LMMetaUnnamed _) (Just val)) =
   ppAssignment var (ppr val)
 
-ppLlvmGlobal (LMGlobal var@(LMNamedMeta _) (Just val)) =
+ppLlvmGlobal (LMGlobal var@(LMMetaNamed _) (Just val)) =
   ppAssignment var (ppr val)
 
 ppLlvmGlobal (LMGlobal var val) = error $ "Non Global var ppr as global! "
@@ -191,6 +191,7 @@ ppLlvmStatement stmt =
         Expr        expr          -> ind $ ppLlvmExpression expr
         Unreachable               -> ind $ text "unreachable"
         Nop                       -> empty
+        MetaStmt    meta s        -> ppMetaStatement meta s
 
 
 -- | Print out an LLVM expression.
@@ -207,6 +208,7 @@ ppLlvmExpression expr
         Malloc     tp amount        -> ppMalloc tp amount
         Phi        tp precessors    -> ppPhi tp precessors
         Asm        asm c ty v se sk -> ppAsm asm c ty v se sk
+        MetaExpr   meta expr        -> ppMetaExpr meta expr
 
 
 --------------------------------------------------------------------------------
@@ -339,6 +341,20 @@ ppAsm asm constraints rty vars sideeffect alignstack =
   in text "call" <+> rty' <+> text "asm" <+> side <+> align <+> asm' <> comma
         <+> cons <> vars'
 
+ppMetaStatement :: [MetaData] -> LlvmStatement -> SDoc
+ppMetaStatement meta stmt = ppLlvmStatement stmt <> ppMetas meta
+
+
+ppMetaExpr :: [MetaData] -> LlvmExpression -> SDoc
+ppMetaExpr meta expr = ppLlvmExpression expr <> ppMetas meta
+
+
+ppMetas :: [MetaData] -> SDoc
+ppMetas meta = hcat $ map ppMeta meta
+  where
+    ppMeta (name, var)
+        = comma <+> exclamation <> ftext name <+> ppr var
+
 --------------------------------------------------------------------------------
 -- * Misc functions
 --------------------------------------------------------------------------------
@@ -347,3 +363,6 @@ ppAsm asm constraints rty vars sideeffect alignstack =
 newLine :: SDoc
 newLine = empty
 
+-- | Exclamation point.
+exclamation :: SDoc
+exclamation = char '!'

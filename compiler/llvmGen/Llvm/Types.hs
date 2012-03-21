@@ -91,7 +91,7 @@ type LMConst = Bool -- ^ is a variable constant or not
 newtype LMMetaInt = LMMetaInt {unLMMetaVar :: Int}
   deriving (Eq, Num, Outputable, Show)
 
--- | Llvm Variables
+-- | LLVM Variables
 data LlvmVar
   -- | Variables with a global scope.
   = LMGlobalVar LMString LlvmType LlvmLinkageType LMSection LMAlign LMConst
@@ -103,14 +103,14 @@ data LlvmVar
   -- | A constant variable
   | LMLitVar LlvmLit
   -- | Metadata
-  | LMMetaVar {-# UNPACK #-} !LMMetaInt
-  | LMNamedMeta LMString
+  | LMMetaUnnamed {-# UNPACK #-} !LMMetaInt
+  | LMMetaNamed LMString
   deriving (Eq)
 
 instance Outputable LlvmVar where
   ppr (LMLitVar x)  = ppr x
-  ppr (LMMetaVar x) = char '!' <> ppr x
-  ppr (LMNamedMeta x)= char '!' <> ppr x
+  ppr (LMMetaUnnamed x) = char '!' <> ppr x
+  ppr (LMMetaNamed x) = char '!' <> ppr x
   ppr (x         )  = ppr (getVarType x) <+> ppName x
 
 
@@ -206,8 +206,8 @@ ppName v@(LMGlobalVar {}) = char '@' <> ppPlainName v
 ppName v@(LMLocalVar  {}) = char '%' <> ppPlainName v
 ppName v@(LMNLocalVar {}) = char '%' <> ppPlainName v
 ppName v@(LMLitVar    {}) =             ppPlainName v
-ppName v@(LMMetaVar   {}) = char '!' <> ppPlainName v
-ppName v@(LMNamedMeta {}) = char '!' <> ppPlainName v
+ppName v@(LMMetaUnnamed{})= char '!' <> ppPlainName v
+ppName v@(LMMetaNamed {}) = char '!' <> ppPlainName v
 
 -- | Return the variable name or value of the 'LlvmVar'
 -- in a plain textual representation (e.g. @x@, @y@ or @42@).
@@ -217,8 +217,8 @@ ppPlainName (LMLocalVar  x LMLabel  ) = text (show x)
 ppPlainName (LMLocalVar  x _        ) = text ('l' : show x)
 ppPlainName (LMNLocalVar x _        ) = ftext x
 ppPlainName (LMLitVar    x          ) = ppLit x
-ppPlainName (LMMetaVar   n          ) = ppr n
-ppPlainName (LMNamedMeta n          ) = ppr n
+ppPlainName (LMMetaUnnamed n        ) = ppr n
+ppPlainName (LMMetaNamed n          ) = ppr n
 
 -- | Print a literal value. No type.
 ppLit :: LlvmLit -> SDoc
@@ -237,8 +237,8 @@ getVarType (LMGlobalVar _ y _ _ _ _) = y
 getVarType (LMLocalVar  _ y        ) = y
 getVarType (LMNLocalVar _ y        ) = y
 getVarType (LMLitVar    l          ) = getLitType l
-getVarType (LMMetaVar   _          ) = LMMetaType
-getVarType (LMNamedMeta _          ) = LMMetaType
+getVarType (LMMetaUnnamed _        ) = LMMetaType
+getVarType (LMMetaNamed _          ) = LMMetaType
 
 -- | Return the 'LlvmType' of a 'LlvmLit'
 getLitType :: LlvmLit -> LlvmType
@@ -283,8 +283,8 @@ pVarLift (LMGlobalVar s t l x a c) = LMGlobalVar s (pLift t) l x a c
 pVarLift (LMLocalVar  s t        ) = LMLocalVar  s (pLift t)
 pVarLift (LMNLocalVar s t        ) = LMNLocalVar s (pLift t)
 pVarLift (LMLitVar    _          ) = error $ "Can't lower a literal type!"
-pVarLift (LMMetaVar   _          ) = error $ "Can't lower a metadata type!"
-pVarLift (LMNamedMeta _          ) = error $ "Can't lower a metadata type!"
+pVarLift (LMMetaUnnamed _        ) = error $ "Can't lower a metadata type!"
+pVarLift (LMMetaNamed _          ) = error $ "Can't lower a metadata type!"
 
 -- | Remove the pointer indirection of the supplied type. Only 'LMPointer'
 -- constructors can be lowered.
@@ -298,8 +298,8 @@ pVarLower (LMGlobalVar s t l x a c) = LMGlobalVar s (pLower t) l x a c
 pVarLower (LMLocalVar  s t        ) = LMLocalVar  s (pLower t)
 pVarLower (LMNLocalVar s t        ) = LMNLocalVar s (pLower t)
 pVarLower (LMLitVar    _          ) = error $ "Can't lower a literal type!"
-pVarLower (LMMetaVar   _          ) = error $ "Can't lower a metadata type!"
-pVarLower (LMNamedMeta _          ) = error $ "Can't lower a metadata type!"
+pVarLower (LMMetaUnnamed   _      ) = error $ "Can't lower a metadata type!"
+pVarLower (LMMetaNamed _          ) = error $ "Can't lower a metadata type!"
 
 -- | Test if the given 'LlvmType' is an integer
 isInt :: LlvmType -> Bool

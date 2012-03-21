@@ -138,7 +138,14 @@ data LlvmStatement
   -}
   | Nop
 
+  {- |
+    A LLVM statement with metadata attached to it.
+  -}
+  | MetaStmt [MetaData] LlvmStatement
+
   deriving (Eq)
+
+type MetaData = (LMString, LlvmVar)
 
 
 -- | Llvm Expressions
@@ -228,6 +235,11 @@ data LlvmExpression
                     expression is executed.
   -}
   | Asm LMString LMString LlvmType [LlvmVar] Bool Bool
+
+  {- |
+    A LLVM expression with metadata attached to it.
+  -}
+  | MetaExpr [MetaData] LlvmExpression
 
   deriving (Eq)
 

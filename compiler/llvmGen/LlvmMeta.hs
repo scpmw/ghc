@@ -66,7 +66,7 @@ dW_LANG_Haskell :: Integer
 dW_LANG_Haskell  = 0x8042 -- Chosen arbitrarily
 
 pprMeta :: LMMetaInt -> LlvmStatic -> SDoc
-pprMeta n val = pprLlvmData ([LMGlobal (LMMetaVar n) (Just val)], [])
+pprMeta n val = pprLlvmData ([LMGlobal (LMMetaUnnamed n) (Just val)], [])
 
 cmmMetaLlvmPrelude :: LlvmM ()
 cmmMetaLlvmPrelude = do
@@ -137,7 +137,7 @@ cmmMetaLlvmUnit mod_loc = do
 
   let mkNamedMeta name xs =
         renderLlvm $ pprLlvmData
-          ([LMGlobal (LMNamedMeta (fsLit name))
+          ([LMGlobal (LMMetaNamed (fsLit name))
                      (Just (LMMetaRefs xs))], [])
 
   -- This is probably redundant. But judging by what clang produces,

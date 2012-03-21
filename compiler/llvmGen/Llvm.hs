@@ -34,6 +34,9 @@ module Llvm (
         -- ** Some basic types
         i64, i32, i16, i8, i1, i8Ptr, llvmWord, llvmWordPtr,
 
+        -- ** Metadata types
+        MetaData, LMMetaInt,
+
         -- ** Operations on the type system.
         isGlobal, getLitType, getVarType,
         getLink, getStatType, pVarLift, pVarLower,
@@ -43,10 +46,7 @@ module Llvm (
         ppLit, ppName, ppPlainName,
         ppLlvmModule, ppLlvmComments, ppLlvmComment, ppLlvmGlobals,
         ppLlvmGlobal, ppLlvmFunctionDecls, ppLlvmFunctionDecl, ppLlvmFunctions,
-        ppLlvmFunction, ppLlvmAlias, ppLlvmAliases,
-
-        -- * Meta data
-        LMMetaInt
+        ppLlvmFunction, ppLlvmAlias, ppLlvmAliases
 
     ) where
 
