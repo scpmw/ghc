@@ -43,7 +43,10 @@ module Llvm (
         ppLit, ppName, ppPlainName,
         ppLlvmModule, ppLlvmComments, ppLlvmComment, ppLlvmGlobals,
         ppLlvmGlobal, ppLlvmFunctionDecls, ppLlvmFunctionDecl, ppLlvmFunctions,
-        ppLlvmFunction, ppLlvmAlias, ppLlvmAliases
+        ppLlvmFunction, ppLlvmAlias, ppLlvmAliases,
+
+        -- * Meta data
+        LMMetaInt
 
     ) where
 

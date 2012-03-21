@@ -14,13 +14,10 @@ import LlvmCodeGen.Data
 
 import CLabel
 import OldCmm
-import Debug
 
 import FastString
 import Outputable
 import Unique
-
-import qualified Data.Map as Map ( lookup )
 
 -- ----------------------------------------------------------------------------
 -- * Top level
@@ -82,11 +79,11 @@ pprLlvmData (globals, types) =
 
 
 -- | Pretty print LLVM code
-pprLlvmCmmDecl :: TickMap -> Int -> LlvmCmmDecl -> LlvmM (SDoc, [LlvmVar])
-pprLlvmCmmDecl _ _ (CmmData _ lmdata)
+pprLlvmCmmDecl :: Int -> LlvmCmmDecl -> LlvmM (SDoc, [LlvmVar])
+pprLlvmCmmDecl _ (CmmData _ lmdata)
   = return (vcat $ map pprLlvmData lmdata, [])
 
-pprLlvmCmmDecl tick_map count (CmmProc mb_info entry_lbl (ListGraph blks))
+pprLlvmCmmDecl count (CmmProc mb_info entry_lbl (ListGraph blks))
   = do (idoc, ivar) <- case mb_info of
                         Nothing -> return (empty, [])
                         Just (Statics info_lbl dat)
@@ -101,9 +98,8 @@ pprLlvmCmmDecl tick_map count (CmmProc mb_info entry_lbl (ListGraph blks))
                       else Internal
            lmblocks = map (\(BasicBlock id stmts) ->
                                 LlvmBlock (getUnique id) stmts) blks
-           instr = Map.lookup entry_lbl tick_map >>= timInstr
 
-       fun <- mkLlvmFunc lbl' link  sec' lmblocks instr
+       fun <- mkLlvmFunc lbl' link  sec' lmblocks
 
        return (idoc $+$ ppLlvmFunction fun, ivar)
 

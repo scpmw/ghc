@@ -14,11 +14,14 @@ module LlvmCodeGen.Base (
         LlvmM,
         runLlvm, withClearVars, varLookup, varInsert,
         markStackReg, checkStackReg,
-        funLookup, funInsert, getLlvmVer, getLlvmPlatform,
+        funLookup, funInsert, getLlvmVer, getDynFlag, getLlvmPlatform,
         renderLlvm, runUs, markUsedVar, getUsedVars,
         ghcInternalFunctions,
 
-        getMetaUniqueId, setMetaSeed,
+        getMetaUniqueId,
+        setGlobalMetas, getUnitMeta, getProcTypeMeta,
+        setFileMeta, getFileMeta,
+        setProcMeta, getProcMeta, getProcMetaIds,
 
         cmmToLlvmType, widthToLlvmFloat, widthToLlvmInt, llvmFunTy,
         llvmFunSig, llvmStdFunAttrs, llvmFunAlign, llvmInfAlign,
@@ -32,24 +35,24 @@ module LlvmCodeGen.Base (
 #include "HsVersions.h"
 
 import Llvm
-import Llvm.Types
 import LlvmCodeGen.Regs
 
 import CLabel
 import CgUtils ( activeStgRegs )
 import Config
 import Constants
-import Data.IORef
 import FastString
 import OldCmm
 import qualified Outputable as Outp
 import qualified Pretty as Prt
+import DynFlags
 import Platform
 import UniqFM
 import Unique
 import MonadUtils ( MonadIO(..) )
 import BufWrite   ( BufHandle )
 import UniqSupply
+import ErrUtils
 
 -- ----------------------------------------------------------------------------
 -- * Some Data Types
@@ -116,12 +119,12 @@ llvmFunSig' lbl link
                         (map (toParams . getVarType) llvmFunArgs) llvmFunAlign
 
 -- | Create a Haskell function in LLVM.
-mkLlvmFunc :: CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks -> Maybe Int
+mkLlvmFunc :: CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
            -> LlvmM LlvmFunction
-mkLlvmFunc lbl link sec blks instr
+mkLlvmFunc lbl link sec blks
   = do funDec <- llvmFunSig lbl link
        let funArgs = map (fsLit . Outp.showSDoc . ppPlainName) llvmFunArgs
-       return $ LlvmFunction funDec funArgs llvmStdFunAttrs sec blks instr
+       return $ LlvmFunction funDec funArgs llvmStdFunAttrs sec blks
 
 -- | Alignment to use for functions
 llvmFunAlign :: LMAlign
@@ -164,19 +167,23 @@ defaultLlvmVersion = 28
 --
 
 -- two maps, one for functions and one for local vars.
-data LlvmEnv = LlvmEnv { envFunMap :: LlvmEnvMap
-                       , envVarMap :: LlvmEnvMap
-                       , envStackRegs :: [GlobalReg]
-                       , envUsedVars :: [LlvmVar]
-                       , envVersion :: LlvmVersion
-                       , envPlatform :: Platform
-                       , envOutput :: BufHandle
-                       , envUniq :: UniqSupply
-                       , envMetaSupply :: LlvmMetaSupply
-                       }
-type LlvmEnvMap = UniqFM LlvmType
+data LlvmEnv = LlvmEnv
+  { envFunMap :: LlvmEnvMap
+  , envVarMap :: LlvmEnvMap
+  , envStackRegs :: [GlobalReg]
+  , envUsedVars :: [LlvmVar]
+  , envVersion :: LlvmVersion
+  , envDynFlags :: DynFlags
+  , envOutput :: BufHandle
+  , envUniq :: UniqSupply
+  , envFreshMeta :: LMMetaInt
+  , envUnitMeta :: LMMetaInt
+  , envProcTypeMeta :: LMMetaInt
+  , envFileMeta :: UniqFM LMMetaInt
+  , envProcMeta :: UniqFM LMMetaInt
+  }
 
-type LlvmMetaSupply = IORef LMMetaInt
+type LlvmEnvMap = UniqFM LlvmType
 
 -- | The Llvm monad. Wraps @LlvmEnv@ state as well as the @IO@ monad
 newtype LlvmM a = LlvmM { runLlvmM :: LlvmEnv -> IO (a, LlvmEnv) }
@@ -192,21 +199,24 @@ instance MonadIO LlvmM where
                                   return (x, env)
 
 -- | Get initial Llvm environment.
-runLlvm :: Platform -> LlvmVersion -> BufHandle -> UniqSupply -> LlvmM () -> IO ()
-runLlvm platform ver out us m = do
-    metaSupply <- newIORef 0
-    _ <- runLlvmM m (env metaSupply)
+runLlvm :: DynFlags -> LlvmVersion -> BufHandle -> UniqSupply -> LlvmM () -> IO ()
+runLlvm dflags ver out us m = do
+    _ <- runLlvmM m env
     return ()
-  where env ms = LlvmEnv { envFunMap = emptyUFM
-                         , envVarMap = emptyUFM
-                         , envStackRegs = []
-                         , envUsedVars = []
-                         , envVersion = ver
-                         , envPlatform = platform
-                         , envOutput = out
-                         , envUniq = us
-                         , envMetaSupply = ms
-                         }
+  where env = LlvmEnv { envFunMap = emptyUFM
+                      , envVarMap = emptyUFM
+                      , envStackRegs = []
+                      , envUsedVars = []
+                      , envVersion = ver
+                      , envDynFlags = dflags
+                      , envOutput = out
+                      , envUniq = us
+                      , envFreshMeta = 0
+                      , envUnitMeta = (-1)
+                      , envProcTypeMeta = (-1)
+                      , envFileMeta = emptyUFM
+                      , envProcMeta = emptyUFM
+                      }
 
 -- | Clear variables from the environment.
 withClearVars :: LlvmM a -> LlvmM a
@@ -232,24 +242,15 @@ markStackReg r = LlvmM $ \env -> return ((), env { envStackRegs = r : envStackRe
 checkStackReg :: GlobalReg -> LlvmM Bool
 checkStackReg r = LlvmM $ \env -> return (r `elem` envStackRegs env, env)
 
--- | Replace the seed value used for creating metadata IDs
-setMetaSeed :: LMMetaInt -> LlvmM ()
-setMetaSeed seed = LlvmM $ \env@LlvmEnv{envMetaSupply = supply} -> do
-     writeIORef supply seed
-     return $! ((), env)
-
--- | Allocate a new metadata identifier
+-- | Allocate a new global unnamed metadata identifier
 getMetaUniqueId :: LlvmM LMMetaInt
-getMetaUniqueId = LlvmM $ \env@LlvmEnv{envMetaSupply = supply} -> do
-     modifyIORef supply (+1)
-     val <- readIORef supply
-     return $! (val, env)
+getMetaUniqueId = LlvmM $ \env -> return (envFreshMeta env, env { envFreshMeta = envFreshMeta env + 1})
 
 -- | Here we pre-initialise some functions that are used internally by GHC
 -- so as to make sure they have the most general type in the case that
 -- user code also uses these functions but with a different type than GHC
 -- internally. (Main offender is treating return type as 'void' instead of
--- 'void *'. Fixes trac #5486.
+-- 'void *'). Fixes trac #5486.
 ghcInternalFunctions :: LlvmM ()
 ghcInternalFunctions = sequence_
     [ mk "memcpy" i8Ptr [i8Ptr, i8Ptr, llvmWord]
@@ -270,14 +271,23 @@ getLlvmVer :: LlvmM LlvmVersion
 getLlvmVer = LlvmM $ \env -> return (envVersion env, env)
 
 -- | Get the platform we are generating code for
+getDynFlag :: (DynFlags -> a) -> LlvmM a
+getDynFlag f = LlvmM $ \env -> return (f $ envDynFlags env, env)
+
+-- | Get the platform we are generating code for
 getLlvmPlatform :: LlvmM Platform
-getLlvmPlatform = LlvmM $ \env -> return (envPlatform env, env)
+getLlvmPlatform = getDynFlag targetPlatform
 
 -- | Prints the given contents to the output handle
 renderLlvm :: Outp.SDoc -> LlvmM ()
 renderLlvm sdoc = LlvmM $ \env -> do
+
+    -- Write to output
     let doc = Outp.withPprStyleDoc (Outp.mkCodeStyle Outp.CStyle) sdoc
     Prt.bufLeftRender (envOutput env) doc
+
+    -- Dump, if requested
+    dumpIfSet_dyn (envDynFlags env) Opt_D_dump_llvm "LLVM Code" sdoc
     return ((), env)
 
 -- | Run a @UniqSM@ action with our unique supply
@@ -293,6 +303,43 @@ markUsedVar v = LlvmM $ \env -> return ((), env { envUsedVars = v : envUsedVars 
 -- | Return all variables marked as "used" so far
 getUsedVars :: LlvmM [LlvmVar]
 getUsedVars = LlvmM $ \env -> return (envUsedVars env, env)
+
+
+-- | Convenience functions for defining getters
+getLlvmEnv :: (LlvmEnv -> a) -> LlvmM a
+getLlvmEnv f = LlvmM $ \env -> return (f env, env)
+getLlvmEnvUFM :: Uniquable key => (LlvmEnv -> UniqFM a) -> key -> LlvmM (Maybe a)
+getLlvmEnvUFM f s = LlvmM $ \env -> return (lookupUFM (f env) s, env)
+
+-- | Sets global metadata Ids
+setGlobalMetas :: LMMetaInt -> LMMetaInt -> LlvmM ()
+setGlobalMetas unitId procTypeId
+  = LlvmM $ \env -> return ((), env { envUnitMeta = unitId
+                                    , envProcTypeMeta = procTypeId })
+
+-- | Gets metadata ID of current compilation unit
+getUnitMeta :: LlvmM LMMetaInt
+getUnitMeta = getLlvmEnv envUnitMeta
+-- | Gets metadata ID of current compilation unit
+getProcTypeMeta :: LlvmM LMMetaInt
+getProcTypeMeta = getLlvmEnv envProcTypeMeta
+
+-- | Sets metadata node for given file
+setFileMeta :: LMString -> LMMetaInt -> LlvmM ()
+setFileMeta f m = LlvmM $ \env -> return ((), env { envFileMeta = addToUFM (envFileMeta env) f m })
+-- | Gets metadata node for given file (if any)
+getFileMeta :: LMString -> LlvmM (Maybe LMMetaInt)
+getFileMeta = getLlvmEnvUFM envFileMeta
+
+-- | Sets metadata node for given procedure
+setProcMeta :: LMString -> LMMetaInt -> LlvmM ()
+setProcMeta f m = LlvmM $ \env -> return ((), env { envProcMeta = addToUFM (envProcMeta env) f m })
+-- | Gets metadata node for given procedure (if any)
+getProcMeta :: LMString -> LlvmM (Maybe LMMetaInt)
+getProcMeta = getLlvmEnvUFM envProcMeta
+-- | Returns all procedure meta data IDs
+getProcMetaIds :: LlvmM [LMMetaInt]
+getProcMetaIds = getLlvmEnv (eltsUFM . envProcMeta)
 
 -- ----------------------------------------------------------------------------
 -- * Label handling

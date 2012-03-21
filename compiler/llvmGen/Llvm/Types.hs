@@ -153,7 +153,7 @@ data LlvmStatic
   | LMSub LlvmStatic LlvmStatic        -- ^ Constant subtraction operation
 
   -- metadata: Used for recording debug information
-    
+
   | LMMeta [LlvmStatic]                 -- ^ A list of literals and other metadata
   | LMMetaString LMString               -- ^ Literal metadata string
   | LMMetaRef {-# UNPACK #-} !LMMetaInt -- ^ Reference to a global metadata node

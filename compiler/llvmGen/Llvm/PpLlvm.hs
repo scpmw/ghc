@@ -103,7 +103,7 @@ ppLlvmFunctions funcs = vcat $ map ppLlvmFunction funcs
 
 -- | Print out a function definition.
 ppLlvmFunction :: LlvmFunction -> SDoc
-ppLlvmFunction (LlvmFunction dec args attrs sec body instr) =
+ppLlvmFunction (LlvmFunction dec args attrs sec body) =
     let attrDoc = ppSpaceJoin attrs
         secDoc = case sec of
                       Just s' -> text "section" <+> (doubleQuotes $ ftext s')
@@ -111,7 +111,7 @@ ppLlvmFunction (LlvmFunction dec args attrs sec body instr) =
     in text "define" <+> ppLlvmFunctionHeader dec args
         <+> attrDoc <+> secDoc
         $+$ lbrace
-        $+$ ppLlvmBlocks instr body
+        $+$ ppLlvmBlocks body
         $+$ rbrace
 
 -- | Print out a function defenition header.
@@ -154,23 +154,15 @@ ppLlvmFunctionDecl (LlvmFunctionDecl n l c r varg p a)
 
 
 -- | Print out a list of LLVM blocks.
-ppLlvmBlocks :: Maybe Int -> LlvmBlocks -> SDoc
-ppLlvmBlocks tick blocks = vcat $ map (ppLlvmBlock tick) blocks
+ppLlvmBlocks :: LlvmBlocks -> SDoc
+ppLlvmBlocks blocks = vcat $ map ppLlvmBlock blocks
 
 -- | Print out an LLVM block.
 -- It must be part of a function definition.
-ppLlvmBlock :: Maybe Int -> LlvmBlock -> SDoc
-ppLlvmBlock tick (LlvmBlock blockId stmts)
+ppLlvmBlock :: LlvmBlock -> SDoc
+ppLlvmBlock (LlvmBlock blockId stmts)
   = ppLlvmStatement (MkLabel blockId)
-        $+$ nest 4 (vcat $ map ppStmt stmts)
-  where ppStmt | Just n <- tick  = ppLlvmStatementDbg n
-               | otherwise       = ppLlvmStatement
-
--- | Print out an LLVM statement with debug annotation
-ppLlvmStatementDbg :: Int -> LlvmStatement -> SDoc
-ppLlvmStatementDbg _ stmt@(Comment _) = ppLlvmStatement stmt
-ppLlvmStatementDbg _ stmt@(MkLabel _) = ppLlvmStatement stmt
-ppLlvmStatementDbg n stmt             = ppLlvmStatement stmt <> text ", !dbg !" <> ppr n
+        $+$ nest 4 (vcat $ map ppLlvmStatement stmts)
 
 -- | Print out an LLVM statement.
 ppLlvmStatement :: LlvmStatement -> SDoc

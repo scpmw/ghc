@@ -35,21 +35,22 @@ type LlvmStatements = OrdList LlvmStatement
 -- -----------------------------------------------------------------------------
 -- | Top-level of the LLVM proc Code generator
 --
-genLlvmProc :: RawCmmDecl -> LlvmM [LlvmCmmDecl]
-genLlvmProc (CmmProc info lbl (ListGraph blocks)) = do
-    (lmblocks, lmdata) <- basicBlocksCodeGen blocks
+genLlvmProc :: RawCmmDecl -> Maybe LMMetaInt -> LlvmM [LlvmCmmDecl]
+genLlvmProc (CmmProc info lbl (ListGraph blocks)) annotId = do
+    (lmblocks, lmdata) <- basicBlocksCodeGen blocks annotId
     let proc = CmmProc info lbl (ListGraph lmblocks)
     return (proc:lmdata)
 
-genLlvmProc _ = panic "genLlvmProc: case that shouldn't reach here!"
+genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"
 
 -- -----------------------------------------------------------------------------
 -- * Block code generation
 --
 
 -- | Generate code for a list of blocks that make up a complete procedure.
-basicBlocksCodeGen :: [CmmBasicBlock] -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
-basicBlocksCodeGen cmmBlocks
+basicBlocksCodeGen :: [CmmBasicBlock] -> Maybe LMMetaInt
+                      -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
+basicBlocksCodeGen cmmBlocks _annotId
   = do prologue <- funPrologue cmmBlocks
        (blockss, topss) <- fmap unzip $ mapM basicBlockCodeGen cmmBlocks
        let (blocks', allocs) = mapAndUnzip dominateAllocs (concat blockss)

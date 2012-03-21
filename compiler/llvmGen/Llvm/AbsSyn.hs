@@ -56,10 +56,7 @@ data LlvmFunction = LlvmFunction {
     funcSect  :: LMSection,
 
     -- | The body of the functions.
-    funcBody  :: LlvmBlocks,
-
-    -- | An instrumentation number
-    funcInstr :: Maybe Int
+    funcBody  :: LlvmBlocks
   }
 
 type LlvmFunctions  = [LlvmFunction]
