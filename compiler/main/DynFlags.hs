@@ -29,7 +29,7 @@ module DynFlags (
         xopt_set,
         xopt_unset,
         DynFlags(..),
-        HasDynFlags(..),
+        HasDynFlags(..), ContainsDynFlags(..),
         RtsOptsEnabled(..),
         HscTarget(..), isObjectTarget, defaultObjectTarget,
         GhcMode(..), isOneShot,
@@ -348,6 +348,7 @@ data WarningFlag =
    | Opt_WarnAlternativeLayoutRuleTransitional
    | Opt_WarnUnsafe
    | Opt_WarnSafe
+   | Opt_WarnPointlessPragmas
    deriving (Eq, Show, Enum)
 
 data Language = Haskell98 | Haskell2010
@@ -588,11 +589,16 @@ data DynFlags = DynFlags {
   haddockOptions        :: Maybe String,
 
   -- | what kind of {-# SCC #-} to add automatically
-  profAuto              :: ProfAuto
+  profAuto              :: ProfAuto,
+
+  llvmVersion           :: IORef (Int)
  }
 
 class HasDynFlags m where
     getDynFlags :: m DynFlags
+
+class ContainsDynFlags t where
+    extractDynFlags :: t -> DynFlags
 
 data ProfAuto
   = NoProfAuto         -- ^ no SCC annotations added
@@ -824,13 +830,15 @@ initDynFlags dflags = do
  refFilesToClean <- newIORef []
  refDirsToClean <- newIORef Map.empty
  refGeneratedDumps <- newIORef Set.empty
+ refLlvmVersion <- newIORef 28
  return dflags{
-        ways            = ways,
-        buildTag        = mkBuildTag (filter (not . wayRTSOnly) ways),
-        rtsBuildTag     = mkBuildTag ways,
-        filesToClean    = refFilesToClean,
-        dirsToClean     = refDirsToClean,
-        generatedDumps   = refGeneratedDumps
+        ways           = ways,
+        buildTag       = mkBuildTag (filter (not . wayRTSOnly) ways),
+        rtsBuildTag    = mkBuildTag ways,
+        filesToClean   = refFilesToClean,
+        dirsToClean    = refDirsToClean,
+        generatedDumps = refGeneratedDumps,
+        llvmVersion    = refLlvmVersion
         }
 
 -- | The normal 'DynFlags'. Note that they is not suitable for use in this form
@@ -922,7 +930,8 @@ defaultDynFlags mySettings =
         extensions = [],
         extensionFlags = flattenExtensionFlags Nothing [],
         log_action = defaultLogAction,
-        profAuto = NoProfAuto
+        profAuto = NoProfAuto,
+        llvmVersion = panic "defaultDynFlags: No llvmVersion"
       }
 
 type LogAction = Severity -> SrcSpan -> PprStyle -> MsgDoc -> IO ()
@@ -1785,7 +1794,8 @@ fWarningFlags = [
   ( "warn-wrong-do-bind",               Opt_WarnWrongDoBind, nop ),
   ( "warn-alternative-layout-rule-transitional", Opt_WarnAlternativeLayoutRuleTransitional, nop ),
   ( "warn-unsafe",                      Opt_WarnUnsafe, setWarnUnsafe ),
-  ( "warn-safe",                        Opt_WarnSafe, setWarnSafe ) ]
+  ( "warn-safe",                        Opt_WarnSafe, setWarnSafe ),
+  ( "warn-pointless-pragmas",           Opt_WarnPointlessPragmas, nop ) ]
 
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
 fFlags :: [FlagSpec DynFlag]
@@ -2110,7 +2120,8 @@ standardWarnings
         Opt_WarnLazyUnliftedBindings,
         Opt_WarnDodgyForeignImports,
         Opt_WarnWrongDoBind,
-        Opt_WarnAlternativeLayoutRuleTransitional
+        Opt_WarnAlternativeLayoutRuleTransitional,
+        Opt_WarnPointlessPragmas
       ]
 
 minusWOpts :: [WarningFlag]

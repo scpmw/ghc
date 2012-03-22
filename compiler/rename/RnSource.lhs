@@ -749,29 +749,22 @@ rnTyClDecls :: [Name] -> [[LTyClDecl RdrName]]
 -- Rename the declarations and do depedency analysis on them
 rnTyClDecls extra_deps tycl_ds
   = do { ds_w_fvs <- mapM (wrapLocFstM (rnTyClDecl Nothing)) (concat tycl_ds)
-       ; thisPkg  <- fmap thisPackage getDOpts
-       ; let (fam_insts, non_fam_insts) = partition (isFamInstDecl . unLoc . fst) ds_w_fvs
-                  -- Ignore family instances when doing this dependency analysis
-                  -- because they don't have a binder
-
-             add_boot_deps :: FreeVars -> FreeVars
+       ; thisPkg  <- fmap thisPackage getDynFlags
+       ; let add_boot_deps :: FreeVars -> FreeVars
              -- See Note [Extra dependencies from .hs-boot files]
              add_boot_deps fvs | any (isInPackage thisPkg) (nameSetToList fvs)
                                = fvs `plusFV` mkFVs extra_deps
                                | otherwise
                                = fvs
 
-             ds_w_fvs' = map (\(ds, fvs) -> (ds, add_boot_deps fvs)) non_fam_insts
+             ds_w_fvs' = map (\(ds, fvs) -> (ds, add_boot_deps fvs)) ds_w_fvs
 
              sccs :: [SCC (LTyClDecl Name)]
              sccs = depAnalTyClDecls ds_w_fvs'
 
-             all_fvs = foldr (plusFV . snd) emptyFVs ds_w_fvs
+             all_fvs = foldr (plusFV . snd) emptyFVs ds_w_fvs'
 
-
-       ; return (map fst fam_insts : map flattenSCC sccs, all_fvs) }
-            -- Just put the family-instance group first;
-            -- it is treated separately anyway
+       ; return (map flattenSCC sccs, all_fvs) }
 
 
 rnTyClDecl :: Maybe Name  -- Just cls => this TyClDecl is nested 

@@ -31,6 +31,7 @@ import SysTools ( figureLlvmVersion )
 import MonadUtils
 
 import Data.Maybe ( fromMaybe, catMaybes )
+import Data.IORef ( writeIORef )
 import System.IO
 
 -- -----------------------------------------------------------------------------
@@ -39,7 +40,10 @@ import System.IO
 llvmCodeGen :: DynFlags -> ModLocation -> Handle -> UniqSupply -> [RawCmmGroup] -> TickMap -> IO ()
 llvmCodeGen dflags location h us cmms tick_map
   = do bufh <- newBufHandle h
+
+       -- get llvm version, cache for later use
        ver  <- (fromMaybe defaultLlvmVersion) `fmap` figureLlvmVersion dflags
+       writeIORef (llvmVersion dflags) ver
 
        runLlvm dflags ver bufh us $
          llvmCodeGen' location cmms tick_map
