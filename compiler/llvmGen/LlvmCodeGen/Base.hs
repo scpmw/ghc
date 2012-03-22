@@ -19,7 +19,7 @@ module LlvmCodeGen.Base (
         ghcInternalFunctions,
 
         getMetaUniqueId,
-        setGlobalMetas, getUnitMeta, getProcTypeMeta,
+        setUniqMeta, getUniqMeta,
         setFileMeta, getFileMeta,
         addProcMeta, getProcMetaIds,
 
@@ -177,8 +177,7 @@ data LlvmEnv = LlvmEnv
   , envOutput :: BufHandle
   , envUniq :: UniqSupply
   , envFreshMeta :: LMMetaInt
-  , envUnitMeta :: LMMetaInt
-  , envProcTypeMeta :: LMMetaInt
+  , envUniqMeta :: UniqFM LMMetaInt
   , envFileMeta :: UniqFM LMMetaInt
   , envProcMeta :: [LMMetaInt]
   }
@@ -212,8 +211,7 @@ runLlvm dflags ver out us m = do
                       , envOutput = out
                       , envUniq = us
                       , envFreshMeta = 0
-                      , envUnitMeta = (-1)
-                      , envProcTypeMeta = (-1)
+                      , envUniqMeta = emptyUFM
                       , envFileMeta = emptyUFM
                       , envProcMeta = []
                       }
@@ -311,20 +309,14 @@ getLlvmEnv f = LlvmM $ \env -> return (f env, env)
 getLlvmEnvUFM :: Uniquable key => (LlvmEnv -> UniqFM a) -> key -> LlvmM (Maybe a)
 getLlvmEnvUFM f s = LlvmM $ \env -> return (lookupUFM (f env) s, env)
 
--- | Sets global metadata Ids
-setGlobalMetas :: LMMetaInt -> LMMetaInt -> LlvmM ()
-setGlobalMetas unitId procTypeId
-  = LlvmM $ \env -> return ((), env { envUnitMeta = unitId
-                                    , envProcTypeMeta = procTypeId })
+-- | Sets metadata node for a given unique string
+setUniqMeta :: LMMetaUnique -> LMMetaInt -> LlvmM ()
+setUniqMeta f m = LlvmM $ \env -> return ((), env { envUniqMeta = addToUFM (envUniqMeta env) f m })
+-- | Gets metadata node for given unique string
+getUniqMeta :: LMMetaUnique -> LlvmM (Maybe LMMetaInt)
+getUniqMeta = getLlvmEnvUFM envUniqMeta
 
--- | Gets metadata ID of current compilation unit
-getUnitMeta :: LlvmM LMMetaInt
-getUnitMeta = getLlvmEnv envUnitMeta
--- | Gets metadata ID of current compilation unit
-getProcTypeMeta :: LlvmM LMMetaInt
-getProcTypeMeta = getLlvmEnv envProcTypeMeta
-
--- | Sets metadata node for given file
+-- | Allocates a metadata node for given file
 setFileMeta :: LMString -> LMMetaInt -> LlvmM ()
 setFileMeta f m = LlvmM $ \env -> return ((), env { envFileMeta = addToUFM (envFileMeta env) f m })
 -- | Gets metadata node for given file (if any)

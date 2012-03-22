@@ -59,7 +59,7 @@ basicBlocksCodeGen cmmBlocks annotId
        let ((BasicBlock bid fstmts):rblks) = blocks'
        let fblocks = (BasicBlock bid $ prologue ++  allocs' ++ fstmts):rblks
        let annot = case annotId of
-             Just i  -> MetaStmt [(fsLit "dbg", LMMetaUnnamed i)]
+             Just i  -> MetaStmt [(fsLit "dbg", i)]
              Nothing -> id
        let annotBlock (BasicBlock bid stmts) = BasicBlock bid (map annot stmts)
        return (map annotBlock fblocks, concat topss)

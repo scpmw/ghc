@@ -27,7 +27,6 @@ import Binary
 
 import Config          ( cProjectName, cProjectVersion )
 import OldCmm
-import Outputable
 import Platform
 import SrcLoc          (srcSpanFile,
                         srcSpanStartLine, srcSpanStartCol,
@@ -65,9 +64,15 @@ dW_TAG_pointer_type = 15 + lLVMDebugVersion
 dW_LANG_Haskell :: Integer
 dW_LANG_Haskell  = 0x8042 -- Chosen arbitrarily
 
-pprMeta :: LMMetaInt -> LlvmStatic -> SDoc
-pprMeta n val = pprLlvmData ([LMGlobal (LMMetaUnnamed n) (Just val)], [])
+renderMeta :: LMMetaInt -> LlvmStatic -> LlvmM ()
+renderMeta n val = renderLlvm $ pprLlvmData ([LMGlobal (LMMetaUnnamed n) (Just val)], [])
 
+-- | Ids for unique global meta data nodes
+unitN, procTypeN :: LMMetaUnique
+unitN     = mkMetaUnique (fsLit "LlvmMeta.unitN")
+procTypeN = mkMetaUnique (fsLit "LlvmMeta.procTypeN")
+
+-- | Allocates global meta data nodes
 cmmMetaLlvmPrelude :: LlvmM ()
 cmmMetaLlvmPrelude = do
 
@@ -77,7 +82,7 @@ cmmMetaLlvmPrelude = do
 
   -- Emit the subprogram type we use: void (*)()
   srtypeId <- getMetaUniqueId
-  renderLlvm $ pprMeta srtypeId $ LMMeta
+  renderMeta srtypeId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_subroutine_type)
     , LMMetaRef unitId                           -- Context
     , LMMetaString (fsLit "")                    -- Name (anonymous)
@@ -93,7 +98,8 @@ cmmMetaLlvmPrelude = do
     ]
 
   -- Save Ids into state monad
-  setGlobalMetas unitId srtypeId
+  setUniqMeta unitN unitId
+  setUniqMeta procTypeN srtypeId
 
 -- | Emit debug data about the compilation unit. Should be called
 -- after all procedure metadata has been generated.
@@ -101,8 +107,8 @@ cmmMetaLlvmUnit :: ModLocation -> LlvmM ()
 cmmMetaLlvmUnit mod_loc = do
 
   -- Make lists of enums, retained types, subprograms and globals
-  unitId <- getUnitMeta
-  procTypeId <- getProcTypeMeta
+  Just unitId <- getUniqMeta unitN
+  Just procTypeId <- getUniqMeta procTypeN
   procIds <- getProcMetaIds
   let toMetaList      = LMMeta . map LMMetaRef
       enumTypeMetas   = []
@@ -117,7 +123,7 @@ cmmMetaLlvmUnit mod_loc = do
 
   -- Emit compile unit information.
   opt <- getDynFlag optLevel
-  renderLlvm $ pprMeta unitId $ LMMeta
+  renderMeta unitId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_compile_unit)
     , LMStaticLit (LMNullLit LMMetaType)         -- "unused"
     , LMStaticLit (mkI32 dW_LANG_Haskell)        -- DWARF language identifier
@@ -160,9 +166,9 @@ emitFileMeta filePath = do
     Nothing     -> do
 
       fileId <- getMetaUniqueId
-      unitId <- getUnitMeta
+      Just unitId <- getUniqMeta unitN
       srcPath <- liftIO $ getCurrentDirectory
-      renderLlvm $ pprMeta fileId $ LMMeta
+      renderMeta fileId $ LMMeta
         [ LMStaticLit (mkI32 dW_TAG_file_type)
         , LMMetaString (filePath)                    -- Source file name
         , LMMetaString (mkFastString srcPath)        -- Source file directory
@@ -198,11 +204,11 @@ cmmMetaLlvmProc cmmLabel entryLabel mod_loc tiMap = do
   opt <- getDynFlag optLevel
 
   -- get global metadata ids from context
-  unitId <- getUnitMeta
-  procTypeId <- getProcTypeMeta
+  Just unitId <- getUniqMeta unitN
+  Just procTypeId <- getUniqMeta procTypeN
 
   procId <- getMetaUniqueId
-  renderLlvm $ pprMeta procId $ LMMeta
+  renderMeta procId $ LMMeta
     [ LMStaticLit (mkI32 dW_TAG_subprogram)
     , LMStaticLit (mkI32 0)                      -- "Unused"
     , LMMetaRef unitId                           -- Reference to compile unit
@@ -226,7 +232,7 @@ cmmMetaLlvmProc cmmLabel entryLabel mod_loc tiMap = do
   -- Generate source annotation using the given ID (this is used to
   -- reference it from LLVM code).
   blockId <- getMetaUniqueId
-  renderLlvm $ pprMeta blockId $ LMMeta $
+  renderMeta blockId $ LMMeta $
     [ LMStaticLit (mkI32 $ dW_TAG_lexical_block)
     , LMMetaRef procId
     , LMStaticLit (mkI32 $ fromIntegral line) -- Source line
@@ -236,7 +242,7 @@ cmmMetaLlvmProc cmmLabel entryLabel mod_loc tiMap = do
     ]
 
   lineId <- getMetaUniqueId
-  renderLlvm $ pprMeta lineId $ LMMeta $
+  renderMeta lineId $ LMMeta $
     [ LMStaticLit (mkI32 $ fromIntegral line) -- Source line
     , LMStaticLit (mkI32 $ fromIntegral col)  -- Source column
     , LMMetaRef blockId                       -- Block context

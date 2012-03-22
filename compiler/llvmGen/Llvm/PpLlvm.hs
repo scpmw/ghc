@@ -356,7 +356,7 @@ ppMetas :: [MetaData] -> SDoc
 ppMetas meta = hcat $ map ppMeta meta
   where
     ppMeta (name, var)
-        = comma <+> exclamation <> ftext name <+> ppr var
+        = comma <+> exclamation <> ftext name <+> exclamation <> ppr var
 
 --------------------------------------------------------------------------------
 -- * Misc functions

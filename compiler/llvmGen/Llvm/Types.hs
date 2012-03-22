@@ -91,6 +91,13 @@ type LMConst = Bool -- ^ is a variable constant or not
 newtype LMMetaInt = LMMetaInt {unLMMetaVar :: Int}
   deriving (Eq, Num, Outputable, Show)
 
+-- | A value identifying a unique / global meta data node.
+newtype LMMetaUnique = LMMetaUnique Unique
+mkMetaUnique :: Uniquable a => a -> LMMetaUnique
+mkMetaUnique = LMMetaUnique . getUnique
+instance Uniquable LMMetaUnique where
+  getUnique (LMMetaUnique u) = u
+
 -- | LLVM Variables
 data LlvmVar
   -- | Variables with a global scope.
