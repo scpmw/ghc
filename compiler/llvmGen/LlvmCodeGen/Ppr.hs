@@ -23,6 +23,11 @@ import Unique
 -- * Top level
 --
 
+-- | Header code for LLVM modules
+pprLlvmHeader :: SDoc
+pprLlvmHeader = moduleLayout
+
+
 -- | LLVM module layout description for the host target
 moduleLayout :: SDoc
 moduleLayout =
@@ -61,10 +66,6 @@ moduleLayout =
     empty
 #endif
 
-
--- | Header code for LLVM modules
-pprLlvmHeader :: SDoc
-pprLlvmHeader = moduleLayout
 
 -- | Pretty print LLVM data code
 pprLlvmData :: LlvmData -> SDoc

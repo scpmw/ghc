@@ -554,7 +554,9 @@ genStore addr@(CmmMachOp (MO_Sub _) [
     = genStore_fast addr r (negate $ fromInteger n) val
 
 -- generic case
-genStore addr val = genStore_slow addr val
+genStore addr val
+    = do top <- getTBAAMeta topN
+         genStore_slow addr val top
 
 -- | CmmStore operation
 -- This is a special case for storing to a global register pointer
@@ -563,6 +565,7 @@ genStore_fast :: CmmExpr -> GlobalReg -> Int -> CmmExpr
               -> LlvmM StmtData
 genStore_fast addr r n val
   = do (gv, grt, s1) <- getCmmRegVal (CmmGlobal r)
+       meta          <- getTBAARegMeta r
        let (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
        case isPointer grt && rem == 0 of
             True -> do
@@ -572,7 +575,7 @@ genStore_fast addr r n val
                 case pLower grt == getVarType vval of
                      -- were fine
                      True  -> do
-                         let s3 = Store vval ptr
+                         let s3 = MetaStmt meta $ Store vval ptr
                          return (stmts `appOL` s1 `snocOL` s2
                                  `snocOL` s3, top)
 
@@ -580,19 +583,19 @@ genStore_fast addr r n val
                      False -> do
                          let ty = (pLift . getVarType) vval
                          (ptr', s3) <- doExpr ty $ Cast LM_Bitcast ptr ty
-                         let s4 = Store vval ptr'
+                         let s4 = MetaStmt meta $ Store vval ptr'
                          return (stmts `appOL` s1 `snocOL` s2
                                  `snocOL` s3 `snocOL` s4, top)
 
             -- If its a bit type then we use the slow method since
             -- we can't avoid casting anyway.
-            False -> genStore_slow addr val
+            False -> genStore_slow addr val meta
 
 
 -- | CmmStore operation
 -- Generic case. Uses casts and pointer arithmetic if needed.
-genStore_slow :: CmmExpr -> CmmExpr -> LlvmM StmtData
-genStore_slow addr val = do
+genStore_slow :: CmmExpr -> CmmExpr -> [MetaData] -> LlvmM StmtData
+genStore_slow addr val meta = do
     (vaddr, stmts1, top1) <- exprToVar addr
     (vval,  stmts2, top2) <- exprToVar val
 
@@ -601,17 +604,17 @@ genStore_slow addr val = do
         -- sometimes we need to cast an int to a pointer before storing
         LMPointer ty@(LMPointer _) | getVarType vval == llvmWord -> do
             (v, s1) <- doExpr ty $ Cast LM_Inttoptr vval ty
-            let s2 = Store v vaddr
+            let s2 = MetaStmt meta $ Store v vaddr
             return (stmts `snocOL` s1 `snocOL` s2, top1 ++ top2)
 
         LMPointer _ -> do
-            let s1 = Store vval vaddr
+            let s1 = MetaStmt meta $ Store vval vaddr
             return (stmts `snocOL` s1, top1 ++ top2)
 
         i@(LMInt _) | i == llvmWord -> do
             let vty = pLift $ getVarType vval
             (vptr, s1) <- doExpr vty $ Cast LM_Inttoptr vaddr vty
-            let s2 = Store vval vptr
+            let s2 = MetaStmt meta $ Store vval vptr
             return (stmts `snocOL` s1 `snocOL` s2, top1 ++ top2)
 
         other -> do
@@ -1031,7 +1034,9 @@ genLoad e@(CmmMachOp (MO_Sub _) [
     = genLoad_fast e r (negate $ fromInteger n) ty
 
 -- generic case
-genLoad e ty = genLoad_slow e ty
+genLoad e ty
+    = do top <- getTBAAMeta topN
+         genLoad_slow e ty top
 
 -- | Handle CmmLoad expression.
 -- This is a special case for loading from a global register pointer
@@ -1040,7 +1045,8 @@ genLoad_fast :: CmmExpr -> GlobalReg -> Int -> CmmType
                 -> LlvmM ExprData
 genLoad_fast e r n ty = do
     (gv, grt, s1) <- getCmmRegVal (CmmGlobal r)
-    let ty' = cmmToLlvmType ty
+    meta          <- getTBAARegMeta r
+    let ty'      = cmmToLlvmType ty
         (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
     case isPointer grt && rem == 0 of
             True  -> do
@@ -1049,7 +1055,7 @@ genLoad_fast e r n ty = do
                 case grt == ty' of
                      -- were fine
                      True -> do
-                         (var, s3) <- doExpr ty' $ Load ptr
+                         (var, s3) <- doExpr ty' (MetaExpr meta $ Load ptr)
                          return (var, s1 `snocOL` s2 `snocOL` s3,
                                      [])
 
@@ -1057,29 +1063,31 @@ genLoad_fast e r n ty = do
                      False -> do
                          let pty = pLift ty'
                          (ptr', s3) <- doExpr pty $ Cast LM_Bitcast ptr pty
-                         (var, s4) <- doExpr ty' $ Load ptr'
+                         (var, s4) <- doExpr ty' (MetaExpr meta $ Load ptr')
                          return (var, s1 `snocOL` s2 `snocOL` s3
                                     `snocOL` s4, [])
 
             -- If its a bit type then we use the slow method since
             -- we can't avoid casting anyway.
-            False -> genLoad_slow e ty
+            False -> genLoad_slow e ty meta
 
 
 -- | Handle Cmm load expression.
 -- Generic case. Uses casts and pointer arithmetic if needed.
-genLoad_slow :: CmmExpr -> CmmType -> LlvmM ExprData
-genLoad_slow e ty = do
+genLoad_slow :: CmmExpr -> CmmType -> [MetaData] -> LlvmM ExprData
+genLoad_slow e ty meta = do
     (iptr, stmts, tops) <- exprToVar e
     case getVarType iptr of
          LMPointer _ -> do
-                    (dvar, load) <- doExpr (cmmToLlvmType ty) $ Load iptr
+                    (dvar, load) <- doExpr (cmmToLlvmType ty)
+                                           (MetaExpr meta $ Load iptr)
                     return (dvar, stmts `snocOL` load, tops)
 
          i@(LMInt _) | i == llvmWord -> do
                     let pty = LMPointer $ cmmToLlvmType ty
                     (ptr, cast)  <- doExpr pty $ Cast LM_Inttoptr iptr pty
-                    (dvar, load) <- doExpr (cmmToLlvmType ty) $ Load ptr
+                    (dvar, load) <- doExpr (cmmToLlvmType ty)
+                                           (MetaExpr meta $ Load ptr)
                     return (dvar, stmts `snocOL` cast `snocOL` load, tops)
 
          other -> do
@@ -1361,3 +1369,13 @@ panic s = Outputable.panic $ "LlvmCodeGen.CodeGen." ++ s
 pprPanic :: String -> SDoc -> a
 pprPanic s d = Outputable.pprPanic ("LlvmCodeGen.CodeGen." ++ s) d
 
+
+-- | Returns TBAA meta data by unique
+getTBAAMeta :: LMMetaUnique -> LlvmM [MetaData]
+getTBAAMeta u = do
+    mi <- getUniqMeta u
+    return [(tbaa, i) | Just i <- [mi]]
+
+-- | Returns TBAA meta data for given register
+getTBAARegMeta :: GlobalReg -> LlvmM [MetaData]
+getTBAARegMeta = getTBAAMeta . getTBAA

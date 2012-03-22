@@ -17,6 +17,7 @@ import Llvm
 
 import LlvmCodeGen.Base
 import LlvmCodeGen.Ppr
+import LlvmCodeGen.Regs ( stgTBAA )
 
 import CLabel
 import Module
@@ -100,6 +101,18 @@ cmmMetaLlvmPrelude = do
   -- Save Ids into state monad
   setUniqMeta unitN unitId
   setUniqMeta procTypeN srtypeId
+
+  -- Emit TBAA nodes
+  flip mapM_ stgTBAA $ \(uniq, name, parent) -> do
+    tbaaId <- getMetaUniqueId
+    parentId <- maybe (return Nothing) getUniqMeta parent
+    renderMeta tbaaId $ LMMeta
+      [ LMMetaString name
+      , case parentId of
+        Just p  -> LMMetaRef p
+        Nothing -> LMStaticLit (LMNullLit LMMetaType)
+      ]
+    setUniqMeta uniq tbaaId
 
 -- | Emit debug data about the compilation unit. Should be called
 -- after all procedure metadata has been generated.

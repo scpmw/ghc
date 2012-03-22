@@ -3,7 +3,8 @@
 --
 
 module LlvmCodeGen.Regs (
-        lmGlobalRegArg, lmGlobalRegVar, alwaysLive
+        lmGlobalRegArg, lmGlobalRegVar, alwaysLive,
+        stgTBAA, topN, baseN, stackN, heapN, rxN, tbaa, getTBAA
     ) where
 
 #include "HsVersions.h"
@@ -11,8 +12,8 @@ module LlvmCodeGen.Regs (
 import Llvm
 
 import CmmExpr
-import Outputable ( panic )
 import FastString
+import Outputable ( panic )
 
 -- | Get the LlvmVar function variable storing the real register
 lmGlobalRegVar :: GlobalReg -> LlvmVar
@@ -49,6 +50,8 @@ lmGlobalReg suf reg
         DoubleReg 2    -> doubleGlobal $ "D2" ++ suf
         _other         -> panic $ "LlvmCodeGen.Reg: GlobalReg (" ++ (show reg)
                                 ++ ") not supported!"
+        -- LongReg, HpLim, CCSS, CurrentTSO, CurrentNusery, HpAlloc
+        -- EagerBlackholeInfo, GCEnter1, GCFun, BaseReg, PicBaseReg
     where
         wordGlobal   name = LMNLocalVar (fsLit name) llvmWord
         ptrGlobal    name = LMNLocalVar (fsLit name) llvmWordPtr
@@ -59,3 +62,32 @@ lmGlobalReg suf reg
 alwaysLive :: [GlobalReg]
 alwaysLive = [BaseReg, Sp, Hp, SpLim, HpLim, node]
 
+-- | STG Type Based Alias Analysis hierarchy
+stgTBAA :: [(LMMetaUnique, LMString, Maybe LMMetaUnique)]
+stgTBAA
+  = [ (topN,   fsLit "top",   Nothing)
+    , (stackN, fsLit "stack", Just topN)
+    , (heapN,  fsLit "heap",  Just topN)
+    , (rxN,    fsLit "rx",    Just heapN)
+    , (baseN,  fsLit "base",  Just topN)
+    ]
+
+-- | Id values
+topN, stackN, heapN, rxN, baseN :: LMMetaUnique
+topN   = mkMetaUnique (fsLit "LlvmCodeGen.Regs.topN")
+stackN = mkMetaUnique (fsLit "LlvmCodeGen.Regs.stackN")
+heapN  = mkMetaUnique (fsLit "LlvmCodeGen.Regs.heapN")
+rxN    = mkMetaUnique (fsLit "LlvmCodeGen.Regs.rxN")
+baseN  = mkMetaUnique (fsLit "LlvmCodeGen.Regs.baseN")
+
+-- | The TBAA metadata identifier
+tbaa :: LMString
+tbaa = fsLit "tbaa"
+
+-- | Get the correct TBAA metadata information for this register type
+getTBAA :: GlobalReg -> LMMetaUnique
+getTBAA BaseReg          = baseN
+getTBAA Sp               = stackN
+getTBAA Hp               = heapN
+getTBAA (VanillaReg _ _) = rxN
+getTBAA _                = topN
