@@ -35,14 +35,14 @@ import Foreign.ForeignPtr
 #include "../../includes/rts/EventLogFormat.h"
 
 data TickMapEntry = TickMapEntry {
-  timInstr :: Maybe Int,    -- ^ The ID of the instrumentation added to the proc
-  timParent :: Maybe Int,   -- ^ Instrumentation of parent context, if any
-  timTicks :: [Tickish ()]  -- ^ Debug ticks found in the context
+  timInstr :: Maybe Int,           -- ^ The ID of the instrumentation added to the proc
+  timParent :: Maybe TickMapEntry, -- ^ Parent context, if any
+  timTicks :: [Tickish ()]         -- ^ Debug ticks found in the context
   }
 type TickMap = Map CLabel TickMapEntry
 
 instance PlatformOutputable TickMapEntry where
-  pprPlatform _ (TickMapEntry instr ctx ts) = ppr (instr, ctx, ts)
+  pprPlatform _ (TickMapEntry instr ctx ts) = ppr (instr, fmap timInstr ctx, ts)
 
 -- | Packs the given static value into a (variable-length) event-log
 -- packet.
@@ -77,7 +77,7 @@ putProcedureEvent :: BinHandle -> Platform -> TickMapEntry -> CLabel -> IO ()
 putProcedureEvent bh platform tim lbl =
   putEvent bh EVENT_DEBUG_PROCEDURE $ do
     put_ bh $ encInstr $ timInstr tim
-    put_ bh $ encInstr $ timParent tim
+    put_ bh $ encInstr $ (timInstr =<< timParent tim)
     putString bh $ showSDocC  $ pprCLabel platform lbl
  where encInstr (Just i) = fromIntegral i
        encInstr Nothing  = 0xffff :: Word16

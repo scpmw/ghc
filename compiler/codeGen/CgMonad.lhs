@@ -83,7 +83,7 @@ import Debug
 
 import Control.Monad
 import Data.List
-import Data.Map as Map ( empty, union, insert )
+import qualified Data.Map as Map
 
 infixr 9 `thenC`
 infixr 9 `thenFC`
@@ -110,12 +110,13 @@ data CgInfoDownwards
         cgd_srt     :: SRT,           -- the current SRT
         cgd_ticky   :: CLabel,        -- current destination for ticky counts
         cgd_eob     :: EndOfBlockInfo,-- Info for stuff to do at end of basic block:
-        cgd_instr   :: Maybe Int      -- ID of containing instrumentation
+        cgd_instr   :: Maybe Int,     -- ID of containing instrumentation
+        cgd_tick_map:: TickMap        -- Tick map after generation (loop)
   }
 
 -- | Setup initial @CgInfoDownwards@ for the code gen
-initCgInfoDown :: DynFlags -> Module -> CgInfoDownwards
-initCgInfoDown dflags mod
+initCgInfoDown :: DynFlags -> Module -> TickMap -> CgInfoDownwards
+initCgInfoDown dflags mod tick_map
   = MkCgInfoDown { cgd_dflags  = dflags,
                    cgd_mod     = mod,
                    cgd_statics = emptyVarEnv,
@@ -123,7 +124,8 @@ initCgInfoDown dflags mod
                    cgd_srt     = error "initC: srt",
                    cgd_ticky   = mkTopTickyCtrLabel,
                    cgd_eob     = initEobInfo,
-                   cgd_instr   = Nothing
+                   cgd_instr   = Nothing,
+                   cgd_tick_map= tick_map
   }
 
 -- | State passed around and modified during code generation
@@ -412,8 +414,8 @@ instance Monad FCode where
 initC :: DynFlags -> Module -> FCode a -> IO a
 initC dflags mod (FCode code) = do
     uniqs <- mkSplitUniqSupply 'c'
-    case code (initCgInfoDown dflags mod) (initCgState uniqs 0) of
-        (res, _) -> return res
+    let (res, env) = code (initCgInfoDown dflags mod (cgs_tick_map env)) (initCgState uniqs 0)
+    return res
 
 returnFC :: a -> FCode a
 returnFC val = FCode $ \_ state -> (val, state)
@@ -797,15 +799,17 @@ getCmm code = do
 -- Associates the given label with collected ticks, as well as
 -- generated instrumentation.
 finishInstrument :: CLabel -> Maybe Int -> [Tickish ()] -> Code
-finishInstrument lbl instr ticks 
-  = do	{ state <- getState
-	; infoDown <- getInfoDown
-	; let tick_entry = TickMapEntry { timInstr = instr
-	                                , timParent = cgd_instr infoDown
-	                                , timTicks = ticks }
-	; setState $ state {
-	  cgs_tick_map = Map.insert lbl tick_entry $ cgs_tick_map state
-	  } }
+finishInstrument lbl instr ticks = do
+    state <- getState
+    infoDown <- getInfoDown
+    let findInstr i = find ((== Just i) . timInstr) $ Map.elems $ cgd_tick_map infoDown
+        ctx         = cgd_instr infoDown >>= findInstr
+        tick_entry  = TickMapEntry { timInstr = instr
+                                   , timParent = ctx
+                                   , timTicks = ticks }
+    setState $ state {
+      cgs_tick_map = Map.insert lbl tick_entry $ cgs_tick_map state
+      }
 
 -- ----------------------------------------------------------------------------
 -- CgStmts

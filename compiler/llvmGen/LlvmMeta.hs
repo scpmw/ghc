@@ -37,7 +37,7 @@ import MonadUtils      ( MonadIO(..) )
 import System.Directory(getCurrentDirectory)
 import Data.List       (maximumBy)
 import Data.Maybe      (fromMaybe)
-import Data.Map as Map (fromList, assocs, lookup)
+import Data.Map as Map (lookup)
 import Data.Function   (on)
 import Data.Char       (ord, chr, isAscii, isPrint, intToDigit)
 import Data.Word       (Word8)
@@ -262,22 +262,18 @@ findGoodSourceTick lbl unit tiMap
   | otherwise  = Just $ maximumBy (compare `on` rangeRating) ticks
   where
     unitFS = mkFastString unit
-    ticks = findSourceTis lbl
+    ticks = findSourceTis (Map.lookup lbl tiMap)
     rangeRating (SourceNote span _) =
       (srcSpanFile span == unitFS,
        srcSpanEndLine span - srcSpanStartLine span,
        srcSpanEndCol span - srcSpanStartCol span)
     rangeRating _non_source_note = error "rangeRating"
-    idLabelMap = Map.fromList [ (i, l)
-                              | (l, TickMapEntry {timInstr=Just i}) <- Map.assocs tiMap]
-    findSourceTis :: CLabel -> [Tickish ()]
-    findSourceTis l = case Map.lookup l tiMap of
-      Just tim
-        | stis <- filter isSourceTick (timTicks tim), not (null stis)
-        -> stis
-        | Just p <- timParent tim, Just l' <- Map.lookup p idLabelMap
-        -> findSourceTis l'
-      _ -> []
+    findSourceTis :: Maybe TickMapEntry -> [Tickish ()]
+    findSourceTis Nothing    = []
+    findSourceTis (Just tim) =
+      case filter isSourceTick (timTicks tim) of
+        stis@(_:_)  -> stis
+        _           -> findSourceTis (timParent tim)
 
     isSourceTick SourceNote {} = True
     isSourceTick _             = False
