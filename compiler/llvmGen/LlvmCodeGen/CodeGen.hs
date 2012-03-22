@@ -16,7 +16,6 @@ import CgUtils ( activeStgRegs, callerSaves )
 import CLabel
 import OldCmm
 import qualified OldPprCmm as PprCmm
-import OrdList
 
 import DynFlags
 import FastString
@@ -24,6 +23,7 @@ import ForeignCall
 import Outputable hiding ( panic, pprPanic )
 import qualified Outputable
 import Platform
+import OrdList
 import UniqSupply
 import Unique
 import Util
@@ -555,8 +555,8 @@ genStore addr@(CmmMachOp (MO_Sub _) [
 
 -- generic case
 genStore addr val
-    = do top <- getTBAAMeta topN
-         genStore_slow addr val top
+    = do other <- getTBAAMeta otherN
+         genStore_slow addr val other
 
 -- | CmmStore operation
 -- This is a special case for storing to a global register pointer
@@ -1035,8 +1035,8 @@ genLoad e@(CmmMachOp (MO_Sub _) [
 
 -- generic case
 genLoad e ty
-    = do top <- getTBAAMeta topN
-         genLoad_slow e ty top
+    = do other <- getTBAAMeta otherN
+         genLoad_slow e ty other
 
 -- | Handle CmmLoad expression.
 -- This is a special case for loading from a global register pointer

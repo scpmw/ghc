@@ -1040,15 +1040,15 @@ publish-docs:
 SRC_DIST_ROOT      = sdistprep
 SRC_DIST_BASE_NAME = ghc-$(ProjectVersion)
 
-SRC_DIST_GHC_NAME          = ghc-$(ProjectVersion)-src
+SRC_DIST_GHC_NAME          = ghc-$(ProjectVersion)
 SRC_DIST_GHC_ROOT          = $(SRC_DIST_ROOT)/ghc
 SRC_DIST_GHC_DIR           = $(SRC_DIST_GHC_ROOT)/$(SRC_DIST_BASE_NAME)
-SRC_DIST_GHC_TARBALL       = $(SRC_DIST_ROOT)/$(SRC_DIST_GHC_NAME).tar.bz2
+SRC_DIST_GHC_TARBALL       = $(SRC_DIST_ROOT)/$(SRC_DIST_GHC_NAME)-src.tar.bz2
 
-SRC_DIST_TESTSUITE_NAME    = ghc-$(ProjectVersion)-testsuite
+SRC_DIST_TESTSUITE_NAME    = testsuite-ghc-$(ProjectVersion)
 SRC_DIST_TESTSUITE_ROOT    = $(SRC_DIST_ROOT)/testsuite-ghc
 SRC_DIST_TESTSUITE_DIR     = $(SRC_DIST_TESTSUITE_ROOT)/$(SRC_DIST_BASE_NAME)
-SRC_DIST_TESTSUITE_TARBALL = $(SRC_DIST_ROOT)/$(SRC_DIST_TESTSUITE_NAME).tar.bz2
+SRC_DIST_TESTSUITE_TARBALL = $(SRC_DIST_ROOT)/$(SRC_DIST_TESTSUITE_NAME)-src.tar.bz2
 
 #
 # Files to include in source distributions
@@ -1113,8 +1113,9 @@ sdist-testsuite-prep :
 	$(call removeTrees,$(SRC_DIST_TESTSUITE_DIR)/testsuite/.git)
 
 .PHONY: sdist
-sdist : sdist-prep
-	"$(TAR_CMD)" chf - $(SRC_DIST_NAME) 2>src_log | bzip2 >$(TOP)/$(SRC_DIST_TARBALL)
+sdist : sdist-ghc-prep sdist-testsuite-prep
+	cd $(SRC_DIST_GHC_ROOT) && "$(TAR_CMD)" chf - $(SRC_DIST_BASE_NAME) 2> src_ghc_log | bzip2 > $(TOP)/$(SRC_DIST_GHC_TARBALL)
+	cd $(SRC_DIST_TESTSUITE_ROOT) && "$(TAR_CMD)" chf - $(SRC_DIST_BASE_NAME) 2> src_ghc_log | bzip2 > $(TOP)/$(SRC_DIST_TESTSUITE_TARBALL)
 
 sdist-manifest : $(SRC_DIST_GHC_TARBALL)
 	tar tjf $(SRC_DIST_GHC_TARBALL) | sed "s|^ghc-$(ProjectVersion)/||" | sort >sdist-manifest
