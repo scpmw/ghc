@@ -342,7 +342,10 @@ ppAsm asm constraints rty vars sideeffect alignstack =
         <+> cons <> vars'
 
 ppMetaStatement :: [MetaData] -> LlvmStatement -> SDoc
-ppMetaStatement meta stmt = ppLlvmStatement stmt <> ppMetas meta
+ppMetaStatement meta stmt = case stmt of
+  Nop{}     -> ppLlvmStatement stmt
+  MkLabel{} -> ppLlvmStatement stmt
+  _         -> ppLlvmStatement stmt <> ppMetas meta
 
 
 ppMetaExpr :: [MetaData] -> LlvmExpression -> SDoc

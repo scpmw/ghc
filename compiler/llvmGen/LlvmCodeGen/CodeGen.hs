@@ -51,14 +51,18 @@ genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"
 -- | Generate code for a list of blocks that make up a complete procedure.
 basicBlocksCodeGen :: [CmmBasicBlock] -> Maybe LMMetaInt
                       -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
-basicBlocksCodeGen cmmBlocks _annotId
+basicBlocksCodeGen cmmBlocks annotId
   = do prologue <- funPrologue cmmBlocks
        (blockss, topss) <- fmap unzip $ mapM basicBlockCodeGen cmmBlocks
        let (blocks', allocs) = mapAndUnzip dominateAllocs (concat blockss)
        let allocs' = concat allocs
-       let ((BasicBlock id fstmts):rblks) = blocks'
-       let fblocks = (BasicBlock id $ prologue ++  allocs' ++ fstmts):rblks
-       return (fblocks, concat topss)
+       let ((BasicBlock bid fstmts):rblks) = blocks'
+       let fblocks = (BasicBlock bid $ prologue ++  allocs' ++ fstmts):rblks
+       let annot = case annotId of
+             Just i  -> MetaStmt [(fsLit "dbg", LMMetaUnnamed i)]
+             Nothing -> id
+       let annotBlock (BasicBlock bid stmts) = BasicBlock bid (map annot stmts)
+       return (map annotBlock fblocks, concat topss)
 
 
 -- | Allocations need to be extracted so they can be moved to the entry
