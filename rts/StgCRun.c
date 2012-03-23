@@ -33,6 +33,14 @@
 /* include Stg.h first because we want real machine regs in here: we
  * have to get the value of R1 back from Stg land to C land intact.
  */
+
+/* We include windows.h very early, as on Win64 the CONTEXT type has
+   fields "R8", "R9" and "R10", which goes bad if we've already
+   #define'd those names for our own purposes (in stg/Regs.h) */
+#if defined(HAVE_WINDOWS_H)
+#include <windows.h>
+#endif
+
 #define IN_STGCRUN 1
 #include "Stg.h"
 #include "Rts.h"
@@ -88,6 +96,18 @@ StgFunPtr StgReturn(void)
 #else
 #define STG_RUN "StgRun"
 #define STG_RETURN "StgReturn"
+#endif
+
+#if defined(mingw32_HOST_OS)
+// On windows the stack has to be allocated 4k at a time, otherwise
+// we get a segfault.  The C compiler knows how to do this (it calls
+// _alloca()), so we make sure that we can allocate as much stack as
+// we need:
+StgWord8 *win32AllocStack(void)
+{
+    StgWord8 stack[RESERVED_C_STACK_BYTES + 16 + 12];
+    return stack;
+}
 #endif
 
 /* -----------------------------------------------------------------------------
@@ -203,18 +223,6 @@ StgRunIsImplementedInAssembler(void)
     );
 }
 
-#if defined(mingw32_HOST_OS)
-// On windows the stack has to be allocated 4k at a time, otherwise
-// we get a segfault.  The C compiler knows how to do this (it calls
-// _alloca()), so we make sure that we can allocate as much stack as
-// we need:
-StgWord8 *win32AllocStack(void)
-{
-    StgWord8 stack[RESERVED_C_STACK_BYTES + 16 + 12];
-    return stack;
-}
-#endif
-
 #endif
 
 /* ----------------------------------------------------------------------------
@@ -251,11 +259,19 @@ StgRunIsImplementedInAssembler(void)
         /*
          * Set BaseReg
          */
+#if defined(mingw32_HOST_OS)
+        "movq %%rdx,%%r13\n\t"
+#else
         "movq %%rsi,%%r13\n\t"
+#endif
         /*
          * grab the function argument from the stack, and jump to it.
          */
+#if defined(mingw32_HOST_OS)
+        "movq %%rcx,%%rax\n\t"
+#else
         "movq %%rdi,%%rax\n\t"
+#endif
         "jmp *%%rax\n\t"
 
         ".globl " STG_RETURN "\n"
@@ -632,7 +648,7 @@ StgRun(StgFunPtr f, StgRegTable *basereg) {
         /*
          * save callee-saves registers on behalf of the STG code.
          */
-        "stmfd sp!, {r4-r11, fp, ip, lr}\n\t"
+        "stmfd sp!, {r4-r10, fp, ip, lr}\n\t"
 #if !defined(arm_HOST_ARCH_PRE_ARMv6)
         "vstmdb sp!, {d8-d11}\n\t"
 #endif
@@ -669,10 +685,24 @@ StgRun(StgFunPtr f, StgRegTable *basereg) {
 #if !defined(arm_HOST_ARCH_PRE_ARMv6)
         "vldmia sp!, {d8-d11}\n\t"
 #endif
-        "ldmfd sp!, {r4-r11, fp, ip, lr}\n\t"
+        "ldmfd sp!, {r4-r10, fp, ip, lr}\n\t"
       : "=r" (r)
       : "r" (f), "r" (basereg), "i" (RESERVED_C_STACK_BYTES)
-      : "%r4", "%r5", "%r6", "%r8", "%r9", "%r10", "%r11", "%fp", "%ip", "%lr"
+#if !defined(__thumb__)
+        /* In ARM mode, r11/fp is frame-pointer and so we cannot mark
+           it as clobbered. If we do so, GCC complains with error. */
+      : "%r4", "%r5", "%r6", "%r7", "%r8", "%r9", "%r10", "%ip", "%lr"
+#else
+        /* In Thumb mode r7 is frame-pointer and so we cannot mark it
+           as clobbered. On the other hand we mark as clobbered also
+           those regs not used in Thumb mode. Hard to judge if this is
+           needed, but certainly Haskell code is using them for
+           placing GHC's virtual registers there. See
+           includes/stg/MachRegs.h Please note that Haskell code is
+           compiled by GHC/LLVM into ARM code (not Thumb!), at least
+           as of February 2012 */
+      : "%r4", "%r5", "%r6", "%r8", "%r9", "%r10", "%fp", "%ip", "%lr"
+#endif
     );
     return r;
 }

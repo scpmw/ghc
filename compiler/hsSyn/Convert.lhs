@@ -154,6 +154,10 @@ cvtDec (TH.SigD nm typ)
 	; ty' <- cvtType typ
 	; returnL $ Hs.SigD (TypeSig [nm'] ty') }
 
+cvtDec (TH.InfixD fx nm)
+  = do { nm' <- vNameL nm
+       ; returnL (Hs.SigD (FixSig (FixitySig nm' (cvtFixity fx)))) } 
+
 cvtDec (PragmaD prag)
   = do { prag' <- cvtPragmaD prag
        ; returnL $ Hs.SigD prag' }
@@ -161,13 +165,16 @@ cvtDec (PragmaD prag)
 cvtDec (TySynD tc tvs rhs)
   = do	{ (_, tc', tvs') <- cvt_tycl_hdr [] tc tvs
 	; rhs' <- cvtType rhs
-	; returnL $ TyClD (TySynonym tc' tvs' Nothing rhs') }
+	; returnL $ TyClD (TySynonym { tcdLName = tc' 
+                                     , tcdTyVars = tvs', tcdTyPats = Nothing
+                                     , tcdSynRhs = rhs', tcdFVs = placeHolderNames }) }
 
 cvtDec (DataD ctxt tc tvs constrs derivs)
   = do	{ (ctxt', tc', tvs') <- cvt_tycl_hdr ctxt tc tvs
 	; cons' <- mapM cvtConstr constrs
 	; derivs' <- cvtDerivs derivs
-	; returnL $ TyClD (TyData { tcdND = DataType, tcdLName = tc', tcdCtxt = ctxt'
+	; returnL $ TyClD (TyData { tcdND = DataType, tcdCType = Nothing
+                                  , tcdLName = tc', tcdCtxt = ctxt'
                                   , tcdTyVars = tvs', tcdTyPats = Nothing, tcdKindSig = Nothing
                                   , tcdCons = cons', tcdDerivs = derivs' }) }
 
@@ -175,7 +182,8 @@ cvtDec (NewtypeD ctxt tc tvs constr derivs)
   = do	{ (ctxt', tc', tvs') <- cvt_tycl_hdr ctxt tc tvs
 	; con' <- cvtConstr constr
 	; derivs' <- cvtDerivs derivs
-	; returnL $ TyClD (TyData { tcdND = NewType, tcdLName = tc', tcdCtxt = ctxt'
+	; returnL $ TyClD (TyData { tcdND = NewType, tcdCType = Nothing
+                                  , tcdLName = tc', tcdCtxt = ctxt'
 	  	    	  	  , tcdTyVars = tvs', tcdTyPats = Nothing, tcdKindSig = Nothing
                                   , tcdCons = [con'], tcdDerivs = derivs'}) }
 
@@ -195,7 +203,7 @@ cvtDec (InstanceD ctxt ty decs)
 	; ctxt' <- cvtContext ctxt
 	; L loc ty' <- cvtType ty
 	; let inst_ty' = L loc $ mkImplicitHsForAllTy ctxt' $ L loc ty'
-	; returnL $ InstD (InstDecl inst_ty' binds' sigs' ats') }
+	; returnL $ InstD (ClsInstDecl inst_ty' binds' sigs' ats') }
 
 cvtDec (ForeignD ford) 
   = do { ford' <- cvtForD ford
@@ -213,23 +221,29 @@ cvtDec (DataInstD ctxt tc tys constrs derivs)
   = do { (ctxt', tc', tvs', typats') <- cvt_tyinst_hdr ctxt tc tys
        ; cons' <- mapM cvtConstr constrs
        ; derivs' <- cvtDerivs derivs
-       ; returnL $ TyClD (TyData { tcdND = DataType, tcdLName = tc', tcdCtxt = ctxt'
-                                  , tcdTyVars = tvs', tcdTyPats = typats', tcdKindSig = Nothing
-                                  , tcdCons = cons', tcdDerivs = derivs' }) }
+       ; returnL $ InstD $ FamInstDecl $
+                   TyData { tcdND = DataType, tcdCType = Nothing
+                          , tcdLName = tc', tcdCtxt = ctxt'
+                          , tcdTyVars = tvs', tcdTyPats = typats', tcdKindSig = Nothing
+                          , tcdCons = cons', tcdDerivs = derivs' } }
 
 cvtDec (NewtypeInstD ctxt tc tys constr derivs)
   = do { (ctxt', tc', tvs', typats') <- cvt_tyinst_hdr ctxt tc tys
        ; con' <- cvtConstr constr
        ; derivs' <- cvtDerivs derivs
-       ; returnL $ TyClD (TyData { tcdND = NewType, tcdLName = tc', tcdCtxt = ctxt'
-                                  , tcdTyVars = tvs', tcdTyPats = typats', tcdKindSig = Nothing
-                                  , tcdCons = [con'], tcdDerivs = derivs' })
-       }
+       ; returnL $ InstD $ FamInstDecl $
+                   TyData { tcdND = NewType, tcdCType = Nothing
+                          , tcdLName = tc', tcdCtxt = ctxt'
+                          , tcdTyVars = tvs', tcdTyPats = typats', tcdKindSig = Nothing
+                          , tcdCons = [con'], tcdDerivs = derivs' } }
 
 cvtDec (TySynInstD tc tys rhs)
   = do	{ (_, tc', tvs', tys') <- cvt_tyinst_hdr [] tc tys
 	; rhs' <- cvtType rhs
-	; returnL $ TyClD (TySynonym tc' tvs' tys' rhs') }
+	; returnL $ InstD $ FamInstDecl $ 
+                    TySynonym { tcdLName = tc'
+                              , tcdTyVars = tvs', tcdTyPats = tys'
+                              , tcdSynRhs = rhs', tcdFVs = placeHolderNames } }
 
 ----------------
 cvt_ci_decs :: MsgDoc -> [TH.Dec]
@@ -240,7 +254,7 @@ cvt_ci_decs :: MsgDoc -> [TH.Dec]
 -- ie signatures, bindings, and associated types
 cvt_ci_decs doc decs
   = do  { decs' <- mapM cvtDec decs
-        ; let (ats', bind_sig_decs') = partitionWith is_tycl decs'
+        ; let (ats', bind_sig_decs') = partitionWith is_fam_inst decs'
 	; let (sigs', prob_binds') = partitionWith is_sig bind_sig_decs'
 	; let (binds', bads) = partitionWith is_bind prob_binds'
 	; unless (null bads) (failWith (mkBadDecMsg doc bads))
@@ -292,9 +306,9 @@ cvt_tyinst_hdr cxt tc tys
 --		Partitioning declarations
 -------------------------------------------------------------------
 
-is_tycl :: LHsDecl RdrName -> Either (LTyClDecl RdrName) (LHsDecl RdrName)
-is_tycl (L loc (Hs.TyClD tcd)) = Left (L loc tcd)
-is_tycl decl                   = Right decl
+is_fam_inst :: LHsDecl RdrName -> Either (LTyClDecl RdrName) (LHsDecl RdrName)
+is_fam_inst (L loc (Hs.InstD (FamInstDecl d))) = Left (L loc d)
+is_fam_inst decl                               = Right decl
 
 is_sig :: LHsDecl RdrName -> Either (LSig RdrName) (LHsDecl RdrName)
 is_sig (L loc (Hs.SigD sig)) = Left (L loc sig)
@@ -747,9 +761,10 @@ cvtp (BangP p)         = do { p' <- cvtPat p; return $ BangPat p' }
 cvtp (TH.AsP s p)      = do { s' <- vNameL s; p' <- cvtPat p; return $ AsPat s' p' }
 cvtp TH.WildP          = return $ WildPat void
 cvtp (RecP c fs)       = do { c' <- cNameL c; fs' <- mapM cvtPatFld fs
-		       	   ; return $ ConPatIn c' $ Hs.RecCon (HsRecFields fs' Nothing) }
+		       	    ; return $ ConPatIn c' $ Hs.RecCon (HsRecFields fs' Nothing) }
 cvtp (ListP ps)        = do { ps' <- cvtPats ps; return $ ListPat ps' void }
-cvtp (SigP p t)        = do { p' <- cvtPat p; t' <- cvtType t; return $ SigPatIn p' t' }
+cvtp (SigP p t)        = do { p' <- cvtPat p; t' <- cvtType t
+                            ; return $ SigPatIn p' (HsBSig t' placeHolderBndrs) }
 cvtp (ViewP e p)       = do { e' <- cvtl e; p' <- cvtPat p; return $ ViewPat e' p' void }
 
 cvtPatFld :: (TH.Name, TH.Pat) -> CvtM (HsRecField RdrName (LPat RdrName))
@@ -780,13 +795,11 @@ cvtTvs tvs = mapM cvt_tv tvs
 cvt_tv :: TH.TyVarBndr -> CvtM (LHsTyVarBndr RdrName)
 cvt_tv (TH.PlainTV nm) 
   = do { nm' <- tName nm
-       ; returnL $ UserTyVar nm' placeHolderKind
-       }
+       ; returnL $ UserTyVar nm' }
 cvt_tv (TH.KindedTV nm ki) 
   = do { nm' <- tName nm
        ; ki' <- cvtKind ki
-       ; returnL $ KindedTyVar nm' ki' placeHolderKind
-       }
+       ; returnL $ KindedTyVar nm' (HsBSig ki' placeHolderBndrs) }
 
 cvtContext :: TH.Cxt -> CvtM (LHsContext RdrName)
 cvtContext tys = do { preds' <- mapM cvtPred tys; returnL preds' }
@@ -867,9 +880,18 @@ cvtKind (ArrowK k1 k2) = do
   k2' <- cvtKind k2
   returnL (HsFunTy k1' k2')
 
-cvtMaybeKind :: Maybe TH.Kind -> CvtM (Maybe (LHsKind RdrName))
+cvtMaybeKind :: Maybe TH.Kind -> CvtM (Maybe (HsBndrSig (LHsKind RdrName)))
 cvtMaybeKind Nothing = return Nothing
-cvtMaybeKind (Just ki) = cvtKind ki >>= return . Just
+cvtMaybeKind (Just ki) = do { ki' <- cvtKind ki
+                            ; return (Just (HsBSig ki' placeHolderBndrs)) }
+
+-----------------------------------------------------------
+cvtFixity :: TH.Fixity -> Hs.Fixity
+cvtFixity (TH.Fixity prec dir) = Hs.Fixity prec (cvt_dir dir)
+   where
+     cvt_dir TH.InfixL = Hs.InfixL
+     cvt_dir TH.InfixR = Hs.InfixR
+     cvt_dir TH.InfixN = Hs.InfixN
 
 -----------------------------------------------------------
 

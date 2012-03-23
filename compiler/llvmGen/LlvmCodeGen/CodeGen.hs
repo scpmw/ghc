@@ -127,17 +127,16 @@ stmtToInstrs stmt = case stmt of
         -> return (unitOL $ Return Nothing, [])
 
 
--- | Foreign Calls
-genCall :: CmmCallTarget -> [HintedCmmFormal] -> [HintedCmmActual]
-              -> CmmReturnInfo -> LlvmM StmtData
 
--- Write barrier needs to be handled specially as it is implemented as an LLVM
--- intrinsic function.
-genCall (CmmPrim MO_WriteBarrier) _ _ _ = do
-  platform <- getLlvmPlatform
-  if platformArch platform `elem` [ArchX86, ArchX86_64, ArchSPARC]
-   then return (nilOL, [])
-   else do
+-- | Memory barrier instruction for LLVM >= 3.0
+barrier :: LlvmM StmtData
+barrier = do
+    let s = Fence False SyncSeqCst
+    return (unitOL s, [])
+
+-- | Memory barrier instruction for LLVM < 3.0
+oldBarrier :: LlvmM StmtData
+oldBarrier = do
     let fname = fsLit "llvm.memory.barrier"
     let funSig = LlvmFunctionDecl fname ExternallyVisible CC_Ccc LMVoid
                     FixedArgs (tysToParams [i1, i1, i1, i1, i1]) llvmFunAlign
@@ -160,11 +159,26 @@ genCall (CmmPrim MO_WriteBarrier) _ _ _ = do
         lmTrue :: LlvmVar
         lmTrue  = mkIntLit i1 (-1)
 
+-- | Foreign Calls
+genCall :: CmmCallTarget -> [HintedCmmFormal] -> [HintedCmmActual]
+              -> CmmReturnInfo -> LlvmM StmtData
+
+-- Write barrier needs to be handled specially as it is implemented as an LLVM
+-- intrinsic function.
+genCall (CmmPrim MO_WriteBarrier _) _ _ _ = do
+    platform <- getLlvmPlatform
+    ver <- getLlvmVer
+    case () of
+     _ | platformArch platform `elem` [ArchX86, ArchX86_64, ArchSPARC]
+                    -> return (nilOL, [])
+       | ver > 29   -> barrier
+       | otherwise  -> oldBarrier
+
 -- Handle popcnt function specifically since GHC only really has i32 and i64
 -- types and things like Word8 are backed by an i32 and just present a logical
 -- i8 range. So we must handle conversions from i32 to i8 explicitly as LLVM
 -- is strict about types.
-genCall t@(CmmPrim (MO_PopCnt w)) [CmmHinted dst _] args _ = do
+genCall t@(CmmPrim (MO_PopCnt w) _) [CmmHinted dst _] args _ = do
     let width = widthToLlvmInt w
         dstTy = cmmToLlvmType $ localRegType dst
         funTy = \n -> LMFunction $ LlvmFunctionDecl n ExternallyVisible
@@ -184,9 +198,10 @@ genCall t@(CmmPrim (MO_PopCnt w)) [CmmHinted dst _] args _ = do
 
 -- Handle memcpy function specifically since llvm's intrinsic version takes
 -- some extra parameters.
-genCall t@(CmmPrim op) [] args CmmMayReturn | op == MO_Memcpy ||
-                                                  op == MO_Memset ||
-                                                  op == MO_Memmove = do
+genCall t@(CmmPrim op _) [] args CmmMayReturn
+ | op == MO_Memcpy ||
+   op == MO_Memset ||
+   op == MO_Memmove = do
     ver <- getLlvmVer
     let (isVolTy, isVolVal)
               | ver >= 28       = ([i1], [mkIntLit i1 0]) 
@@ -207,6 +222,9 @@ genCall t@(CmmPrim op) [] args CmmMayReturn | op == MO_Memcpy ||
                 `appOL` stmts4 `snocOL` call
     return (stmts, top1 ++ top2)
 
+genCall (CmmPrim _ (Just stmts)) _ _ _
+    = stmtsToInstrs stmts
+
 -- Handle all other foreign calls and prim ops.
 genCall target res args ret = do
 
@@ -225,7 +243,7 @@ genCall target res args ret = do
     -- extract Cmm call convention
     let cconv = case target of
             CmmCallee _ conv -> conv
-            CmmPrim   _      -> PrimCallConv
+            CmmPrim   _ _    -> PrimCallConv
 
     -- translate to LLVM call convention
     platform <- getLlvmPlatform
@@ -326,7 +344,7 @@ getFunPtr funTy targ = case targ of
         (v2,s1) <- doExpr (pLift fty) $ Cast cast v1 (pLift fty)
         return (v2, stmts `snocOL` s1, top)
 
-    CmmPrim mop -> cmmPrimOpFunctions mop >>= litCase
+    CmmPrim mop _ -> cmmPrimOpFunctions mop >>= litCase
 
     where
         litCase name = do
@@ -423,6 +441,8 @@ cmmPrimOpFunctions mop = do
                        then "p0i8.p0i8." else "") ++ showSDoc (ppr llvmWord)
       intrinTy2 = (if ver >= 28
                        then "p0i8." else "") ++ showSDoc (ppr llvmWord)
+      unsupported = panic ("cmmPrimOpFunctions: " ++ show mop
+                        ++ " not supported here")
 
   return $ case mop of
     MO_F32_Exp    -> fsLit "expf"
@@ -467,11 +487,12 @@ cmmPrimOpFunctions mop = do
 
     (MO_PopCnt w) -> fsLit $ "llvm.ctpop."  ++ showSDoc (ppr $ widthToLlvmInt w)
 
-    MO_WriteBarrier ->
-        panic $ "cmmPrimOpFunctions: MO_WriteBarrier not supported here"
-    MO_Touch ->
-        panic $ "cmmPrimOpFunctions: MO_Touch not supported here"
-
+    MO_S_QuotRem {} -> unsupported
+    MO_U_QuotRem {} -> unsupported
+    MO_Add2 {}      -> unsupported
+    MO_U_Mul2 {}    -> unsupported
+    MO_WriteBarrier -> unsupported
+    MO_Touch        -> unsupported
 
 -- | Tail function calls
 genJump :: CmmExpr -> Maybe [GlobalReg] -> LlvmM StmtData

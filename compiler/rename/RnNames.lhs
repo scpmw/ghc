@@ -7,7 +7,7 @@
 module RnNames (
         rnImports, getLocalNonValBinders,
         rnExports, extendGlobalRdrEnvRn,
-        gresFromAvails, lookupTcdName,
+        gresFromAvails, 
         reportUnusedNames, finishWarnings,
     ) where
 
@@ -486,12 +486,8 @@ getLocalNonValBinders fixity_env
                 hs_tyclds = tycl_decls,
                 hs_instds = inst_decls,
                 hs_fords  = foreign_decls })
-  = do  { -- Separate out the family instance declarations
-          let (tyinst_decls, tycl_decls_noinsts)
-                   = partition (isFamInstDecl . unLoc) (concat tycl_decls)
-
-          -- Process all type/class decls *except* family instances
-        ; tc_avails <- mapM new_tc tycl_decls_noinsts
+  = do  { -- Process all type/class decls *except* family instances
+        ; tc_avails <- mapM new_tc (concat tycl_decls)
         ; envs <- extendGlobalRdrEnvRn tc_avails fixity_env
         ; setEnvs envs $ do {
             -- Bring these things into scope first
@@ -499,7 +495,6 @@ getLocalNonValBinders fixity_env
 
           -- Process all family instances
           -- to bring new data constructors into scope
-        ; ti_avails  <- mapM (new_ti Nothing) tyinst_decls
         ; nti_avails <- concatMapM new_assoc inst_decls
 
           -- Finish off with value binders:
@@ -510,7 +505,7 @@ getLocalNonValBinders fixity_env
                         | otherwise = for_hs_bndrs
         ; val_avails <- mapM new_simple val_bndrs
 
-        ; let avails    = ti_avails ++ nti_avails ++ val_avails
+        ; let avails    = nti_avails ++ val_avails
               new_bndrs = availsToNameSet avails `unionNameSets` 
                           availsToNameSet tc_avails
         ; envs <- extendGlobalRdrEnvRn avails fixity_env 
@@ -529,42 +524,29 @@ getLocalNonValBinders fixity_env
                             ; return (Avail nm) }
 
     new_tc tc_decl              -- NOT for type/data instances
-        = do { names@(main_name : _) <- mapM newTopSrcBinder (hsTyClDeclBinders tc_decl)
+        = do { let bndrs = hsTyClDeclBinders (unLoc tc_decl)
+             ; names@(main_name : _) <- mapM newTopSrcBinder bndrs
              ; return (AvailTC main_name names) }
 
-    new_ti :: Maybe Name -> LTyClDecl RdrName -> RnM AvailInfo
+    new_assoc :: LInstDecl RdrName -> RnM [AvailInfo]
+    new_assoc (L _ (FamInstDecl d)) 
+      = do { avail <- new_ti Nothing d
+           ; return [avail] }
+    new_assoc (L _ (ClsInstDecl inst_ty _ _ ats))
+      | Just (_, _, L loc cls_rdr, _) <- splitLHsInstDeclTy_maybe inst_ty
+      = do { cls_nm <- setSrcSpan loc $ lookupGlobalOccRn cls_rdr
+           ; mapM (new_ti (Just cls_nm) . unLoc) ats }
+      | otherwise
+      = return []     -- Do not crash on ill-formed instances
+                      -- Eg   instance !Show Int   Trac #3811c
+
+    new_ti :: Maybe Name -> FamInstDecl RdrName -> RnM AvailInfo
     new_ti mb_cls ti_decl  -- ONLY for type/data instances
-        = do { main_name <- lookupTcdName mb_cls (unLoc ti_decl)
+        = ASSERT( isFamInstDecl ti_decl ) 
+          do { main_name <- lookupTcdName mb_cls ti_decl
              ; sub_names <- mapM newTopSrcBinder (hsTyClDeclBinders ti_decl)
              ; return (AvailTC (unLoc main_name) sub_names) }
                         -- main_name is not bound here!
-
-    new_assoc :: LInstDecl RdrName -> RnM [AvailInfo]
-    new_assoc (L _ (InstDecl inst_ty _ _ ats))
-      = do { mb_cls_nm <- get_cls_parent inst_ty 
-           ; mapM (new_ti mb_cls_nm) ats }
-      where
-        get_cls_parent inst_ty
-          | Just (_, _, L loc cls_rdr, _) <- splitLHsInstDeclTy_maybe inst_ty
-          = setSrcSpan loc $ do { nm <- lookupGlobalOccRn cls_rdr; return (Just nm) }
-          | otherwise
-          = return Nothing
-
-lookupTcdName :: Maybe Name -> TyClDecl RdrName -> RnM (Located Name)
--- Used for TyData and TySynonym only
--- See Note [Family instance binders]
-lookupTcdName mb_cls tc_decl
-  | not (isFamInstDecl tc_decl)   -- The normal case
-  = ASSERT2( isNothing mb_cls, ppr tc_rdr )     -- Parser prevents this
-    lookupLocatedTopBndrRn tc_rdr
-
-  | Just cls <- mb_cls      -- Associated type; c.f RnBinds.rnMethodBind
-  = wrapLocM (lookupInstDeclBndr cls (ptext (sLit "associated type"))) tc_rdr
-
-  | otherwise               -- Family instance; tc_rdr is an *occurrence*
-  = lookupLocatedOccRn tc_rdr 
-  where
-    tc_rdr = tcdLName tc_decl
 \end{code}
 
 Note [Looking up family names in family instances]
@@ -583,41 +565,6 @@ not have been added to the global environment yet.
 
 Solution is simple: process the type family declarations first, extend
 the environment, and then process the type instances.
-
-
-Note [Family instance binders]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider
-  data family F a
-  data instance F T = X1 | X2
-
-The 'data instance' decl has an *occurrence* of F (and T), and *binds*
-X1 and X2.  (This is unlike a normal data type declaration which would
-bind F too.)  So we want an AvailTC F [X1,X2].
-
-Now consider a similar pair:
-  class C a where
-    data G a
-  instance C S where
-    data G S = Y1 | Y2
-
-The 'data G S' *binds* Y1 and Y2, and has an *occurrence* of G.
-
-But there is a small complication: in an instance decl, we don't use
-qualified names on the LHS; instead we use the class to disambiguate.
-Thus:
-  module M where
-    import Blib( G )
-    class C a where
-      data G a
-    instance C S where
-      data G S = Y1 | Y2
-Even though there are two G's in scope (M.G and Blib.G), the occurence
-of 'G' in the 'instance C S' decl is unambiguous, becuase C has only
-one associated type called G. This is exactly what happens for methods,
-and it is only consistent to do the same thing for types. That's the
-role of the function lookupTcdName; the (Maybe Name) give the class of
-the encloseing instance decl, if any.
 
 
 %************************************************************************
@@ -1511,7 +1458,10 @@ warnUnusedImport (L loc decl, used, unused)
                                    <+> ptext (sLit "import") <+> pp_mod <> parens empty ]
     msg2 = sep [pp_herald <+> quotes (pprWithCommas ppr unused),
                     text "from module" <+> quotes pp_mod <+> pp_not_used]
-    pp_herald   = text "The import of"
+    pp_herald  = text "The" <+> pp_qual <+> text "import of"
+    pp_qual
+      | ideclQualified decl = text "qualified"
+      | otherwise           = empty
     pp_mod      = ppr (unLoc (ideclName decl))
     pp_not_used = text "is redundant"
 \end{code}

@@ -29,7 +29,6 @@ import Demand
 import DataCon
 import TyCon
 import Type
-import Kind
 import Coercion
 import StaticFlags
 import BasicTypes
@@ -313,12 +312,7 @@ pprTypedLetBinder binder
 pprKindedTyVarBndr :: TyVar -> SDoc
 -- Print a type variable binder with its kind (but not if *)
 pprKindedTyVarBndr tyvar
-  = ptext (sLit "@") <+> ppr tyvar <> opt_kind
-  where
-    opt_kind 	-- Print the kind if not *
-	| isLiftedTypeKind kind = empty
-	| otherwise = dcolon <> pprKind kind
-    kind = tyVarKind tyvar
+  = ptext (sLit "@") <+> pprTvBndr tyvar
 
 -- pprIdBndr does *not* print the type
 -- When printing any Id binder in debug mode, we print its inline pragma and one-shot-ness

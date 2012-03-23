@@ -181,6 +181,7 @@ ppLlvmStatement stmt =
   let ind = (text "  " <>)
   in case stmt of
         Assignment  dst expr      -> ind $ ppAssignment dst (ppLlvmExpression expr)
+        Fence       st ord        -> ind $ ppFence st ord
         Branch      target        -> ind $ ppBranch target
         BranchIf    cond ifT ifF  -> ind $ ppBranchIf cond ifT ifF
         Comment     comments      -> ind $ ppLlvmComments comments
@@ -270,6 +271,19 @@ ppCmpOp op left right =
 ppAssignment :: LlvmVar -> SDoc -> SDoc
 ppAssignment var expr = ppName var <+> equals <+> expr
 
+ppFence :: Bool -> LlvmSyncOrdering -> SDoc
+ppFence st ord =
+  let singleThread = case st of True  -> text "singlethread"
+                                False -> empty
+  in text "fence" <+> singleThread <+> ppSyncOrdering ord
+
+ppSyncOrdering :: LlvmSyncOrdering -> SDoc
+ppSyncOrdering SyncUnord     = text "unordered"
+ppSyncOrdering SyncMonotonic = text "monotonic"
+ppSyncOrdering SyncAcquire   = text "acquire"
+ppSyncOrdering SyncRelease   = text "release"
+ppSyncOrdering SyncAcqRel    = text "acq_rel"
+ppSyncOrdering SyncSeqCst    = text "seq_cst"
 
 ppLoad :: LlvmVar -> SDoc
 ppLoad var = text "load" <+> ppr var

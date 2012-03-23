@@ -18,9 +18,11 @@ module HsDecls (
   isClassDecl, isSynDecl, isDataDecl, isTypeDecl, isFamilyDecl,
   isFamInstDecl, tcdName, tyClDeclTyVars,
   countTyClDecls,
+
   -- ** Instance declarations
   InstDecl(..), LInstDecl, NewOrData(..), FamilyFlavour(..),
-  instDeclATs,
+  FamInstDecl, LFamInstDecl, instDeclFamInsts,
+
   -- ** Standalone deriving declarations
   DerivDecl(..), LDerivDecl,
   -- ** @RULE@ declarations
@@ -128,12 +130,15 @@ data HsGroup id
   = HsGroup {
         hs_valds  :: HsValBinds id,
 
-        hs_tyclds :: [[LTyClDecl id]],  
+        hs_tyclds :: [[LTyClDecl id]],
                 -- A list of mutually-recursive groups
+                -- No family-instances here; they are in hs_instds
                 -- Parser generates a singleton list;
                 -- renamer does dependency analysis
 
-        hs_instds :: [LInstDecl id],
+        hs_instds  :: [LInstDecl id],
+                -- Both class and family instance declarations in here
+
         hs_derivds :: [LDerivDecl id],
 
         hs_fixds  :: [LFixitySig id],
@@ -154,7 +159,8 @@ emptyGroup, emptyRdrGroup, emptyRnGroup :: HsGroup a
 emptyRdrGroup = emptyGroup { hs_valds = emptyValBindsIn }
 emptyRnGroup  = emptyGroup { hs_valds = emptyValBindsOut }
 
-emptyGroup = HsGroup { hs_tyclds = [], hs_instds = [], hs_derivds = [],
+emptyGroup = HsGroup { hs_tyclds = [], hs_instds = [], 
+                       hs_derivds = [],
                        hs_fixds = [], hs_defds = [], hs_annds = [],
                        hs_fords = [], hs_warnds = [], hs_ruleds = [], hs_vects = [],
                        hs_valds = error "emptyGroup hs_valds: Can't happen",
@@ -430,8 +436,9 @@ Interface file code:
 -- In both cases, 'tcdVars' collects all variables we need to quantify over.
 
 type LTyClDecl name = Located (TyClDecl name)
-type TyClGroup name = [LTyClDecl name]  -- this is used in TcTyClsDecls to represent
+type TyClGroup name = [LTyClDecl name]  -- This is used in TcTyClsDecls to represent
                                         -- strongly connected components of decls
+                                        -- No familiy instances in here
 
 -- | A type or class declaration.
 data TyClDecl name
@@ -442,10 +449,10 @@ data TyClDecl name
 
 
   | -- | @type/data family T :: *->*@
-    TyFamily {  tcdFlavour:: FamilyFlavour,             -- type or data
-                tcdLName  :: Located name,              -- type constructor
-                tcdTyVars :: [LHsTyVarBndr name],       -- type variables
-                tcdKind   :: Maybe (LHsKind name)       -- result kind
+    TyFamily {  tcdFlavour :: FamilyFlavour,             -- type or data
+                tcdLName   :: Located name,              -- type constructor
+                tcdTyVars  :: [LHsTyVarBndr name],       -- type variables
+                tcdKindSig :: Maybe (HsBndrSig (LHsKind name))  -- result kind
     }
 
 
@@ -458,11 +465,12 @@ data TyClDecl name
                 tcdCtxt   :: LHsContext name,           -- ^ Context
                 tcdLName  :: Located name,              -- ^ Type constructor
 
+                tcdCType  :: Maybe CType,
                 tcdTyVars :: [LHsTyVarBndr name],       -- ^ Type variables
                 tcdTyPats :: Maybe [LHsType name],      -- ^ Type patterns.
                   -- See Note [tcdTyVars and tcdTyPats] 
 
-                tcdKindSig:: Maybe (LHsKind name),
+                tcdKindSig:: Maybe (HsBndrSig (LHsKind name)),
                         -- ^ Optional kind signature.
                         --
                         -- @(Just k)@ for a GADT-style @data@, or @data
@@ -493,7 +501,9 @@ data TyClDecl name
                 tcdTyPats :: Maybe [LHsType name],      -- ^ Type patterns
                   -- See Note [tcdTyVars and tcdTyPats] 
 
-                tcdSynRhs :: LHsType name               -- ^ synonym expansion
+                tcdSynRhs :: LHsType name,              -- ^ synonym expansion
+                tcdFVs    :: NameSet                    -- ^ Free tycons of the decl
+                                                        -- (Used for cycle detection)
     }
 
   | ClassDecl { tcdCtxt    :: LHsContext name,          -- ^ Context...
@@ -504,7 +514,7 @@ data TyClDecl name
                 tcdMeths   :: LHsBinds name,            -- ^ Default methods
                 tcdATs     :: [LTyClDecl name],         -- ^ Associated types; ie
                                                         --   only 'TyFamily'
-                tcdATDefs  :: [LTyClDecl name],         -- ^ Associated type defaults; ie
+                tcdATDefs  :: [LFamInstDecl name],      -- ^ Associated type defaults; ie
                                                         --   only 'TySynonym'
                 tcdDocs    :: [LDocDecl]                -- ^ Haddock docs
     }
@@ -602,15 +612,14 @@ tyClDeclTyVars (ForeignType {})                = []
 \end{code}
 
 \begin{code}
-countTyClDecls :: [TyClDecl name] -> (Int, Int, Int, Int, Int, Int)
-        -- class, synonym decls, data, newtype, family decls, family instances
+countTyClDecls :: [TyClDecl name] -> (Int, Int, Int, Int, Int)
+        -- class, synonym decls, data, newtype, family decls
 countTyClDecls decls 
  = (count isClassDecl    decls,
     count isSynDecl      decls,  -- excluding...
     count isDataTy       decls,  -- ...family...
     count isNewTy        decls,  -- ...instances
-    count isFamilyDecl   decls,
-    count isFamInstDecl  decls)
+    count isFamilyDecl   decls)
  where
    isDataTy TyData{tcdND = DataType, tcdTyPats = Nothing} = True
    isDataTy _                                             = False
@@ -627,7 +636,7 @@ instance OutputableBndr name
         = hsep [ptext (sLit "foreign import type dotnet"), ppr ltycon]
 
     ppr (TyFamily {tcdFlavour = flavour, tcdLName = ltycon, 
-                   tcdTyVars = tyvars, tcdKind = mb_kind})
+                   tcdTyVars = tyvars, tcdKindSig = mb_kind})
       = pp_flavour <+> pp_decl_head [] ltycon tyvars Nothing <+> pp_kind
         where
           pp_flavour = case flavour of
@@ -658,7 +667,7 @@ instance OutputableBndr name
                   derivings
       where
         ppr_sigx Nothing     = empty
-        ppr_sigx (Just kind) = dcolon <+> ppr kind
+        ppr_sigx (Just (HsBSig kind _)) = dcolon <+> ppr kind
 
     ppr (ClassDecl {tcdCtxt = context, tcdLName = lclas, tcdTyVars = tyvars, 
                     tcdFDs  = fds,
@@ -759,7 +768,7 @@ data ConDecl name
     , con_details   :: HsConDeclDetails name
         -- ^ The main payload
 
-    , con_res       :: ResType name
+    , con_res       :: ResType (LHsType name)
         -- ^ Result type of the constructor
 
     , con_doc       :: Maybe LHsDocString
@@ -779,16 +788,16 @@ hsConDeclArgTys (PrefixCon tys)    = tys
 hsConDeclArgTys (InfixCon ty1 ty2) = [ty1,ty2]
 hsConDeclArgTys (RecCon flds)      = map cd_fld_type flds
 
-data ResType name
+data ResType ty
    = ResTyH98           -- Constructor was declared using Haskell 98 syntax
-   | ResTyGADT (LHsType name)   -- Constructor was declared using GADT-style syntax,
-                                --      and here is its result type
+   | ResTyGADT ty       -- Constructor was declared using GADT-style syntax,
+                        --      and here is its result type
    deriving (Data, Typeable)
 
-instance OutputableBndr name => Outputable (ResType name) where
+instance Outputable ty => Outputable (ResType ty) where
          -- Debugging only
-   ppr ResTyH98 = ptext (sLit "ResTyH98")
-   ppr (ResTyGADT ty) = ptext (sLit "ResTyGADT") <+> pprParendHsType (unLoc ty)
+   ppr ResTyH98       = ptext (sLit "ResTyH98")
+   ppr (ResTyGADT ty) = ptext (sLit "ResTyGADT") <+> ppr ty
 \end{code}
 
 
@@ -833,18 +842,25 @@ pprConDecl (ConDecl {con_name = con, con_details = InfixCon {}, con_res = ResTyG
 \begin{code}
 type LInstDecl name = Located (InstDecl name)
 
-data InstDecl name
-  = InstDecl    (LHsType name)  -- Context => Class Instance-type
-                                -- Using a polytype means that the renamer conveniently
-                                -- figures out the quantified type variables for us.
-                (LHsBinds name)
-                [LSig name]     -- User-supplied pragmatic info
-                [LTyClDecl name]-- Associated types (ie, 'TyData' and
-                                -- 'TySynonym' only)
+type LFamInstDecl name = Located (FamInstDecl name)
+type FamInstDecl  name = TyClDecl name  -- Type or data family instance
+
+data InstDecl name  -- Both class and family instances
+  = ClsInstDecl    
+      (LHsType name)    -- Context => Class Instance-type
+                        -- Using a polytype means that the renamer conveniently
+                        -- figures out the quantified type variables for us.
+      (LHsBinds name)
+      [LSig name]          -- User-supplied pragmatic info
+      [LFamInstDecl name]  -- Family instances for associated types
+
+  | FamInstDecl         -- type/data family instance
+      (FamInstDecl name)
+
   deriving (Data, Typeable)
 
 instance (OutputableBndr name) => Outputable (InstDecl name) where
-    ppr (InstDecl inst_ty binds sigs ats)
+    ppr (ClsInstDecl inst_ty binds sigs ats)
       | null sigs && null ats && isEmptyBag binds  -- No "where" part
       = top_matter
 
@@ -855,10 +871,16 @@ instance (OutputableBndr name) => Outputable (InstDecl name) where
       where
         top_matter = ptext (sLit "instance") <+> ppr inst_ty
 
+    ppr (FamInstDecl decl) = ppr decl
+
 -- Extract the declarations of associated types from an instance
---
-instDeclATs :: [LInstDecl name] -> [LTyClDecl name]
-instDeclATs inst_decls = [at | L _ (InstDecl _ _ _ ats) <- inst_decls, at <- ats]
+
+instDeclFamInsts :: [LInstDecl name] -> [LTyClDecl name]
+instDeclFamInsts inst_decls 
+  = concatMap do_one inst_decls
+  where
+    do_one (L _ (ClsInstDecl _ _ _ fam_insts)) = fam_insts
+    do_one (L loc (FamInstDecl fam_inst))      = [L loc fam_inst]
 \end{code}
 
 %************************************************************************
@@ -964,7 +986,7 @@ data ForeignImport = -- import of a C entity
                      --
                      CImport  CCallConv       -- ccall or stdcall
                               Safety          -- interruptible, safe or unsafe
-                              FastString      -- name of C header
+                              (Maybe Header)  -- name of C header
                               CImportSpec     -- details of the C entity
   deriving (Data, Typeable)
 
@@ -994,16 +1016,21 @@ instance OutputableBndr name => Outputable (ForeignDecl name) where
        2 (dcolon <+> ppr ty)
 
 instance Outputable ForeignImport where
-  ppr (CImport  cconv safety header spec) =
+  ppr (CImport  cconv safety mHeader spec) =
     ppr cconv <+> ppr safety <+> 
     char '"' <> pprCEntity spec <> char '"'
     where
-      pp_hdr = if nullFS header then empty else ftext header
+      pp_hdr = case mHeader of
+               Nothing -> empty
+               Just (Header header) -> ftext header
 
       pprCEntity (CLabel lbl) = 
         ptext (sLit "static") <+> pp_hdr <+> char '&' <> ppr lbl
-      pprCEntity (CFunction (StaticTarget lbl _)) = 
-        ptext (sLit "static") <+> pp_hdr <+> ppr lbl
+      pprCEntity (CFunction (StaticTarget lbl _ isFun)) = 
+            ptext (sLit "static")
+        <+> pp_hdr
+        <+> (if isFun then empty else ptext (sLit "value"))
+        <+> ppr lbl
       pprCEntity (CFunction (DynamicTarget)) =
         ptext (sLit "dynamic")
       pprCEntity (CWrapper) = ptext (sLit "wrapper")
@@ -1036,10 +1063,10 @@ data RuleDecl name
 
 data RuleBndr name
   = RuleBndr (Located name)
-  | RuleBndrSig (Located name) (LHsType name)
+  | RuleBndrSig (Located name) (HsBndrSig (LHsType name))
   deriving (Data, Typeable)
 
-collectRuleBndrSigTys :: [RuleBndr name] -> [LHsType name]
+collectRuleBndrSigTys :: [RuleBndr name] -> [HsBndrSig (LHsType name)]
 collectRuleBndrSigTys bndrs = [ty | RuleBndrSig _ ty <- bndrs]
 
 instance OutputableBndr name => Outputable (RuleDecl name) where

@@ -17,7 +17,7 @@ HsTypes: Abstract syntax: user-defined types
 
 module HsTypes (
 	HsType(..), LHsType, HsKind, LHsKind,
-	HsTyVarBndr(..), LHsTyVarBndr,
+	HsBndrSig(..), HsTyVarBndr(..), LHsTyVarBndr,
 	HsTupleSort(..), HsExplicitFlag(..),
 	HsContext, LHsContext,
 	HsQuasiQuote(..),
@@ -29,14 +29,14 @@ module HsTypes (
 	ConDeclField(..), pprConDeclFields,
 	
 	mkExplicitHsForAllTy, mkImplicitHsForAllTy, hsExplicitTvs,
-	hsTyVarName, hsTyVarNames, replaceTyVarName, replaceLTyVarName,
-	hsTyVarKind, hsLTyVarKind, hsTyVarNameKind,
+	hsTyVarName, hsTyVarNames, 
 	hsLTyVarName, hsLTyVarNames, hsLTyVarLocName, hsLTyVarLocNames,
 	splitHsInstDeclTy_maybe, splitLHsInstDeclTy_maybe,
         splitHsForAllTy, splitLHsForAllTy,
         splitHsClassTy_maybe, splitLHsClassTy_maybe,
         splitHsFunType,
 	splitHsAppTys, mkHsAppTys, mkHsOpTy,
+        placeHolderBndrs,
 
 	-- Printing
 	pprParendHsType, pprHsForAll, pprHsContext, ppr_hs_context,
@@ -47,6 +47,7 @@ import {-# SOURCE #-} HsExpr ( HsSplice, pprSplice )
 import HsLit
 
 import NameSet( FreeVars )
+import Name( Name )
 import Type
 import HsDoc
 import BasicTypes
@@ -119,12 +120,42 @@ type LHsType name = Located (HsType name)
 type HsKind name = HsType name
 type LHsKind name = Located (HsKind name)
 
+type LHsTyVarBndr name = Located (HsTyVarBndr name)
+
+data HsBndrSig sig 
+  = HsBSig 
+       sig 
+       [Name]   -- The *binding* type/kind names of this signature
+  deriving (Data, Typeable)
+-- Consider a binder (or pattern) decoarated with a type or kind, 
+--    \ (x :: a -> a). blah
+--    forall (a :: k -> *) (b :: k). blah
+-- Then we use a LHsBndrSig on the binder, so that the
+-- renamer can decorate it with the variables bound
+-- by the pattern ('a' in the first example, 'k' in the second),
+-- assuming that neither of them is in scope already
+
+placeHolderBndrs :: [Name]
+-- Used for the NameSet in FunBind and PatBind prior to the renamer
+placeHolderBndrs = panic "placeHolderBndrs"
+
+data HsTyVarBndr name
+  = UserTyVar		-- No explicit kinding
+         name 		-- See Note [Printing KindedTyVars]
+
+  | KindedTyVar
+         name
+         (HsBndrSig (LHsKind name))   -- The user-supplied kind signature
+      --  *** NOTA BENE *** A "monotype" in a pragma can have
+      -- for-alls in it, (mostly to do with dictionaries).  These
+      -- must be explicitly Kinded.
+  deriving (Data, Typeable)
+
 data HsType name
   = HsForAllTy	HsExplicitFlag   	-- Renamer leaves this flag unchanged, to record the way
 					-- the user wrote it originally, so that the printer can
 					-- print it as the user wrote it
-		[LHsTyVarBndr name]	-- With ImplicitForAll, this is the empty list
-					-- until the renamer fills in the variables
+		[LHsTyVarBndr name]	-- See Note [HsForAllTy tyvar binders]
 		(LHsContext name)
 		(LHsType name)
 
@@ -194,6 +225,22 @@ type HsTyOp name = (HsTyWrapper, name)
 mkHsOpTy :: LHsType name -> Located name -> LHsType name -> HsType name
 mkHsOpTy ty1 op ty2 = HsOpTy ty1 (WpKiApps [], op) ty2
 \end{code}
+
+Note [HsForAllTy tyvar binders]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+After parsing:
+  * Implicit => empty
+    Explicit => the varibles the user wrote
+
+After renaming
+  * Implicit => the *type* variables free in the type
+    Explicit => the variables the user wrote (renamed)
+
+Note that in neither case do we inclde the kind variables.
+In the explicit case, the [HsTyVarBndr] can bring kind variables
+into scope:    f :: forall (a::k->*) (b::k). a b -> Int
+but we do not record them explicitly, similar to the case
+for the type variables in a pattern type signature.
 
 Note [Unit tuples]
 ~~~~~~~~~~~~~~~~~~
@@ -323,36 +370,9 @@ hsExplicitTvs (L _ (HsForAllTy Explicit tvs _ _)) = hsLTyVarNames tvs
 hsExplicitTvs _                                   = []
 
 ---------------------
-type LHsTyVarBndr name = Located (HsTyVarBndr name)
-
-data HsTyVarBndr name
-  = UserTyVar		-- No explicit kinding
-         name 		-- See Note [Printing KindedTyVars]
-         PostTcKind
-
-  | KindedTyVar
-         name
-         (LHsKind name)	-- The user-supplied kind signature
-         PostTcKind
-      --  *** NOTA BENE *** A "monotype" in a pragma can have
-      -- for-alls in it, (mostly to do with dictionaries).  These
-      -- must be explicitly Kinded.
-  deriving (Data, Typeable)
-
 hsTyVarName :: HsTyVarBndr name -> name
-hsTyVarName (UserTyVar n _)   = n
-hsTyVarName (KindedTyVar n _ _) = n
-
-hsTyVarKind :: HsTyVarBndr name -> Kind
-hsTyVarKind (UserTyVar _ k)   = k
-hsTyVarKind (KindedTyVar _ _ k) = k
-
-hsLTyVarKind :: LHsTyVarBndr name -> Kind
-hsLTyVarKind  = hsTyVarKind . unLoc
-
-hsTyVarNameKind :: HsTyVarBndr name -> (name, Kind)
-hsTyVarNameKind (UserTyVar n k)   = (n,k)
-hsTyVarNameKind (KindedTyVar n _ k) = (n,k)
+hsTyVarName (UserTyVar n)     = n
+hsTyVarName (KindedTyVar n _) = n
 
 hsLTyVarName :: LHsTyVarBndr name -> name
 hsLTyVarName = hsTyVarName . unLoc
@@ -368,19 +388,6 @@ hsLTyVarLocName = fmap hsTyVarName
 
 hsLTyVarLocNames :: [LHsTyVarBndr name] -> [Located name]
 hsLTyVarLocNames = map hsLTyVarLocName
-
-replaceTyVarName :: (Monad m) => HsTyVarBndr name1 -> name2  -- new type name
-                    -> (LHsKind name1 -> m (LHsKind name2))  -- kind renaming
-                    -> m (HsTyVarBndr name2)
-replaceTyVarName (UserTyVar _ k) n' _ = return $ UserTyVar n' k
-replaceTyVarName (KindedTyVar _ k tck) n' rn = do
-  k' <- rn k
-  return $ KindedTyVar n' k' tck
-
-replaceLTyVarName :: (Monad m) => LHsTyVarBndr name1 -> name2
-                  -> (LHsKind name1 -> m (LHsKind name2))
-                  -> m (LHsTyVarBndr name2)
-replaceLTyVarName (L loc n1) n2 rn = replaceTyVarName n1 n2 rn >>= return . L loc
 \end{code}
 
 
@@ -468,9 +475,12 @@ splitHsFunType other 	   	   = ([], other)
 instance (OutputableBndr name) => Outputable (HsType name) where
     ppr ty = pprHsType ty
 
+instance (Outputable sig) => Outputable (HsBndrSig sig) where
+    ppr (HsBSig ty _) = ppr ty
+
 instance (OutputableBndr name) => Outputable (HsTyVarBndr name) where
-    ppr (UserTyVar name _)      = ppr name
-    ppr (KindedTyVar name kind _) = parens $ hsep [ppr name, dcolon, ppr kind]
+    ppr (UserTyVar name)        = ppr name
+    ppr (KindedTyVar name kind) = parens $ hsep [ppr name, dcolon, ppr kind]
 
 pprHsForAll :: OutputableBndr name => HsExplicitFlag -> [LHsTyVarBndr name] ->  LHsContext name -> SDoc
 pprHsForAll exp tvs cxt 
@@ -560,7 +570,7 @@ ppr_mono_ty _    (HsTupleTy con tys) = tupleParens std_con (interpp'SP tys)
                     _              -> BoxedTuple
 ppr_mono_ty _    (HsKindSig ty kind) = parens (ppr_mono_lty pREC_TOP ty <+> dcolon <+> ppr kind)
 ppr_mono_ty _    (HsListTy ty)	     = brackets (ppr_mono_lty pREC_TOP ty)
-ppr_mono_ty _    (HsPArrTy ty)	     = pabrackets (ppr_mono_lty pREC_TOP ty)
+ppr_mono_ty _    (HsPArrTy ty)	     = paBrackets (ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty prec (HsIParamTy n ty)   = maybeParen prec pREC_FUN (ppr n <+> dcolon <+> ppr_mono_lty pREC_TOP ty)
 ppr_mono_ty _    (HsSpliceTy s _ _)  = pprSplice s
 ppr_mono_ty _    (HsCoreTy ty)       = ppr ty
@@ -613,10 +623,6 @@ ppr_fun_ty ctxt_prec ty1 ty2
     in
     maybeParen ctxt_prec pREC_FUN $
     sep [p1, ptext (sLit "->") <+> p2]
-
---------------------------
-pabrackets :: SDoc -> SDoc
-pabrackets p = ptext (sLit "[:") <> p <> ptext (sLit ":]")
 \end{code}
 
 

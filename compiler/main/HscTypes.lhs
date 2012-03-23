@@ -917,6 +917,10 @@ appendStubC (ForeignStubs h c) c_code = ForeignStubs h (c $$ c_code)
 -- context in which statements are executed in a GHC session.
 data InteractiveContext
   = InteractiveContext {
+         ic_dflags     :: DynFlags,
+             -- ^ The 'DynFlags' used to evaluate interative expressions
+             -- and statements.
+
          ic_imports    :: [InteractiveImport],
              -- ^ The GHCi context is extended with these imports
              --
@@ -931,7 +935,8 @@ data InteractiveContext
 
          ic_tythings   :: [TyThing],
              -- ^ TyThings defined by the user, in reverse order of
-             -- definition.
+             -- definition.  At a breakpoint, this list includes the
+             -- local variables in scope at that point
 
          ic_sys_vars   :: [Id],
              -- ^ Variables defined automatically by the system (e.g.
@@ -976,9 +981,10 @@ hscDeclsWithLocation) and save them in ic_sys_vars.
 -}
 
 -- | Constructs an empty InteractiveContext.
-emptyInteractiveContext :: InteractiveContext
-emptyInteractiveContext
-  = InteractiveContext { ic_imports    = [],
+emptyInteractiveContext :: DynFlags -> InteractiveContext
+emptyInteractiveContext dflags
+  = InteractiveContext { ic_dflags     = dflags,
+                         ic_imports    = [],
                          ic_rn_gbl_env = emptyGlobalRdrEnv,
                          ic_tythings   = [],
                          ic_sys_vars   = [],
@@ -1040,7 +1046,7 @@ data InteractiveImport
       -- ^ Bring the exports of a particular module
       -- (filtered by an import decl) into scope
 
-  | IIModule Module
+  | IIModule ModuleName
       -- ^ Bring into scope the entire top-level envt of
       -- of this module, including the things imported
       -- into it.
@@ -1386,8 +1392,9 @@ lookupType dflags hpt pte name
        lookupNameEnv (md_types (hm_details hm)) name
   | otherwise
   = lookupNameEnv pte name
-  where mod = ASSERT( isExternalName name ) nameModule name
-        this_pkg = thisPackage dflags
+  where 
+    mod = ASSERT2( isExternalName name, ppr name ) nameModule name
+    this_pkg = thisPackage dflags
 
 -- | As 'lookupType', but with a marginally easier-to-use interface
 -- if you have a 'HscEnv'

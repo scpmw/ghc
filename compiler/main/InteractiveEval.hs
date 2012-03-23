@@ -195,20 +195,22 @@ runStmtWithLocation source linenumber expr step =
 
     -- Turn off -fwarn-unused-bindings when running a statement, to hide
     -- warnings about the implicit bindings we introduce.
-    let dflags'  = wopt_unset (hsc_dflags hsc_env) Opt_WarnUnusedBinds
-        hsc_env' = hsc_env{ hsc_dflags = dflags' }
+    let ic       = hsc_IC hsc_env -- use the interactive dflags
+        idflags' = ic_dflags ic `wopt_unset` Opt_WarnUnusedBinds
+        hsc_env' = hsc_env{ hsc_IC = ic{ ic_dflags = idflags' } }
 
+    -- compile to value (IO [HValue]), don't run
     r <- liftIO $ hscStmtWithLocation hsc_env' expr source linenumber
 
     case r of
-      Nothing -> return (RunOk []) -- empty statement / comment
+      -- empty statement / comment
+      Nothing -> return (RunOk [])
 
       Just (tyThings, hval) -> do
         status <-
           withVirtualCWD $
-            withBreakAction (isStep step) dflags' breakMVar statusMVar $ do
-                let thing_to_run = unsafeCoerce# hval :: IO [HValue]
-                liftIO $ sandboxIO dflags' statusMVar thing_to_run
+            withBreakAction (isStep step) idflags' breakMVar statusMVar $ do
+                liftIO $ sandboxIO idflags' statusMVar hval
 
         let ic = hsc_IC hsc_env
             bindings = (ic_tythings ic, ic_rn_gbl_env ic)
@@ -228,13 +230,7 @@ runDeclsWithLocation :: GhcMonad m => String -> Int -> String -> m [Name]
 runDeclsWithLocation source linenumber expr =
   do
     hsc_env <- getSession
-
-    -- Turn off -fwarn-unused-bindings when running a statement, to hide
-    -- warnings about the implicit bindings we introduce.
-    let dflags'  = wopt_unset (hsc_dflags hsc_env) Opt_WarnUnusedBinds
-        hsc_env' = hsc_env{ hsc_dflags = dflags' }
-
-    (tyThings, ic) <- liftIO $ hscDeclsWithLocation hsc_env' expr source linenumber
+    (tyThings, ic) <- liftIO $ hscDeclsWithLocation hsc_env expr source linenumber
 
     setSession $ hsc_env { hsc_IC = ic }
     hsc_env <- getSession
@@ -821,7 +817,7 @@ findGlobalRdrEnv hsc_env imports
     idecls :: [LImportDecl RdrName]
     idecls = [noLoc d | IIDecl d <- imports]
 
-    imods :: [Module]
+    imods :: [ModuleName]
     imods = [m | IIModule m <- imports]
 
 availsToGlobalRdrEnv :: ModuleName -> [AvailInfo] -> GlobalRdrEnv
@@ -835,9 +831,9 @@ availsToGlobalRdrEnv mod_name avails
                          is_qual = False,
                          is_dloc = srcLocSpan interactiveSrcLoc }
 
-mkTopLevEnv :: HomePackageTable -> Module -> IO GlobalRdrEnv
+mkTopLevEnv :: HomePackageTable -> ModuleName -> IO GlobalRdrEnv
 mkTopLevEnv hpt modl
-  = case lookupUFM hpt (moduleName modl) of
+  = case lookupUFM hpt modl of
       Nothing -> ghcError (ProgramError ("mkTopLevEnv: not a home module " ++
                                                 showSDoc (ppr modl)))
       Just details ->
@@ -942,20 +938,18 @@ typeKind normalise str = withSession $ \hsc_env -> do
    liftIO $ hscKcType hsc_env normalise str
 
 -----------------------------------------------------------------------------
--- cmCompileExpr: compile an expression and deliver an HValue
+-- Compile an expression, run it and deliver the resulting HValue
 
 compileExpr :: GhcMonad m => String -> m HValue
 compileExpr expr = withSession $ \hsc_env -> do
   Just (ids, hval) <- liftIO $ hscStmt hsc_env ("let __cmCompileExpr = "++expr)
-                 -- Run it!
-  hvals <- liftIO (unsafeCoerce# hval :: IO [HValue])
-
+  hvals <- liftIO hval
   case (ids,hvals) of
     ([_],[hv]) -> return hv
-    _        -> panic "compileExpr"
+    _          -> panic "compileExpr"
 
 -- -----------------------------------------------------------------------------
--- Compile an expression into a dynamic
+-- Compile an expression, run it and return the result as a dynamic
 
 dynCompileExpr :: GhcMonad m => String -> m Dynamic
 dynCompileExpr expr = do
@@ -977,8 +971,8 @@ dynCompileExpr expr = do
     setContext iis
     vals <- liftIO (unsafeCoerce# hvals :: IO [Dynamic])
     case (ids,vals) of
-        (_:[], v:[])    -> return v
-        _               -> panic "dynCompileExpr"
+        (_:[], v:[]) -> return v
+        _            -> panic "dynCompileExpr"
 
 -----------------------------------------------------------------------------
 -- show a module and it's source/object filenames

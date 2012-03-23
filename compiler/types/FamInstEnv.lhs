@@ -13,15 +13,15 @@ FamInstEnv: Type checked family instance declarations
 -- for details
 
 module FamInstEnv (
-	FamInst(..), FamFlavor(..), famInstAxiom, famInstTyVars,
+	FamInst(..), FamFlavor(..), famInstAxiom, 
         famInstsRepTyCons, famInstRepTyCon_maybe, dataFamInstRepTyCon, 
         famInstLHS,
 	pprFamInst, pprFamInstHdr, pprFamInsts, 
 	mkSynFamInst, mkDataFamInst, mkImportedFamInst,
 
 	FamInstEnvs, FamInstEnv, emptyFamInstEnv, emptyFamInstEnvs, 
-	extendFamInstEnv, overwriteFamInstEnv, extendFamInstEnvList, 
-	famInstEnvElts, familyInstances,
+	extendFamInstEnv, deleteFromFamInstEnv, extendFamInstEnvList, 
+	identicalFamInst, famInstEnvElts, familyInstances,
 
 	lookupFamInstEnv, lookupFamInstEnvConflicts, lookupFamInstEnvConflicts',
 	
@@ -38,6 +38,7 @@ import TypeRep
 import TyCon
 import Coercion
 import VarSet
+import VarEnv
 import Name
 import UniqFM
 import Outputable
@@ -123,9 +124,6 @@ dataFamInstRepTyCon fi
   = case fi_flavor fi of
        DataFamilyInst tycon -> tycon
        SynFamilyInst        -> pprPanic "dataFamInstRepTyCon" (ppr fi)
-
-famInstTyVars :: FamInst -> TyVarSet
-famInstTyVars = fi_tvs
 \end{code}
 
 \begin{code}
@@ -157,7 +155,9 @@ pprFamInstHdr (FamInst {fi_axiom = axiom, fi_flavor = flavor})
       | isTyConAssoc fam_tc = empty
       | otherwise           = ptext (sLit "instance")
 
-    pprHead = pprTypeApp fam_tc tys
+    pprHead = sep [ ifPprDebug (ptext (sLit "forall") 
+                       <+> pprTvBndrs (coAxiomTyVars axiom))
+                  , pprTypeApp fam_tc tys ]
     pprTyConSort = case flavor of
                      SynFamilyInst        -> ptext (sLit "type")
                      DataFamilyInst tycon
@@ -325,41 +325,26 @@ extendFamInstEnv inst_env ins_item@(FamInst {fi_fam = cls_nm, fi_tcs = mb_tcs})
 				      (ins_tyvar || tyvar)
     ins_tyvar = not (any isJust mb_tcs)
 
-overwriteFamInstEnv :: FamInstEnv -> FamInst -> FamInstEnv
-overwriteFamInstEnv inst_env ins_item@(FamInst {fi_fam = cls_nm, fi_tcs = mb_tcs})
-  = addToUFM_C add inst_env cls_nm (FamIE [ins_item] ins_tyvar)
+deleteFromFamInstEnv :: FamInstEnv -> FamInst -> FamInstEnv
+deleteFromFamInstEnv inst_env fam_inst@(FamInst {fi_fam = fam_nm})
+ = adjustUFM adjust inst_env fam_nm
+ where
+   adjust :: FamilyInstEnv -> FamilyInstEnv
+   adjust (FamIE items tyvars)
+     = FamIE (filterOut (identicalFamInst fam_inst) items) tyvars
+
+identicalFamInst :: FamInst -> FamInst -> Bool
+-- Same LHS, *and* the instance is defined in the same module
+-- Used for overriding in GHCi
+identicalFamInst (FamInst { fi_axiom = ax1 }) (FamInst { fi_axiom = ax2 })
+  =  nameModule (coAxiomName ax1) == nameModule (coAxiomName ax2)
+  && eqTypeX rn_env (coAxiomLHS ax1) (coAxiomLHS ax2)
   where
-    add (FamIE items tyvar) _ = FamIE (replaceFInst items)
-				      (ins_tyvar || tyvar)
-    ins_tyvar = not (any isJust mb_tcs)
-    match _ tpl_tvs tpl_tys tys = tcMatchTys tpl_tvs tpl_tys tys
-    
-    inst_axiom = famInstAxiom ins_item
-    (fam, tys) = coAxiomSplitLHS inst_axiom
-    arity = tyConArity fam
-    n_tys = length tys
-    match_tys 
-        | arity > n_tys = take arity tys
-        | otherwise     = tys
-    rough_tcs = roughMatchTcs match_tys
-    
-    replaceFInst [] = [ins_item]
-    replaceFInst (item@(FamInst { fi_tcs = mb_tcs, fi_tvs = tpl_tvs, 
-                                  fi_tys = tpl_tys }) : rest)
-	-- Fast check for no match, uses the "rough match" fields
-      | instanceCantMatch rough_tcs mb_tcs
-      = item : replaceFInst rest
-
-        -- Proper check
-      | Just _ <- match item tpl_tvs tpl_tys match_tys
-      = ins_item : rest
-
-        -- No match => try next
-      | otherwise
-      = item : replaceFInst rest
-
-
-
+     tvs1 = coAxiomTyVars ax1
+     tvs2 = coAxiomTyVars ax2
+     rn_env = ASSERT( equalLength tvs1 tvs2 )
+              rnBndrs2 (mkRnEnv2 emptyInScopeSet) tvs1 tvs2
+                       
 \end{code}
 
 %************************************************************************
@@ -504,7 +489,7 @@ lookup_fam_inst_env' match_fun one_sided ie fam tys
     n_tys = length tys
     extra_tys = drop arity tys
     (match_tys, add_extra_tys) 
-       | arity > n_tys = (take arity tys, \res_tys -> res_tys ++ extra_tys)
+       | arity < n_tys = (take arity tys, \res_tys -> res_tys ++ extra_tys)
        | otherwise     = (tys,            \res_tys -> res_tys)
        	 -- The second case is the common one, hence functional representation
 

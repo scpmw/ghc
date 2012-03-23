@@ -68,7 +68,7 @@ module HsUtils(
   collectLStmtBinders, collectStmtBinders,
   collectSigTysFromPats, collectSigTysFromPat,
 
-  hsTyClDeclBinders, hsTyClDeclsBinders, 
+  hsLTyClDeclBinders, hsTyClDeclBinders, hsTyClDeclsBinders, 
   hsForeignDeclsBinders, hsGroupBinders,
   
   -- Collecting implicit binders
@@ -268,7 +268,7 @@ mkHsString s = HsString (mkFastString s)
 
 -------------
 userHsTyVarBndrs :: [Located name] -> [Located (HsTyVarBndr name)]
-userHsTyVarBndrs bndrs = [ L loc (UserTyVar v placeHolderKind) | L loc v <- bndrs ]
+userHsTyVarBndrs bndrs = [ L loc (UserTyVar v) | L loc v <- bndrs ]
 \end{code}
 
 
@@ -619,29 +619,33 @@ hsForeignDeclsBinders foreign_decls
   = [n | L _ (ForeignImport (L _ n) _ _ _) <- foreign_decls]
 
 hsTyClDeclsBinders :: [[LTyClDecl Name]] -> [Located (InstDecl Name)] -> [Name]
+-- We need to look at instance declarations too, 
+-- because their associated types may bind data constructors
 hsTyClDeclsBinders tycl_decls inst_decls
-  = [n | d <- instDeclATs inst_decls ++ concat tycl_decls
-       , L _ n <- hsTyClDeclBinders d]
+  = [n | d <- instDeclFamInsts inst_decls ++ concat tycl_decls
+       , L _ n <- hsLTyClDeclBinders d]
 
-hsTyClDeclBinders :: Eq name => Located (TyClDecl name) -> [Located name]
+hsLTyClDeclBinders :: Eq name => Located (TyClDecl name) -> [Located name]
 -- ^ Returns all the /binding/ names of the decl, along with their SrcLocs.
 -- The first one is guaranteed to be the name of the decl. For record fields
 -- mentioned in multiple constructors, the SrcLoc will be from the first
 -- occurence.  We use the equality to filter out duplicate field names
+hsLTyClDeclBinders (L _ d) = hsTyClDeclBinders d
 
-hsTyClDeclBinders (L _ (TyFamily    {tcdLName = name})) = [name]
-hsTyClDeclBinders (L _ (ForeignType {tcdLName = name})) = [name]
+hsTyClDeclBinders :: Eq name => TyClDecl name -> [Located name]
+hsTyClDeclBinders (TyFamily    {tcdLName = name}) = [name]
+hsTyClDeclBinders (ForeignType {tcdLName = name}) = [name]
 
-hsTyClDeclBinders (L _ (ClassDecl {tcdLName = cls_name, tcdSigs = sigs, tcdATs = ats}))
+hsTyClDeclBinders (ClassDecl {tcdLName = cls_name, tcdSigs = sigs, tcdATs = ats})
   = cls_name : 
-    concatMap hsTyClDeclBinders ats ++ [n | L _ (TypeSig ns _) <- sigs, n <- ns]
+    concatMap hsLTyClDeclBinders ats ++ [n | L _ (TypeSig ns _) <- sigs, n <- ns]
 
-hsTyClDeclBinders (L _ (TySynonym   {tcdLName = name, tcdTyPats = mb_pats })) 
+hsTyClDeclBinders (TySynonym   {tcdLName = name, tcdTyPats = mb_pats }) 
   | isJust mb_pats = []
   | otherwise      = [name]
   -- See Note [Binders in family instances]
 
-hsTyClDeclBinders (L _ (TyData {tcdLName = tc_name, tcdCons = cons, tcdTyPats = mb_pats }))
+hsTyClDeclBinders (TyData {tcdLName = tc_name, tcdCons = cons, tcdTyPats = mb_pats })
   | isJust mb_pats = hsConDeclsBinders cons
   | otherwise      = tc_name : hsConDeclsBinders cons
   -- See Note [Binders in family instances]
@@ -757,17 +761,17 @@ lPatImplicits = hs_lpat
 %************************************************************************
 
 \begin{code}
-collectSigTysFromPats :: [InPat name] -> [LHsType name]
+collectSigTysFromPats :: [InPat name] -> [HsBndrSig (LHsType name)]
 collectSigTysFromPats pats = foldr collect_sig_lpat [] pats
 
-collectSigTysFromPat :: InPat name -> [LHsType name]
+collectSigTysFromPat :: InPat name -> [HsBndrSig (LHsType name)]
 collectSigTysFromPat pat = collect_sig_lpat pat []
 
-collect_sig_lpat :: InPat name -> [LHsType name] -> [LHsType name]
+collect_sig_lpat :: InPat name -> [HsBndrSig (LHsType name)] -> [HsBndrSig (LHsType name)]
 collect_sig_lpat pat acc = collect_sig_pat (unLoc pat) acc
 
-collect_sig_pat :: Pat name -> [LHsType name] -> [LHsType name]
-collect_sig_pat (SigPatIn pat ty)  	acc = collect_sig_lpat pat (ty:acc)
+collect_sig_pat :: Pat name -> [HsBndrSig (LHsType name)] -> [HsBndrSig (LHsType name)]
+collect_sig_pat (SigPatIn pat ty)   acc = collect_sig_lpat pat (ty:acc)
 
 collect_sig_pat (LazyPat pat)       acc = collect_sig_lpat pat acc
 collect_sig_pat (BangPat pat)       acc = collect_sig_lpat pat acc

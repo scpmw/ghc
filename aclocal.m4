@@ -211,6 +211,9 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
         freebsd)
             test -z "[$]2" || eval "[$]2=OSFreeBSD"
             ;;
+        dragonfly)
+            test -z "[$]2" || eval "[$]2=OSDragonFly"
+            ;;
         kfreebsdgnu)
             test -z "[$]2" || eval "[$]2=OSKFreeBSD"
             ;;
@@ -220,7 +223,10 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
         netbsd)
             test -z "[$]2" || eval "[$]2=OSNetBSD"
             ;;
-        dragonfly|osf1|osf3|hpux|linuxaout|freebsd2|cygwin32|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix|haiku)
+        haiku)
+            test -z "[$]2" || eval "[$]2=OSHaiku"
+            ;;
+        dragonfly|osf1|osf3|hpux|linuxaout|freebsd2|cygwin32|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix)
             test -z "[$]2" || eval "[$]2=OSUnknown"
             ;;
         *)
@@ -293,7 +299,7 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
 
 # GET_ARM_ISA
 # ----------------------------------
-# Get info about the ISA on the Arm arch
+# Get info about the ISA on the ARM arch
 AC_DEFUN([GET_ARM_ISA],
 [
     AC_COMPILE_IFELSE([
@@ -357,12 +363,18 @@ AC_DEFUN([FP_SETTINGS],
 [
     if test "$windows" = YES
     then
-        SettingsCCompilerCommand='$topdir/../mingw/bin/gcc.exe'
+        if test "$HostArch" = "x86_64"
+        then
+            mingw_bin_prefix=x86_64-w64-mingw32-
+        else
+            mingw_bin_prefix=
+        fi
+        SettingsCCompilerCommand="\$topdir/../mingw/bin/${mingw_bin_prefix}gcc.exe"
         SettingsCCompilerFlags="$CONF_CC_OPTS_STAGE2 $CONF_GCC_LINKER_OPTS_STAGE2"
-        SettingsArCommand='$topdir/../mingw/bin/ar.exe'
+        SettingsArCommand="\$topdir/../mingw/bin/${mingw_bin_prefix}ar.exe"
         SettingsPerlCommand='$topdir/../perl/perl.exe'
-        SettingsDllWrapCommand='$topdir/../mingw/bin/dllwrap.exe'
-        SettingsWindresCommand='$topdir/../mingw/bin/windres.exe'
+        SettingsDllWrapCommand="\$topdir/../mingw/bin/${mingw_bin_prefix}dllwrap.exe"
+        SettingsWindresCommand="\$topdir/../mingw/bin/${mingw_bin_prefix}windres.exe"
         SettingsTouchCommand='$topdir/touchy.exe'
     else
         SettingsCCompilerCommand="$WhatGccIsCalled"
@@ -483,7 +495,7 @@ AC_DEFUN([FP_VISIBILITY_HIDDEN],
 
 # FPTOOLS_FLOAT_WORD_ORDER_BIGENDIAN
 # ----------------------------------
-# Little endian Arm on Linux with some ABIs has big endian word order
+# Little endian ARM on Linux with some ABIs has big endian word order
 # in doubles. Define FLOAT_WORDS_BIGENDIAN if this is the case.
 AC_DEFUN([FPTOOLS_FLOAT_WORD_ORDER_BIGENDIAN],
   [AC_CACHE_CHECK([whether float word order is big endian], [fptools_cv_float_word_order_bigendian],
@@ -526,7 +538,8 @@ AC_DEFUN([FP_EVAL_STDERR],
 # XXX
 #
 # $1 = the variable to set
-# $2 = the command to look for
+# $2 = the with option name
+# $3 = the command to look for
 #
 AC_DEFUN([FP_ARG_WITH_PATH_GNU_PROG],
 [
@@ -544,10 +557,14 @@ AC_ARG_WITH($2,
 [
     if test "$HostOS" != "mingw32"
     then
-        AC_PATH_PROG([$1], [$2])
+        if test "$target_alias" = "" ; then
+            AC_PATH_PROG([$1], [$3])
+        else
+            AC_PATH_PROG([$1], [$target_alias-$3])
+        fi
         if test -z "$$1"
         then
-            AC_MSG_ERROR([cannot find $2 in your PATH, no idea how to link])
+            AC_MSG_ERROR([cannot find $3 in your PATH])
         fi
     fi
 ]
@@ -635,7 +652,7 @@ AC_CHECK_TYPE([$1], [], [], [$3])[]dnl
 m4_pushdef([fp_Cache], [AS_TR_SH([fp_cv_alignment_$1])])[]dnl
 AC_CACHE_CHECK([alignment of $1], [fp_Cache],
 [if test "$AS_TR_SH([ac_cv_type_$1])" = yes; then
-  FP_COMPUTE_INT([(long) (&((struct { char c; $1 ty; } *)0)->ty)],
+  FP_COMPUTE_INT([offsetof(struct { char c; $1 ty; },ty)],
                  [fp_Cache],
                  [AC_INCLUDES_DEFAULT([$3])],
                  [AC_MSG_ERROR([cannot compute alignment ($1)
@@ -675,7 +692,8 @@ case $HostPlatform in
   esac ;;
 alpha-dec-osf*) fptools_cv_leading_underscore=no;;
 *cygwin32) fptools_cv_leading_underscore=yes;;
-*mingw32) fptools_cv_leading_underscore=yes;;
+i386-unknown-mingw32) fptools_cv_leading_underscore=yes;;
+x86_64-unknown-mingw32) fptools_cv_leading_underscore=no;;
 
     # HACK: Apple doesn't seem to provide nlist in the 64-bit-libraries
 x86_64-apple-darwin*) fptools_cv_leading_underscore=yes;;
@@ -765,9 +783,9 @@ dnl
 AC_DEFUN([FPTOOLS_HAPPY],
 [AC_PATH_PROG(HappyCmd,happy,)
 # Happy is passed to Cabal, so we need a native path
-if test "x$HostPlatform"  = "xi386-unknown-mingw32" && \
-   test "${OSTYPE}"      != "msys"                  && \
-   test "${HappyCmd}"    != ""
+if test "$HostOS"      = "mingw32" && \
+   test "${OSTYPE}"   != "msys"    && \
+   test "${HappyCmd}" != ""
 then
     # Canonicalise to <drive>:/path/to/gcc
     HappyCmd=`cygpath -m "${HappyCmd}"`
@@ -801,9 +819,9 @@ AC_DEFUN([FPTOOLS_ALEX],
 [
 AC_PATH_PROG(AlexCmd,alex,)
 # Alex is passed to Cabal, so we need a native path
-if test "x$HostPlatform"  = "xi386-unknown-mingw32" && \
-   test "${OSTYPE}"      != "msys"                  && \
-   test "${AlexCmd}"     != ""
+if test "$HostOS"     = "mingw32" && \
+   test "${OSTYPE}"  != "msys"    && \
+   test "${AlexCmd}" != ""
 then
     # Canonicalise to <drive>:/path/to/gcc
     AlexCmd=`cygpath -m "${AlexCmd}"`
@@ -1575,6 +1593,7 @@ AC_SUBST([ProjectPatchLevel])
 # timer_create() in certain versions of Linux (see bug #1933).
 #
 AC_DEFUN([FP_CHECK_TIMER_CREATE],
+if test "$cross_compiling" = "no" ; then
   [AC_CACHE_CHECK([for a working timer_create(CLOCK_REALTIME)], 
     [fptools_cv_timer_create_works],
     [AC_TRY_RUN([
@@ -1698,6 +1717,7 @@ case $fptools_cv_timer_create_works in
     yes) AC_DEFINE([USE_TIMER_CREATE], 1, 
                    [Define to 1 if we can use timer_create(CLOCK_PROCESS_CPUTIME_ID,...)]);;
 esac
+fi
 ])
 
 # FP_ICONV
@@ -1925,7 +1945,9 @@ case "$1" in
   freebsd|netbsd|openbsd|dragonfly|osf1|osf3|hpux|linuxaout|kfreebsdgnu|freebsd2|solaris2|cygwin32|mingw32|darwin|gnu|nextstep2|nextstep3|sunos4|ultrix|irix|aix|haiku)
     $2="$1"
     ;;
-  freebsd8) # like i686-gentoo-freebsd8
+  freebsd*) # like i686-gentoo-freebsd7
+            #      i686-gentoo-freebsd8
+            #      i686-gentoo-freebsd8.2
     $2="freebsd"
     ;;
   *)
@@ -1996,6 +2018,10 @@ AC_DEFUN([XCODE_VERSION],[
 # FIND_GCC()
 # --------------------------------
 # Finds where gcc is
+#
+# $1 = the variable to set
+# $2 = the with option name
+# $3 = the command to look for
 AC_DEFUN([FIND_GCC],[
     if test "$TargetOS_CPP" = "darwin" &&
        test "$XCodeVersion1" -eq 4 &&
@@ -2004,13 +2030,14 @@ AC_DEFUN([FIND_GCC],[
         # In Xcode 4.1, 'gcc-4.2' is the gcc legacy backend (rather
         # than the LLVM backend). We prefer the legacy gcc, but in
         # Xcode 4.2 'gcc-4.2' was removed.
-        FP_ARG_WITH_PATH_GNU_PROG([CC], [gcc-4.2])
+        FP_ARG_WITH_PATH_GNU_PROG([$1], [gcc-4.2], [gcc-4.2])
+    elif test "$windows" = YES
+    then
+        $1="$CC"
     else
-        FP_ARG_WITH_PATH_GNU_PROG([CC], [gcc])
+        FP_ARG_WITH_PATH_GNU_PROG([$1], [$2], [$3])
     fi
-    export CC
-    WhatGccIsCalled="$CC"
-    AC_SUBST(WhatGccIsCalled)
+    AC_SUBST($1)
 ])
 
 # LocalWords:  fi

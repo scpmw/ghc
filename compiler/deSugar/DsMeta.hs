@@ -65,7 +65,7 @@ import Bag
 import FastString
 import ForeignCall
 import MonadUtils
-import Util( equalLength )
+import Util( equalLength, filterOut )
 
 import Data.Maybe
 import Control.Monad
@@ -124,15 +124,17 @@ repTopDs group
 	--	     return (Data t [] ...more t's... }
 	-- The other important reason is that the output must mention
 	-- only "T", not "Foo:T" where Foo is the current module
-
 	
 	decls <- addBinds ss (do {
+                        fix_ds  <- mapM repFixD (hs_fixds group) ;
 			val_ds  <- rep_val_binds (hs_valds group) ;
 			tycl_ds <- mapM repTyClD (concat (hs_tyclds group)) ;
-			inst_ds <- mapM repInstD' (hs_instds group) ;
+			inst_ds <- mapM repInstD (hs_instds group) ;
 			for_ds <- mapM repForD (hs_fords group) ;
 			-- more needed
-			return (de_loc $ sort_by_loc $ val_ds ++ catMaybes tycl_ds ++ inst_ds ++ for_ds) }) ;
+			return (de_loc $ sort_by_loc $ 
+                                val_ds ++ catMaybes tycl_ds ++ fix_ds
+                                       ++ catMaybes inst_ds ++ for_ds) }) ;
 
 	decl_ty <- lookupType decQTyConName ;
 	let { core_list = coreList' decl_ty decls } ;
@@ -168,20 +170,40 @@ in repTyClD and repC.
 
 -}
 
+-- represent associated family instances
+--
+repTyClDs :: [LTyClDecl Name] -> DsM [Core TH.DecQ]
+repTyClDs ds = liftM de_loc (mapMaybeM repTyClD ds)
+
+
 repTyClD :: LTyClDecl Name -> DsM (Maybe (SrcSpan, Core TH.DecQ))
 
-repTyClD tydecl@(L _ (TyFamily {}))
-  = repTyFamily tydecl addTyVarBinds
+repTyClD (L loc (TyFamily { tcdFlavour = flavour,
+		            tcdLName   = tc, tcdTyVars = tvs, 
+		            tcdKindSig = opt_kind }))
+  = do { tc1 <- lookupLOcc tc 		-- See note [Binders and occurrences] 
+       ; dec <- addTyClTyVarBinds tvs $ \bndrs ->
+           do { flav   <- repFamilyFlavour flavour
+	      ; bndrs1 <- coreList tyVarBndrTyConName bndrs
+              ; case opt_kind of 
+                  Nothing -> repFamilyNoKind flav tc1 bndrs1
+                  Just (HsBSig ki _) 
+                    -> do { ki1 <- repKind ki 
+                          ; repFamilyKind flav tc1 bndrs1 ki1 }
+              }
+       ; return $ Just (loc, dec)
+       }
 
-repTyClD (L loc (TyData { tcdND = DataType, tcdCtxt = cxt, 
+repTyClD (L loc (TyData { tcdND = DataType, tcdCtxt = cxt, tcdKindSig = mb_kind,
 		          tcdLName = tc, tcdTyVars = tvs, tcdTyPats = opt_tys,
 		          tcdCons = cons, tcdDerivs = mb_derivs }))
   = do { tc1 <- lookupLOcc tc 		-- See note [Binders and occurrences] 
-       ; dec <- addTyVarBinds tvs $ \bndrs -> 
+       ; tc_tvs <- mk_extra_tvs tvs mb_kind
+       ; dec <- addTyClTyVarBinds tc_tvs $ \bndrs -> 
            do { cxt1     <- repLContext cxt
               ; opt_tys1 <- maybeMapM repLTys opt_tys   -- only for family insts
               ; opt_tys2 <- maybeMapM (coreList typeQTyConName) opt_tys1
-              ; cons1    <- mapM (repC (hsLTyVarNames tvs)) cons
+              ; cons1    <- mapM (repC (hsLTyVarNames tc_tvs)) cons
       	      ; cons2    <- coreList conQTyConName cons1
       	      ; derivs1  <- repDerivs mb_derivs
 	      ; bndrs1   <- coreList tyVarBndrTyConName bndrs
@@ -190,15 +212,16 @@ repTyClD (L loc (TyData { tcdND = DataType, tcdCtxt = cxt,
        ; return $ Just (loc, dec) 
        }
 
-repTyClD (L loc (TyData { tcdND = NewType, tcdCtxt = cxt, 
+repTyClD (L loc (TyData { tcdND = NewType, tcdCtxt = cxt, tcdKindSig = mb_kind,
 		          tcdLName = tc, tcdTyVars = tvs, tcdTyPats = opt_tys,
 		          tcdCons = [con], tcdDerivs = mb_derivs }))
   = do { tc1 <- lookupLOcc tc 		-- See note [Binders and occurrences] 
-       ; dec <- addTyVarBinds tvs $ \bndrs -> 
+       ; tc_tvs <- mk_extra_tvs tvs mb_kind
+       ; dec <- addTyClTyVarBinds tc_tvs $ \bndrs -> 
            do { cxt1     <- repLContext cxt
               ; opt_tys1 <- maybeMapM repLTys opt_tys   -- only for family insts
               ; opt_tys2 <- maybeMapM (coreList typeQTyConName) opt_tys1
-              ; con1     <- repC (hsLTyVarNames tvs) con
+              ; con1     <- repC (hsLTyVarNames tc_tvs) con
       	      ; derivs1  <- repDerivs mb_derivs
 	      ; bndrs1   <- coreList tyVarBndrTyConName bndrs
       	      ; repNewtype cxt1 tc1 bndrs1 opt_tys2 con1 derivs1
@@ -209,7 +232,7 @@ repTyClD (L loc (TyData { tcdND = NewType, tcdCtxt = cxt,
 repTyClD (L loc (TySynonym { tcdLName = tc, tcdTyVars = tvs, tcdTyPats = opt_tys,
                              tcdSynRhs = ty }))
   = do { tc1 <- lookupLOcc tc 		-- See note [Binders and occurrences] 
-       ; dec <- addTyVarBinds tvs $ \bndrs -> 
+       ; dec <- addTyClTyVarBinds tvs $ \bndrs -> 
            do { opt_tys1 <- maybeMapM repLTys opt_tys   -- only for family insts
               ; opt_tys2 <- maybeMapM (coreList typeQTyConName) opt_tys1
 	      ; ty1      <- repLTy ty
@@ -229,7 +252,7 @@ repTyClD (L loc (ClassDecl { tcdCtxt = cxt, tcdLName = cls,
  	      ; sigs1  <- rep_sigs sigs
  	      ; binds1 <- rep_binds meth_binds
 	      ; fds1   <- repLFunDeps fds
-              ; ats1   <- repLAssocFamilys ats
+              ; ats1   <- repTyClDs ats
  	      ; decls1 <- coreList decQTyConName (ats1 ++ sigs1 ++ binds1)
 	      ; bndrs1 <- coreList tyVarBndrTyConName bndrs
  	      ; repClass cxt1 cls1 bndrs1 fds1 decls1 
@@ -242,31 +265,35 @@ repTyClD (L loc d) = putSrcSpanDs loc $
 		     do { warnDs (hang ds_msg 4 (ppr d))
 			; return Nothing }
 
--- The type variables in the head of families are treated differently when the
--- family declaration is associated.  In that case, they are usage, not binding
--- occurences.
---
-repTyFamily :: LTyClDecl Name 
-            -> ProcessTyVarBinds TH.Dec
-            -> DsM (Maybe (SrcSpan, Core TH.DecQ))
-repTyFamily (L loc (TyFamily { tcdFlavour = flavour,
-		               tcdLName = tc, tcdTyVars = tvs, 
-		               tcdKind = opt_kind }))
-            tyVarBinds
-  = do { tc1 <- lookupLOcc tc 		-- See note [Binders and occurrences] 
-       ; dec <- tyVarBinds tvs $ \bndrs ->
-           do { flav   <- repFamilyFlavour flavour
-	      ; bndrs1 <- coreList tyVarBndrTyConName bndrs
-              ; case opt_kind of 
-                  Nothing -> repFamilyNoKind flav tc1 bndrs1
-                  Just ki -> do { ki1 <- repKind ki 
-                                ; repFamilyKind flav tc1 bndrs1 ki1
-                                }
-              }
-       ; return $ Just (loc, dec)
-       }
-repTyFamily _ _ = panic "DsMeta.repTyFamily: internal error"
+-------------------------
+mk_extra_tvs :: [LHsTyVarBndr Name] -> Maybe (HsBndrSig (LHsKind Name)) -> DsM [LHsTyVarBndr Name]
+-- If there is a kind signature it must be of form
+--    k1 -> .. -> kn -> *
+-- Return type variables [tv1:k1, tv2:k2, .., tvn:kn]
+mk_extra_tvs tvs Nothing 
+  = return tvs
+mk_extra_tvs tvs (Just (HsBSig hs_kind _))
+  = do { extra_tvs <- go hs_kind
+       ; return (tvs ++ extra_tvs) }
+  where
+    go :: LHsKind Name -> DsM [LHsTyVarBndr Name]
+    go (L loc (HsFunTy kind rest))
+      = do { uniq <- newUnique
+           ; let { occ = mkTyVarOccFS (fsLit "t")
+                 ; nm = mkInternalName uniq occ loc
+                 ; hs_tv = L loc (KindedTyVar nm (HsBSig kind placeHolderBndrs)) }
+           ; hs_tvs <- go rest
+           ; return (hs_tv : hs_tvs) }
 
+    go (L _ (HsTyVar n))
+      | n == liftedTypeKindTyConName
+      = return []
+   
+    go _ = failWithDs (hang (ptext (sLit "Malformed kind signature"))
+                          2 (ppr hs_kind))
+
+
+-------------------------
 -- represent fundeps
 --
 repLFunDeps :: [Located (FunDep Name)] -> DsM (Core [TH.FunDep])
@@ -287,28 +314,14 @@ repFamilyFlavour :: FamilyFlavour -> DsM (Core TH.FamFlavour)
 repFamilyFlavour TypeFamily = rep2 typeFamName []
 repFamilyFlavour DataFamily = rep2 dataFamName []
 
--- represent associated family declarations
---
-repLAssocFamilys :: [LTyClDecl Name] -> DsM [Core TH.DecQ]
-repLAssocFamilys = mapM repLAssocFamily
-  where
-    repLAssocFamily tydecl@(L _ (TyFamily {})) 
-      = liftM (snd . fromJust) $ repTyFamily tydecl lookupTyVarBinds
-    repLAssocFamily tydecl
-      = failWithDs msg
-      where
-        msg = ptext (sLit "Illegal associated declaration in class:") <+> 
-              ppr tydecl
-
--- represent associated family instances
---
-repLAssocFamInst :: [LTyClDecl Name] -> DsM [Core TH.DecQ]
-repLAssocFamInst = liftM de_loc . mapMaybeM repTyClD
-
 -- represent instance declarations
 --
-repInstD' :: LInstDecl Name -> DsM (SrcSpan, Core TH.DecQ)
-repInstD' (L loc (InstDecl ty binds _ ats))	-- Ignore user pragmas for now
+repInstD :: LInstDecl Name -> DsM (Maybe (SrcSpan, Core TH.DecQ))
+repInstD (L loc (FamInstDecl fi_decl))
+  = repTyClD (L loc fi_decl)
+
+
+repInstD (L loc (ClsInstDecl ty binds prags ats))
   = do { dec <- addTyVarBinds tvs $ \_ ->
 	    -- We must bring the type variables into scope, so their
 	    -- occurrences don't fail, even though the binders don't 
@@ -324,33 +337,36 @@ repInstD' (L loc (InstDecl ty binds _ ats))	-- Ignore user pragmas for now
                ; cls_tys <- repLTys tys
                ; inst_ty1 <- repTapps cls_tcon cls_tys
                ; binds1 <- rep_binds binds
-               ; ats1 <- repLAssocFamInst ats
-               ; decls <- coreList decQTyConName (ats1 ++ binds1)
+               ; prags1 <- rep_sigs prags
+               ; ats1 <- repTyClDs ats
+               ; decls <- coreList decQTyConName (ats1 ++ binds1 ++ prags1)
                ; repInst cxt1 inst_ty1 decls }
-       ; return (loc, dec) }
+       ; return (Just (loc, dec)) }
  where
    Just (tvs, cxt, cls, tys) = splitHsInstDeclTy_maybe (unLoc ty)
 
 repForD :: Located (ForeignDecl Name) -> DsM (SrcSpan, Core TH.DecQ)
-repForD (L loc (ForeignImport name typ _ (CImport cc s ch cis)))
+repForD (L loc (ForeignImport name typ _ (CImport cc s mch cis)))
  = do MkC name' <- lookupLOcc name
       MkC typ' <- repLTy typ
       MkC cc' <- repCCallConv cc
       MkC s' <- repSafety s
       cis' <- conv_cimportspec cis
-      MkC str <- coreStringLit $ static
-                              ++ unpackFS ch ++ " "
-                              ++ cis'
+      MkC str <- coreStringLit (static ++ chStr ++ cis')
       dec <- rep2 forImpDName [cc', s', str, name', typ']
       return (loc, dec)
  where
     conv_cimportspec (CLabel cls) = notHandled "Foreign label" (doubleQuotes (ppr cls))
     conv_cimportspec (CFunction DynamicTarget) = return "dynamic"
-    conv_cimportspec (CFunction (StaticTarget fs _)) = return (unpackFS fs)
+    conv_cimportspec (CFunction (StaticTarget fs _ True)) = return (unpackFS fs)
+    conv_cimportspec (CFunction (StaticTarget _  _ False)) = panic "conv_cimportspec: values not supported yet"
     conv_cimportspec CWrapper = return "wrapper"
     static = case cis of
-                 CFunction (StaticTarget _ _) -> "static "
+                 CFunction (StaticTarget _ _ _) -> "static "
                  _ -> ""
+    chStr = case mch of
+            Nothing -> ""
+            Just (Header h) -> unpackFS h ++ " "
 repForD decl = notHandled "Foreign declaration" (ppr decl)
 
 repCCallConv :: CCallConv -> DsM (Core TH.Callconv)
@@ -362,6 +378,17 @@ repSafety :: Safety -> DsM (Core TH.Safety)
 repSafety PlayRisky = rep2 unsafeName []
 repSafety PlayInterruptible = rep2 interruptibleName []
 repSafety PlaySafe = rep2 safeName []
+
+repFixD :: LFixitySig Name -> DsM (SrcSpan, Core TH.DecQ)
+repFixD (L loc (FixitySig name (Fixity prec dir)))
+  = do { MkC name' <- lookupLOcc name
+       ; MkC prec' <- coreIntLit prec
+       ; let rep_fn = case dir of 
+                        InfixL -> infixLDName
+                        InfixR -> infixRDName
+                        InfixN -> infixNDName
+       ; dec <- rep2 rep_fn [prec', name']
+       ; return (loc, dec) }
 
 ds_msg :: SDoc
 ds_msg = ptext (sLit "Cannot desugar this Template Haskell declaration:")
@@ -395,7 +422,7 @@ in_subst _ []          = False
 in_subst n ((n',_):ns) = n==n' || in_subst n ns
 
 mkGadtCtxt :: [Name]		-- Tyvars of the data type
-           -> ResType Name
+           -> ResType (LHsType Name)
 	   -> DsM (HsContext Name, [(Name,Name)])
 -- Given a data type in GADT syntax, figure out the equality 
 -- context, so that we can represent it with an explicit 
@@ -418,7 +445,7 @@ mkGadtCtxt data_tvs (ResTyGADT res_ty)
   = return (go [] [] (data_tvs `zip` tys))
 
   | otherwise 
-  = failWithDs (ptext (sLit "Malformed constructor result type") <+> ppr res_ty)
+  = failWithDs (ptext (sLit "Malformed constructor result type:") <+> ppr res_ty)
   where
     go cxt subst [] = (cxt, subst)
     go cxt subst ((data_tv, ty) : rest)
@@ -581,17 +608,27 @@ addTyVarBinds tvs m
   where
     mk_tv_bndr (tv, (_,v)) = repTyVarBndrWithKind tv (coreVar v)
 
--- Look up a list of type variables; the computations passed as the second 
--- argument gets the *new* names on Core-level as an argument
---
-lookupTyVarBinds :: ProcessTyVarBinds a
-lookupTyVarBinds tvs m =
-  do
-    let names       = hsLTyVarNames tvs
-        mkWithKinds = map repTyVarBndrWithKind tvs
-    bndrs       <- mapM lookupBinder names 
-    kindedBndrs <- zipWithM ($) mkWithKinds bndrs
-    m kindedBndrs
+
+addTyClTyVarBinds :: ProcessTyVarBinds a
+-- Used for data/newtype declarations, and family instances,
+-- so that the nested type variables work right
+--    instance C (T a) where
+--      type W (T a) = blah
+-- The 'a' in the type instance is the one bound by the instance decl
+addTyClTyVarBinds tvs m
+  = do { let tv_names = hsLTyVarNames tvs
+       ; env <- dsGetMetaEnv
+       ; freshNames <- mkGenSyms (filterOut (`elemNameEnv` env) tv_names)
+       	    -- Make fresh names for the ones that are not already in scope
+            -- This makes things work for family declarations
+
+       ; term <- addBinds freshNames $ 
+	    	 do { kindedBndrs <- mapM mk_tv_bndr tvs
+	    	    ; m kindedBndrs }
+
+       ; wrapGenSyms freshNames term }
+  where
+    mk_tv_bndr tv = do { v <- lookupOcc (hsLTyVarName tv); repTyVarBndrWithKind tv v }
 
 -- Produce kinded binder constructors from the Haskell tyvar binders
 --
@@ -599,7 +636,7 @@ repTyVarBndrWithKind :: LHsTyVarBndr Name
                      -> Core TH.Name -> DsM (Core TH.TyVarBndr)
 repTyVarBndrWithKind (L _ (UserTyVar {})) nm
   = repPlainTV nm
-repTyVarBndrWithKind (L _ (KindedTyVar _ ki _)) nm
+repTyVarBndrWithKind (L _ (KindedTyVar _ (HsBSig ki _))) nm
   = repKind ki >>= repKindedTV nm
 
 -- represent a type context
@@ -1759,7 +1796,7 @@ templateHaskellNames = [
     classDName, instanceDName, sigDName, forImpDName, 
     pragInlDName, pragSpecDName, pragSpecInlDName,
     familyNoKindDName, familyKindDName, dataInstDName, newtypeInstDName,
-    tySynInstDName, 
+    tySynInstDName, infixLDName, infixRDName, infixNDName,
     -- Cxt
     cxtName,
     -- Pred
@@ -1955,7 +1992,8 @@ parSName    = libFun (fsLit "parS")    parSIdKey
 funDName, valDName, dataDName, newtypeDName, tySynDName, classDName,
     instanceDName, sigDName, forImpDName, pragInlDName, pragSpecDName,
     pragSpecInlDName, familyNoKindDName, familyKindDName, dataInstDName,
-    newtypeInstDName, tySynInstDName :: Name
+    newtypeInstDName, tySynInstDName, 
+    infixLDName, infixRDName, infixNDName :: Name
 funDName         = libFun (fsLit "funD")         funDIdKey
 valDName         = libFun (fsLit "valD")         valDIdKey
 dataDName        = libFun (fsLit "dataD")        dataDIdKey
@@ -1973,6 +2011,9 @@ familyKindDName  = libFun (fsLit "familyKindD")  familyKindDIdKey
 dataInstDName    = libFun (fsLit "dataInstD")    dataInstDIdKey
 newtypeInstDName = libFun (fsLit "newtypeInstD") newtypeInstDIdKey
 tySynInstDName   = libFun (fsLit "tySynInstD")   tySynInstDIdKey
+infixLDName      = libFun (fsLit "infixLD")      infixLDIdKey
+infixRDName      = libFun (fsLit "infixRD")      infixRDIdKey
+infixNDName      = libFun (fsLit "infixND")      infixNDIdKey
 
 -- type Ctxt = ...
 cxtName :: Name
@@ -2237,7 +2278,8 @@ parSIdKey        = mkPreludeMiscIdUnique 323
 funDIdKey, valDIdKey, dataDIdKey, newtypeDIdKey, tySynDIdKey,
     classDIdKey, instanceDIdKey, sigDIdKey, forImpDIdKey, pragInlDIdKey,
     pragSpecDIdKey, pragSpecInlDIdKey, familyNoKindDIdKey, familyKindDIdKey,
-    dataInstDIdKey, newtypeInstDIdKey, tySynInstDIdKey :: Unique 
+    dataInstDIdKey, newtypeInstDIdKey, tySynInstDIdKey, 
+    infixLDIdKey, infixRDIdKey, infixNDIdKey :: Unique 
 funDIdKey          = mkPreludeMiscIdUnique 330
 valDIdKey          = mkPreludeMiscIdUnique 331
 dataDIdKey         = mkPreludeMiscIdUnique 332
@@ -2255,6 +2297,9 @@ familyKindDIdKey   = mkPreludeMiscIdUnique 343
 dataInstDIdKey     = mkPreludeMiscIdUnique 344
 newtypeInstDIdKey  = mkPreludeMiscIdUnique 345
 tySynInstDIdKey    = mkPreludeMiscIdUnique 346
+infixLDIdKey       = mkPreludeMiscIdUnique 347
+infixRDIdKey       = mkPreludeMiscIdUnique 348
+infixNDIdKey       = mkPreludeMiscIdUnique 349
 
 -- type Cxt = ...
 cxtIdKey :: Unique

@@ -37,10 +37,11 @@ module TcType (
   isSigTyVar, isOverlappableTyVar,  isTyConableTyVar,
   isAmbiguousTyVar, metaTvRef, 
   isFlexi, isIndirect, isRuntimeUnkSkol,
+  isTypeVar, isKindVar,
 
   --------------------------------
   -- Builders
-  mkPhiTy, mkSigmaTy, 
+  mkPhiTy, mkSigmaTy, mkTcEqPred,
 
   --------------------------------
   -- Splitters  
@@ -88,7 +89,7 @@ module TcType (
   tidyType,      tidyTypes,
   tidyOpenType,  tidyOpenTypes,
   tidyOpenKind,
-  tidyTyVarBndr, tidyFreeTyVars,
+  tidyTyVarBndr, tidyTyVarBndrs, tidyFreeTyVars,
   tidyOpenTyVar, tidyOpenTyVars,
   tidyTyVarOcc,
   tidyTopType,
@@ -118,7 +119,7 @@ module TcType (
   unliftedTypeKind, liftedTypeKind, argTypeKind,
   openTypeKind, constraintKind, mkArrowKind, mkArrowKinds, 
   isLiftedTypeKind, isUnliftedTypeKind, isSubOpenTypeKind, 
-  isSubArgTypeKind, isSubKind, splitKindFunTys, defaultKind,
+  isSubArgTypeKind, tcIsSubKind, splitKindFunTys, defaultKind,
   mkMetaKindVar,
 
   --------------------------------
@@ -133,7 +134,7 @@ module TcType (
   mkClassPred, mkIPPred,
   isDictLikeTy,
   tcSplitDFunTy, tcSplitDFunHead, 
-  mkEqPred,
+  mkEqPred, 
 
   -- Type substitutions
   TvSubst(..), 	-- Representation visible to a few friends
@@ -388,11 +389,7 @@ mkKindName unique = mkSystemName unique kind_var_occ
 
 mkMetaKindVar :: Unique -> IORef MetaDetails -> MetaKindVar
 mkMetaKindVar u r
-  = mkTcTyVar (mkKindName u)
-              tySuperKind  -- not sure this is right,
-                            -- do we need kind vars for
-                            -- coercions?
-              (MetaTv TauTv r)
+  = mkTcTyVar (mkKindName u) superKind (MetaTv TauTv r)
 
 kind_var_occ :: OccName	-- Just one for all MetaKindVars
 			-- They may be jiggled by tidying
@@ -451,6 +448,9 @@ Tidying is here becuase it has a special case for FlatSkol
 -- an interface file.
 -- 
 -- It doesn't change the uniques at all, just the print names.
+tidyTyVarBndrs :: TidyEnv -> [TyVar] -> (TidyEnv, [TyVar])
+tidyTyVarBndrs env tvs = mapAccumL tidyTyVarBndr env tvs
+
 tidyTyVarBndr :: TidyEnv -> TyVar -> (TidyEnv, TyVar)
 tidyTyVarBndr tidy_env@(occ_env, subst) tyvar
   = case tidyOccName occ_env occ1 of
@@ -772,6 +772,17 @@ mkSigmaTy tyvars theta tau = mkForAllTys tyvars (mkPhiTy theta tau)
 
 mkPhiTy :: [PredType] -> Type -> Type
 mkPhiTy theta ty = foldr mkFunTy ty theta
+
+mkTcEqPred :: TcType -> TcType -> Type
+-- During type checking we build equalities between 
+-- type variables with OpenKind or ArgKind.  Ultimately
+-- they will all settle, but we want the equality predicate
+-- itself to have kind '*'.  I think.  
+--
+-- But this is horribly delicate: what about type variables
+-- that turn out to be bound to Int#?
+mkTcEqPred ty1 ty2
+  = mkNakedEqPred (defaultKind (typeKind ty1)) ty1 ty2
 \end{code}
 
 @isTauTy@ tests for nested for-alls.  It should not be called on a boxy type.
@@ -1155,7 +1166,7 @@ isOverloadedTy _               = False
 
 \begin{code}
 isFloatTy, isDoubleTy, isIntegerTy, isIntTy, isWordTy, isBoolTy,
-    isUnitTy, isCharTy :: Type -> Bool
+    isUnitTy, isCharTy, isAnyTy :: Type -> Bool
 isFloatTy      = is_tc floatTyConKey
 isDoubleTy     = is_tc doubleTyConKey
 isIntegerTy    = is_tc integerTyConKey
@@ -1164,6 +1175,7 @@ isWordTy       = is_tc wordTyConKey
 isBoolTy       = is_tc boolTyConKey
 isUnitTy       = is_tc unitTyConKey
 isCharTy       = is_tc charTyConKey
+isAnyTy        = is_tc anyTyConKey
 
 isStringTy :: Type -> Bool
 isStringTy ty
@@ -1331,9 +1343,11 @@ isFFILabelTy = checkRepTyConKey [ptrTyConKey, funPtrTyConKey]
 
 isFFIPrimArgumentTy :: DynFlags -> Type -> Bool
 -- Checks for valid argument type for a 'foreign import prim'
--- Currently they must all be simple unlifted types.
+-- Currently they must all be simple unlifted types, or the well-known type
+-- Any, which can be used to pass the address to a Haskell object on the heap to
+-- the foreign function.
 isFFIPrimArgumentTy dflags ty
-   = checkRepTyCon (legalFIPrimArgTyCon dflags) ty
+   = isAnyTy ty || checkRepTyCon (legalFIPrimArgTyCon dflags) ty
 
 isFFIPrimResultTy :: DynFlags -> Type -> Bool
 -- Checks for valid result type for a 'foreign import prim'
