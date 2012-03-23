@@ -26,10 +26,8 @@ import Platform
 import OrdList
 import UniqSupply
 import Unique
-import Util
 
-import Data.List ( partition, nub )
-
+import Data.List ( nub )
 
 type LlvmStatements = OrdList LlvmStatement
 
@@ -54,25 +52,13 @@ basicBlocksCodeGen :: [CmmBasicBlock] -> Maybe LMMetaInt
 basicBlocksCodeGen cmmBlocks annotId
   = do prologue <- funPrologue cmmBlocks
        (blockss, topss) <- fmap unzip $ mapM basicBlockCodeGen cmmBlocks
-       let (blocks', allocs) = mapAndUnzip dominateAllocs (concat blockss)
-       let allocs' = concat allocs
-       let ((BasicBlock bid fstmts):rblks) = blocks'
-       let fblocks = (BasicBlock bid $ prologue ++  allocs' ++ fstmts):rblks
+       let ((BasicBlock bid fstmts):rblks) = concat blockss
+       let fblocks = (BasicBlock bid $ prologue ++ fstmts):rblks
        let annot = case annotId of
              Just i  -> MetaStmt [(fsLit "dbg", i)]
              Nothing -> id
        let annotBlock (BasicBlock bid stmts) = BasicBlock bid (map annot stmts)
        return (map annotBlock fblocks, concat topss)
-
-
--- | Allocations need to be extracted so they can be moved to the entry
--- of a function to make sure they dominate all possible paths in the CFG.
-dominateAllocs :: LlvmBasicBlock -> (LlvmBasicBlock, [LlvmStatement])
-dominateAllocs (BasicBlock id stmts)
-  = let (allocs, stmts') = partition isAlloc stmts
-        isAlloc (Assignment _ (Alloca _ _)) = True
-        isAlloc _other                      = False
-    in (BasicBlock id stmts', allocs)
 
 
 -- | Generate code for one block
@@ -1250,8 +1236,12 @@ funPrologue cmmBlocks = do
   let getAssignedRegs (CmmAssign reg _)  = [reg]
       -- Calls will trash all registers. Unfortunately, this needs them to
       -- be stack-allocated in the first place.
-      getAssignedRegs (CmmCall _ rs _ _) = map CmmGlobal trashRegs ++ map formalToReg rs
+      getAssignedRegs (CmmCall t rs _ _) = map CmmGlobal trashRegs ++
+                                            map formalToReg rs ++
+                                            getPrimRegs t
       getAssignedRegs _                  = []
+      getPrimRegs (CmmPrim _ (Just ss))  = concatMap getAssignedRegs ss
+      getPrimRegs _                      = []
       formalToReg (CmmHinted r _)        = CmmLocal r
       getRegsBlock (BasicBlock _ xs)     = concatMap getAssignedRegs xs
       assignedRegs = nub $ concatMap getRegsBlock cmmBlocks
