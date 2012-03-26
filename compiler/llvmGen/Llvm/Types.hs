@@ -66,7 +66,7 @@ instance Outputable LlvmType where
   ppr (LMLabel       ) = text "label"
   ppr (LMVoid        ) = text "void"
   ppr (LMStruct tys  ) = text "<{" <> ppCommaJoin tys <> text "}>"
-  ppr (LMMetaType    ) = empty
+  ppr (LMMetaType    ) = text "metadata"
 
   ppr (LMFunction (LlvmFunctionDecl _ _ _ r varg p _))
     = ppr r <+> lparen <> ppParams varg p <> rparen
@@ -133,6 +133,15 @@ data LlvmLit
   | LMNullLit LlvmType
   -- | Undefined value, random bit pattern. Useful for optimisations.
   | LMUndefLit LlvmType
+
+  -- | Metadata list of literals and other metadata
+  | LMMeta [LlvmVar]
+  -- | Literal metadata string
+  | LMMetaString LMString
+  -- | Reference to a global metadata node
+  | LMMetaRef {-# UNPACK #-} !LMMetaInt
+  -- | Collection of metadata references (for named metadata)
+  | LMMetaRefs [LMMetaInt]
   deriving (Eq)
 
 instance Outputable LlvmLit where
@@ -159,13 +168,6 @@ data LlvmStatic
   | LMAdd LlvmStatic LlvmStatic        -- ^ Constant addition operation
   | LMSub LlvmStatic LlvmStatic        -- ^ Constant subtraction operation
 
-  -- metadata: Used for recording debug information
-
-  | LMMeta [LlvmStatic]                 -- ^ A list of literals and other metadata
-  | LMMetaString LMString               -- ^ Literal metadata string
-  | LMMetaRef {-# UNPACK #-} !LMMetaInt -- ^ Reference to a global metadata node
-  | LMMetaRefs [LMMetaInt]              -- ^ Collection of metadata references (for named metadata)
-
 instance Outputable LlvmStatic where
   ppr (LMComment       s) = text "; " <> ftext s
   ppr (LMStaticLit   l  ) = ppr l
@@ -183,15 +185,6 @@ instance Outputable LlvmStatic where
       = pprStaticArith s1 s2 (sLit "add") (sLit "fadd") "LMAdd"
   ppr (LMSub s1 s2)
       = pprStaticArith s1 s2 (sLit "sub") (sLit "fsub") "LMSub"
-
-  ppr (LMMeta ls)
-     = text "metadata !{" <> ppCommaJoin ls <> text "}"
-  ppr (LMMetaString str)
-     = text "metadata !\"" <> ftext str <> text "\""
-  ppr (LMMetaRef n)
-     = text "metadata !" <> ppr n
-  ppr (LMMetaRefs ns)
-     = text "!{" <> hsep (punctuate comma (map (\n -> char '!' <> ppr n) ns)) <> char '}'
 
 pprStaticArith :: LlvmStatic -> LlvmStatic -> LitString -> LitString -> String -> SDoc
 pprStaticArith s1 s2 int_op float_op op_name =
@@ -237,6 +230,10 @@ ppLit (LMFloatLit r LMDouble)  = ppDouble r
 ppLit f@(LMFloatLit _ _)       = error $ "Can't print this float literal!" ++ showSDoc (ppr f)
 ppLit (LMNullLit _     )       = text "null"
 ppLit (LMUndefLit _    )       = text "undef"
+ppLit (LMMeta ls)              = text "!{" <> ppCommaJoin ls <> text "}"
+ppLit (LMMetaString str)       = text "!\"" <> ftext str <> text "\""
+ppLit (LMMetaRef n)            = text "!" <> ppr n
+ppLit (LMMetaRefs ns)          = text "!{" <> hsep (punctuate comma (map (\n -> char '!' <> ppr n) ns)) <> char '}'
 
 -- | Return the 'LlvmType' of the 'LlvmVar'
 getVarType :: LlvmVar -> LlvmType
@@ -253,6 +250,10 @@ getLitType (LMIntLit   _ t) = t
 getLitType (LMFloatLit _ t) = t
 getLitType (LMNullLit    t) = t
 getLitType (LMUndefLit   t) = t
+getLitType (LMMeta       _) = LMMetaType
+getLitType (LMMetaString _) = LMMetaType
+getLitType (LMMetaRef    _) = LMMetaType
+getLitType (LMMetaRefs   _) = LMMetaType
 
 -- | Return the 'LlvmType' of the 'LlvmStatic'
 getStatType :: LlvmStatic -> LlvmType
@@ -266,10 +267,6 @@ getStatType (LMBitc        _ t) = t
 getStatType (LMPtoI        _ t) = t
 getStatType (LMAdd         t _) = getStatType t
 getStatType (LMSub         t _) = getStatType t
-getStatType (LMMeta        _  ) = LMMetaType
-getStatType (LMMetaString  _  ) = LMMetaType
-getStatType (LMMetaRef     _  ) = LMMetaType
-getStatType (LMMetaRefs    _  ) = LMMetaType
 getStatType (LMComment       _) = error "Can't call getStatType on LMComment!"
 
 -- | Return the 'LlvmLinkageType' for a 'LlvmVar'

@@ -66,7 +66,7 @@ llvmCodeGen' location cmms tick_map
 
         renderLlvm pprLlvmHeader
         ghcInternalFunctions
-        cmmMetaLlvmPrelude
+        cmmMetaLlvmPrelude location
 
         {-# SCC "llvm_datas_gen" #-}
           cmmDataLlvmGens cdata []
