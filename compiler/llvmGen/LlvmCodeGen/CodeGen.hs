@@ -11,6 +11,8 @@ import Llvm
 import LlvmCodeGen.Base
 import LlvmCodeGen.Regs
 
+import LlvmMeta ( genVariableMeta )
+
 import BlockId
 import CgUtils ( activeStgRegs, callerSaves )
 import CLabel
@@ -34,7 +36,7 @@ type LlvmStatements = OrdList LlvmStatement
 -- -----------------------------------------------------------------------------
 -- | Top-level of the LLVM proc Code generator
 --
-genLlvmProc :: RawCmmDecl -> Maybe LMMetaInt -> LlvmM [LlvmCmmDecl]
+genLlvmProc :: RawCmmDecl -> (LMMetaInt, LMMetaInt) -> LlvmM [LlvmCmmDecl]
 genLlvmProc (CmmProc info lbl (ListGraph blocks)) annotId = do
     (lmblocks, lmdata) <- basicBlocksCodeGen blocks annotId
     let proc = CmmProc info lbl (ListGraph lmblocks)
@@ -47,18 +49,16 @@ genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"
 --
 
 -- | Generate code for a list of blocks that make up a complete procedure.
-basicBlocksCodeGen :: [CmmBasicBlock] -> Maybe LMMetaInt
+basicBlocksCodeGen :: [CmmBasicBlock] -> (LMMetaInt, LMMetaInt)
                       -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
-basicBlocksCodeGen cmmBlocks annotId
-  = do prologue <- funPrologue cmmBlocks
+basicBlocksCodeGen cmmBlocks (scopeId, annotId)
+  = do (prologue, tops1) <- funPrologue cmmBlocks scopeId
        (blockss, topss) <- fmap unzip $ mapM basicBlockCodeGen cmmBlocks
        let ((BasicBlock bid fstmts):rblks) = concat blockss
-       let fblocks = (BasicBlock bid $ prologue ++ fstmts):rblks
-       let annot = case annotId of
-             Just i  -> MetaStmt [(fsLit "dbg", i)]
-             Nothing -> id
+       let fblocks = (BasicBlock bid $ fromOL prologue ++ fstmts):rblks
+       let annot = MetaStmt [(fsLit "dbg", annotId)]
        let annotBlock (BasicBlock bid stmts) = BasicBlock bid (map annot stmts)
-       return (map annotBlock fblocks, concat topss)
+       return (map annotBlock fblocks, tops1 ++ concat topss)
 
 
 -- | Generate code for one block
@@ -112,7 +112,25 @@ stmtToInstrs stmt = case stmt of
     CmmReturn
         -> return (unitOL $ Return Nothing, [])
 
+-- | Wrapper function to declare an instrinct function, if required
+declareInstrinct :: LMString -> LlvmType -> [LlvmType] -> LlvmM (LlvmVar, [LlvmCmmDecl])
+declareInstrinct fname retTy parTys = do
 
+    let funSig = LlvmFunctionDecl fname ExternallyVisible CC_Ccc retTy
+                    FixedArgs (tysToParams parTys) llvmFunAlign
+    let fty = LMFunction funSig
+
+    let fv   = LMGlobalVar fname fty (funcLinkage funSig) Nothing Nothing False
+
+    fn <- funLookup fname
+    tops <- case fn of
+      Just _  ->
+        return []
+      Nothing -> do
+        funInsert fname fty
+        return [CmmData Data [([],[fty])]]
+
+    return (fv, tops)
 
 -- | Memory barrier instruction for LLVM >= 3.0
 barrier :: LlvmM StmtData
@@ -123,21 +141,11 @@ barrier = do
 -- | Memory barrier instruction for LLVM < 3.0
 oldBarrier :: LlvmM StmtData
 oldBarrier = do
-    let fname = fsLit "llvm.memory.barrier"
-    let funSig = LlvmFunctionDecl fname ExternallyVisible CC_Ccc LMVoid
-                    FixedArgs (tysToParams [i1, i1, i1, i1, i1]) llvmFunAlign
-    let fty = LMFunction funSig
 
-    let fv   = LMGlobalVar fname fty (funcLinkage funSig) Nothing Nothing False
-
-    barrFn <- funLookup fname
-    let tops = case barrFn of
-                    Just _  -> []
-                    Nothing -> [CmmData Data [([],[fty])]]
+    (fv, tops) <- declareInstrinct (fsLit "llvm.memory.barrier") LMVoid [i1, i1, i1, i1, i1]
 
     let args = [lmTrue, lmTrue, lmTrue, lmTrue, lmTrue]
     let s1 = Expr $ Call StdCall fv args llvmStdFunAttrs
-    funInsert fname fty
 
     return (unitOL s1, tops)
 
@@ -164,21 +172,22 @@ genCall (CmmPrim MO_WriteBarrier _) _ _ _ = do
 -- types and things like Word8 are backed by an i32 and just present a logical
 -- i8 range. So we must handle conversions from i32 to i8 explicitly as LLVM
 -- is strict about types.
-genCall t@(CmmPrim (MO_PopCnt w) _) [CmmHinted dst _] args _ = do
+genCall (CmmPrim op@(MO_PopCnt w) _) [CmmHinted dst _] args _ = do
     let width = widthToLlvmInt w
         dstTy = cmmToLlvmType $ localRegType dst
-        funTy = \n -> LMFunction $ LlvmFunctionDecl n ExternallyVisible
-                          CC_Ccc width FixedArgs (tysToParams [width]) Nothing
+
+    fname                       <- cmmPrimOpFunctions op
+    (fptr, top3)                <- declareInstrinct fname width [width]
+
     dstV                        <- getCmmReg (CmmLocal dst)
 
     (argsV, stmts2, top2)       <- arg_vars args ([], nilOL, [])
-    (fptr, stmts3, top3)        <- getFunPtr funTy t
     (argsV', stmts4)            <- castVars $ zip argsV [width]
     (retV, s1)                  <- doExpr width $ Call StdCall fptr argsV' []
     ([retV'], stmts5)           <- castVars [(retV,dstTy)]
     let s2                       = Store retV' dstV
 
-    let stmts = stmts2 `appOL` stmts3 `appOL` stmts4 `snocOL`
+    let stmts = stmts2 `appOL` stmts4 `snocOL`
                 s1 `appOL` stmts5 `snocOL` s2
     return (stmts, top2 ++ top3)
 
@@ -1143,12 +1152,12 @@ getCmmRegVal reg =
          return (v, ty, unitOL s)
 
 -- | Allocate a local CmmReg on the stack
-allocReg :: CmmReg -> (LlvmVar, [LlvmStatement])
+allocReg :: CmmReg -> (LlvmVar, LlvmStatements)
 allocReg (CmmLocal (LocalReg un ty))
   = let ty' = cmmToLlvmType ty
         var = LMLocalVar un (LMPointer ty')
         alc = Alloca ty' 1
-    in (var, [Assignment var alc])
+    in (var, unitOL $ Assignment var alc)
 
 allocReg _ = panic $ "allocReg: Global reg encountered! Global registers should"
                     ++ " have been handled elsewhere!"
@@ -1230,8 +1239,8 @@ genLit CmmHighStackMark
 -- question is never written. Therefore we skip it where we can to
 -- save a few lines in the output and hopefully speed compilation up a
 -- bit.
-funPrologue :: [CmmBasicBlock] -> LlvmM [LlvmStatement]
-funPrologue cmmBlocks = do
+funPrologue :: [CmmBasicBlock] -> LMMetaInt -> LlvmM StmtData
+funPrologue cmmBlocks scopeId = do
 
   let getAssignedRegs (CmmAssign reg _)  = [reg]
       -- Calls will trash all registers. Unfortunately, this needs them to
@@ -1245,7 +1254,8 @@ funPrologue cmmBlocks = do
       formalToReg (CmmHinted r _)        = CmmLocal r
       getRegsBlock (BasicBlock _ xs)     = concatMap getAssignedRegs xs
       assignedRegs = nub $ concatMap getRegsBlock cmmBlocks
-  fmap concat $ flip mapM assignedRegs $ \reg ->
+
+  stmtss <- flip mapM assignedRegs $ \reg ->
     case reg of
       CmmLocal (LocalReg un _) -> do
         let (newv, stmts) = allocReg reg
@@ -1256,7 +1266,37 @@ funPrologue cmmBlocks = do
             arg   = lmGlobalRegArg r
             alloc = Assignment reg $ Alloca (pLower $ getVarType reg) 1
         markStackReg r
-        return [alloc, Store arg reg]
+        return $ toOL [alloc, Store arg reg]
+
+  (declStmts, tops) <- declareRegister (CmmGlobal BaseReg) (fsLit "BaseReg") scopeId
+
+  return (concatOL stmtss `appOL` declStmts, tops)
+
+
+-- | Declares the value of a register as a variable in debugging data
+declareRegister :: CmmReg -> LMString -> LMMetaInt -> LlvmM StmtData
+declareRegister reg rname scopeId = do
+
+  -- Get instrinct functions
+  (declareFn, tops1) <- declareInstrinct (fsLit "llvm.dbg.declare") LMVoid [LMMetaType, LMMetaType]
+  (valueFn, tops2) <- declareInstrinct (fsLit "llvm.dbg.value") LMVoid [LMMetaType, i64, LMMetaType]
+
+  -- Check whether register is on stack or as value. Declare
+  -- accordingly.
+  onStack <- checkStackReg BaseReg
+  stmts <- case onStack of
+    True -> do
+      rvar <- getCmmReg reg
+      varMeta <- genVariableMeta rname (pLower $ getVarType rvar) scopeId
+      let pars = map LMLitVar [ LMMeta [rvar], varMeta ]
+      return $ unitOL $ Expr $ Call StdCall declareFn pars []
+    False -> do
+      (rvar, ty, ss) <- getCmmRegVal reg
+      varMeta <- genVariableMeta rname ty scopeId
+      let pars = map LMLitVar [ LMMeta [rvar], LMIntLit 0 i64, varMeta ]
+      return $ ss `snocOL` (Expr $ Call StdCall valueFn pars [])
+
+  return (stmts, tops1 ++ tops2)
 
 -- | Function epilogue. Load STG variables to use as argument for call.
 -- STG Liveness optimisation done here.

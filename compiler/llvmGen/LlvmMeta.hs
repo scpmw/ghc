@@ -10,6 +10,8 @@ module LlvmMeta (
   cmmMetaLlvmProc,
   cmmMetaLlvmUnit,
 
+  genVariableMeta,
+
   cmmDebugLlvmGens
   ) where
 
@@ -65,6 +67,7 @@ dW_TAG_structure_type  = 19 + lLVMDebugVersion
 dW_TAG_pointer_type    = 15 + lLVMDebugVersion
 dW_TAG_subrange_type   = 33 + lLVMDebugVersion
 dW_TAG_typedef         = 22 + lLVMDebugVersion
+dW_TAG_auto_variable   = 256 + lLVMDebugVersion
 
 dW_ATE_address, dW_ATE_boolean, dW_ATE_float, dW_ATE_signed,
   dW_ATE_signed_char, dW_ATE_unsigned, dW_ATE_unsigned_char :: Integer
@@ -221,7 +224,7 @@ emitFileMeta filePath = do
 -- | Generates meta data for a procedure. Returns a meta data Id
 -- that can be used to annotate instructions as belonging to this
 -- procedure.
-cmmMetaLlvmProc :: CLabel -> CLabel -> ModLocation -> TickMap -> LlvmM (Maybe LMMetaInt)
+cmmMetaLlvmProc :: CLabel -> CLabel -> ModLocation -> TickMap -> LlvmM (LMMetaInt, LMMetaInt)
 cmmMetaLlvmProc cmmLabel entryLabel mod_loc tiMap = do
 
   -- Find source tick to associate with procedure
@@ -288,7 +291,7 @@ cmmMetaLlvmProc cmmLabel entryLabel mod_loc tiMap = do
     , nullLit                                 -- Inlined from location
     ]
 
-  return (Just lineId)
+  return (blockId, lineId)
 
 -- | Find a "good" tick we could associate the procedure with in the
 -- DWARF debugging data. We do this by looking for source ticks at the
@@ -381,6 +384,19 @@ typeToMeta ty = case ty of
     [ mkI32 $ dW_TAG_subrange_type
     , mkI64 0                                         -- Low value
     , mkI64 (fromIntegral $ n-1)                      -- High value
+    ]
+
+genVariableMeta :: LMString -> LlvmType -> LMMetaInt -> LlvmM LlvmLit
+genVariableMeta vname vty scopeId = do
+  tyDesc <- getTypeMeta vty
+  Just fileId <- getUniqMeta fileN
+  return $ LMMeta $ map LMLitVar
+    [ mkI32 dW_TAG_auto_variable
+    , LMMetaRef scopeId                               -- Context
+    , LMMetaString vname                              -- Name
+    , LMMetaRef fileId                                -- File reference
+    , mkI32 0                                         -- Line / argument number
+    , tyDesc                                          -- Type description
     ]
 
 -- | Return buffer contents as a LLVM string
