@@ -26,7 +26,7 @@ module RnTypes (
 	rnSplice, checkTH,
 
         -- Binding related stuff
-        bindSigTyVarsFV, bindHsTyVars, bindTyClTyVars, rnHsBndrSig
+        bindSigTyVarsFV, bindHsTyVars, bindTyVarsRn, rnHsBndrSig
   ) where
 
 import {-# SOURCE #-} RnExpr( rnLExpr )
@@ -36,7 +36,7 @@ import {-# SOURCE #-} TcSplice( runQuasiQuoteType )
 
 import DynFlags
 import HsSyn
-import RdrHsSyn		( extractHsRhoRdrTyVars, extractHsTyRdrTyVars )
+import RdrHsSyn		( extractHsTyRdrTyVars, extractHsTysRdrTyVars )
 import RnHsDoc          ( rnLHsDoc, rnMbLHsDoc )
 import RnEnv
 import TcRnMonad
@@ -121,33 +121,34 @@ rnHsKind = rnHsTyKi False
 
 rnHsTyKi :: Bool -> HsDocContext -> HsType RdrName -> RnM (HsType Name, FreeVars)
 
-rnHsTyKi isType doc (HsForAllTy Implicit _ ctxt ty) 
+rnHsTyKi isType doc (HsForAllTy Implicit _ lctxt@(L _ ctxt) ty) 
   = ASSERT ( isType ) do
 	-- Implicit quantifiction in source code (no kinds on tyvars)
 	-- Given the signature  C => T  we universally quantify 
 	-- over FV(T) \ {in-scope-tyvars} 
     name_env <- getLocalRdrEnv
+    loc <- getSrcSpanM
     let
-	mentioned = extractHsRhoRdrTyVars ctxt ty
+	mentioned = extractHsTysRdrTyVars (ty:ctxt)
 
 	-- Don't quantify over type variables that are in scope;
 	-- when GlasgowExts is off, there usually won't be any, except for
 	-- class signatures:
 	--	class C a where { op :: a -> a }
-	forall_tyvars = filter (not . (`elemLocalRdrEnv` name_env) . unLoc) mentioned
-	tyvar_bndrs   = userHsTyVarBndrs forall_tyvars
+	forall_tyvars = filter (not . (`elemLocalRdrEnv` name_env)) mentioned
+	tyvar_bndrs   = userHsTyVarBndrs loc forall_tyvars
 
-    rnForAll doc Implicit tyvar_bndrs ctxt ty
+    rnForAll doc Implicit tyvar_bndrs lctxt ty
 
-rnHsTyKi isType doc ty@(HsForAllTy Explicit forall_tyvars ctxt tau)
+rnHsTyKi isType doc ty@(HsForAllTy Explicit forall_tyvars lctxt@(L _ ctxt) tau)
   = ASSERT ( isType ) do { 	-- Explicit quantification.
          -- Check that the forall'd tyvars are actually 
 	 -- mentioned in the type, and produce a warning if not
-         let mentioned   = extractHsRhoRdrTyVars ctxt tau
+         let mentioned   = extractHsTysRdrTyVars (tau:ctxt)
              in_type_doc = ptext (sLit "In the type") <+> quotes (ppr ty)
        ; warnUnusedForAlls (in_type_doc $$ docOfHsDocContext doc) forall_tyvars mentioned
 
-       ; rnForAll doc Explicit forall_tyvars ctxt tau }
+       ; rnForAll doc Explicit forall_tyvars lctxt tau }
 
 rnHsTyKi isType _ (HsTyVar rdr_name)
   = do { name <- rnTyVar isType rdr_name
@@ -225,6 +226,13 @@ rnHsTyKi isType doc tupleTy@(HsTupleTy tup_con tys)
        ; (tys', fvs) <- mapFvRn (rnLHsTyKi isType doc) tys
        ; return (HsTupleTy tup_con tys', fvs) }
 
+-- 1. Perhaps we should use a separate extension here?
+-- 2. Check that the integer is positive?
+rnHsTyKi isType _ tyLit@(HsTyLit t)
+  = do { data_kinds <- xoptM Opt_DataKinds
+       ; unless (data_kinds || isType) (addErr (dataKindsErr tyLit))
+       ; return (HsTyLit t, emptyFVs) }
+
 rnHsTyKi isType doc (HsAppTy ty1 ty2)
   = do { (ty1', fvs1) <- rnLHsTyKi isType doc ty1
        ; (ty2', fvs2) <- rnLHsTyKi isType doc ty2
@@ -287,6 +295,7 @@ rnTyVar is_type rdr_name
   | is_type   = lookupTypeOccRn rdr_name
   | otherwise = lookupKindOccRn rdr_name
 
+
 --------------
 rnLHsTypes :: HsDocContext -> [LHsType RdrName]
            -> RnM ([LHsType Name], FreeVars)
@@ -331,56 +340,6 @@ bindSigTyVarsFV tvs thing_inside
 		bindLocalNamesFV tvs thing_inside }
 
 ---------------
-bindTyClTyVars 
-    :: HsDocContext 
-    -> Maybe (Name, [Name])      -- Parent class and its tyvars
-                                 -- (but not kind vars)
-    -> [LHsTyVarBndr RdrName]
-    -> ([LHsTyVarBndr Name] -> RnM (a, FreeVars))
-    -> RnM (a, FreeVars)
--- Used for tyvar binders in type/class declarations
--- Just like bindHsTyVars, but deals with the case of associated
--- types, where the type variables may be already in scope
-bindTyClTyVars doc mb_cls tyvars thing_inside
-  | Just (_, cls_tvs) <- mb_cls   -- Associated type family or type instance
-  = do { let tv_rdr_names = map hsLTyVarLocName tyvars
-       	     -- *All* the free vars of the family patterns
-
-       -- Check for duplicated bindings
-       -- This test is irrelevant for data/type *instances*, where the tyvars
-       -- are the free tyvars of the patterns, and hence have no duplicates
-       -- But it's needed for data/type *family* decls
-       ; checkDupRdrNames tv_rdr_names
-
-       -- Make the Names for the tyvars
-       ; rdr_env <- getLocalRdrEnv
-       ; let mk_tv_name :: Located RdrName -> RnM Name
-              -- Use the same Name as the parent class decl
-             mk_tv_name (L l tv_rdr)
-               = case lookupLocalRdrEnv rdr_env tv_rdr of 
-                    Just n  -> return n
-                    Nothing -> newLocalBndrRn (L l tv_rdr)
-       ; tv_ns <- mapM mk_tv_name tv_rdr_names
-
-       ; (thing, fvs) <- bindTyVarsRn doc tyvars tv_ns thing_inside
-
-            -- See Note [Renaming associated types] 
-       ; let bad_tvs = fvs `intersectNameSet` mkNameSet cls_tvs
-       ; unless (isEmptyNameSet bad_tvs) (badAssocRhs (nameSetToList bad_tvs))
-
-       ; return (thing, fvs) }
-
-  | otherwise   -- Not associated, just fall through to bindHsTyVars
-  = bindHsTyVars doc tyvars thing_inside
-
-badAssocRhs :: [Name] -> RnM ()
-badAssocRhs ns
-  = addErr (hang (ptext (sLit "The RHS of an associated type declaration mentions type variable") 
-                  <> plural ns 
-                  <+> pprWithCommas (quotes . ppr) ns)
-               2 (ptext (sLit "All such variables must be bound on the LHS")))
-
----------------
 bindHsTyVars :: HsDocContext -> [LHsTyVarBndr RdrName]
 	      -> ([LHsTyVarBndr Name] -> RnM (a, FreeVars))
 	      -> RnM (a, FreeVars)
@@ -423,19 +382,20 @@ rnHsBndrSig :: Bool    -- True <=> type sig, False <=> kind sig
             -> HsBndrSig (LHsType RdrName)
             -> (HsBndrSig (LHsType Name) -> RnM (a, FreeVars))
             -> RnM (a, FreeVars)
-rnHsBndrSig is_type doc (HsBSig ty _) thing_inside
+rnHsBndrSig is_type doc (HsBSig ty@(L loc _) _) thing_inside
   = do { name_env <- getLocalRdrEnv
        ; let tv_bndrs  = [ tv | tv <- extractHsTyRdrTyVars ty
-			      , not (unLoc tv `elemLocalRdrEnv` name_env) ]
+			      , not (tv `elemLocalRdrEnv` name_env) ]
 
        ; checkHsBndrFlags is_type doc ty tv_bndrs 
-       ; bindLocatedLocalsFV tv_bndrs $ \ tv_names -> do
+       ; tv_names <- newLocalBndrsRn [L loc tv | tv <- tv_bndrs]
+       ; bindLocalNamesFV tv_names $ do
        { (ty', fvs1) <- rnLHsTyKi is_type doc ty
        ; (res, fvs2) <- thing_inside (HsBSig ty' tv_names)
        ; return (res, fvs1 `plusFV` fvs2) } }
 
 checkHsBndrFlags :: Bool -> HsDocContext 
-                 -> LHsType RdrName -> [Located RdrName] -> RnM ()
+                 -> LHsType RdrName -> [RdrName] -> RnM ()
 checkHsBndrFlags is_type doc ty tv_bndrs
   | is_type     -- Type
   = do { sig_ok <- xoptM Opt_ScopedTypeVariables
@@ -447,7 +407,7 @@ checkHsBndrFlags is_type doc ty tv_bndrs
        ; unless (poly_kind || null tv_bndrs) 
                 (addErr (badKindBndrs doc ty tv_bndrs)) }
 
-badKindBndrs :: HsDocContext -> LHsKind RdrName -> [Located RdrName] -> SDoc
+badKindBndrs :: HsDocContext -> LHsKind RdrName -> [RdrName] -> SDoc
 badKindBndrs doc _kind kvs
   = vcat [ hang (ptext (sLit "Kind signature mentions kind variable") <> plural kvs
                  <+> pprQuotedList kvs)
@@ -811,14 +771,13 @@ ppr_opfix (op, fixity) = pp_op <+> brackets (ppr fixity)
 %*********************************************************
 
 \begin{code}
-warnUnusedForAlls :: SDoc -> [LHsTyVarBndr RdrName] -> [Located RdrName] -> TcM ()
-warnUnusedForAlls in_doc bound used
+warnUnusedForAlls :: SDoc -> [LHsTyVarBndr RdrName] -> [RdrName] -> TcM ()
+warnUnusedForAlls in_doc bound mentioned_rdrs
   = ifWOptM Opt_WarnUnusedMatches $
     mapM_ add_warn bound_but_not_used
   where
     bound_names        = hsLTyVarLocNames bound
     bound_but_not_used = filterOut ((`elem` mentioned_rdrs) . unLoc) bound_names
-    mentioned_rdrs     = map unLoc used
 
     add_warn (L loc tv) 
       = addWarnAt loc $
@@ -879,7 +838,7 @@ rnSplice (HsSplice n expr)
 	; gbl_rdr <- getGlobalRdrEnv
 	; let gbl_names = mkNameSet [gre_name gre | gre <- globalRdrEnvElts gbl_rdr, 
 						    isLocalGRE gre]
-	      lcl_names = mkNameSet (occEnvElts lcl_rdr)
+	      lcl_names = mkNameSet (localRdrEnvElts lcl_rdr)
 
 	; return (HsSplice n' expr', fvs `plusFV` lcl_names `plusFV` gbl_names) }
 

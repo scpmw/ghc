@@ -390,7 +390,9 @@ tc_bracket _ (ExpBr expr)
         -- Result type is ExpQ (= Q Exp)
 
 tc_bracket _ (TypBr typ)
-  = do  { _ <- tcHsSigTypeNC ThBrackCtxt typ
+  = do  { _ <- tcLHsType typ    -- Do not check type validity; we can have a bracket
+                                -- inside a "knot" where things are not yet settled
+                                --    eg   data T a = MkT $(foo  [t| a |])
         ; tcMetaTy typeQTyConName }
         -- Result type is Type (= Q Typ)
 
@@ -1303,6 +1305,7 @@ reifyFamilyInstance fi
 reifyType :: TypeRep.Type -> TcM TH.Type
 -- Monadic only because of failure
 reifyType ty@(ForAllTy _ _)        = reify_for_all ty
+reifyType (LitTy t)         = do { r <- reifyTyLit t; return (TH.LitT r) }
 reifyType (TyVarTy tv)      = return (TH.VarT (reifyName tv))
 reifyType (TyConApp tc tys) = reify_tc_app tc tys   -- Do not expand type synonyms here
 reifyType (AppTy t1 t2)     = do { [r1,r2] <- reifyTypes [t1,t2] ; return (r1 `TH.AppT` r2) }
@@ -1318,6 +1321,10 @@ reify_for_all ty
        ; return (TH.ForallT tvs' cxt' tau') }
   where
     (tvs, cxt, tau) = tcSplitSigmaTy ty
+
+reifyTyLit :: TypeRep.TyLit -> TcM TH.TyLit
+reifyTyLit (NumTyLit n) = return (TH.NumTyLit n)
+reifyTyLit (StrTyLit s) = return (TH.StrTyLit (unpackFS s))
 
 reifyTypes :: [Type] -> TcM [TH.Type]
 reifyTypes = mapM reifyType

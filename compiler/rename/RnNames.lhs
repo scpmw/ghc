@@ -406,7 +406,8 @@ extendGlobalRdrEnvRn avails new_fixities
               new_occs = map (nameOccName . gre_name) gres
               rdr_env_TH = transformGREs qual_gre new_occs rdr_env
               rdr_env_GHCi = delListFromOccEnv rdr_env new_occs
-              lcl_env1 = lcl_env { tcl_rdr = delListFromOccEnv (tcl_rdr lcl_env) new_occs }
+
+              lcl_env1 = lcl_env { tcl_rdr = delLocalRdrEnvList (tcl_rdr lcl_env) new_occs }
               (rdr_env2, lcl_env2) | shadowP   = (rdr_env_TH,   lcl_env1)
                                    | isGHCi    = (rdr_env_GHCi, lcl_env1)
                                    | otherwise = (rdr_env,      lcl_env)
@@ -529,10 +530,10 @@ getLocalNonValBinders fixity_env
              ; return (AvailTC main_name names) }
 
     new_assoc :: LInstDecl RdrName -> RnM [AvailInfo]
-    new_assoc (L _ (FamInstDecl d)) 
+    new_assoc (L _ (FamInstD d)) 
       = do { avail <- new_ti Nothing d
            ; return [avail] }
-    new_assoc (L _ (ClsInstDecl inst_ty _ _ ats))
+    new_assoc (L _ (ClsInstD { cid_poly_ty = inst_ty, cid_fam_insts = ats }))
       | Just (_, _, L loc cls_rdr, _) <- splitLHsInstDeclTy_maybe inst_ty
       = do { cls_nm <- setSrcSpan loc $ lookupGlobalOccRn cls_rdr
            ; mapM (new_ti (Just cls_nm) . unLoc) ats }
@@ -542,9 +543,8 @@ getLocalNonValBinders fixity_env
 
     new_ti :: Maybe Name -> FamInstDecl RdrName -> RnM AvailInfo
     new_ti mb_cls ti_decl  -- ONLY for type/data instances
-        = ASSERT( isFamInstDecl ti_decl ) 
-          do { main_name <- lookupTcdName mb_cls ti_decl
-             ; sub_names <- mapM newTopSrcBinder (hsTyClDeclBinders ti_decl)
+        = do { main_name <- lookupFamInstName mb_cls (fid_tycon ti_decl)
+             ; sub_names <- mapM newTopSrcBinder (hsFamInstBinders ti_decl)
              ; return (AvailTC (unLoc main_name) sub_names) }
                         -- main_name is not bound here!
 \end{code}
@@ -922,8 +922,7 @@ rnExports explicit_mod exports
         ; (rn_exports, avails) <- exports_from_avail real_exports rdr_env imports this_mod
         ; let final_avails = nubAvails avails    -- Combine families
 
-        ; traceRn (vcat [ text "rnExports: RdrEnv:" <+> ppr rdr_env
-                        , text "     Exports:" <+> ppr final_avails] )
+        ; traceRn (text "rnExports: Exports:" <+> ppr final_avails)
 
         ; return (tcg_env { tcg_exports    = final_avails,
                             tcg_rn_exports = case tcg_rn_exports tcg_env of
@@ -1612,7 +1611,7 @@ dodgyImportWarn item = dodgyMsg (ptext (sLit "import")) item
 dodgyExportWarn :: Name -> SDoc
 dodgyExportWarn item = dodgyMsg (ptext (sLit "export")) item
 
-dodgyMsg :: OutputableBndr n => SDoc -> n -> SDoc
+dodgyMsg :: (OutputableBndr n, HasOccName n) => SDoc -> n -> SDoc
 dodgyMsg kind tc
   = sep [ ptext (sLit "The") <+> kind <+> ptext (sLit "item") <+> quotes (ppr (IEThingAll tc))
                 <+> ptext (sLit "suggests that"),

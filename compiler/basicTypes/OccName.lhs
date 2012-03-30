@@ -54,6 +54,7 @@ module OccName (
 	mkTupleOcc, 
 	setOccNameSpace,
         demoteOccName,
+        HasOccName(..),
 
 	-- ** Derived 'OccName's
         isDerivedOccName,
@@ -344,6 +345,11 @@ demoteOccName :: OccName -> Maybe OccName
 demoteOccName (OccName space name base) = do
   space' <- demoteNameSpace space
   return $ OccName space' name base
+
+{- | Other names in the compiler add aditional information to an OccName.
+This class provides a consistent way to access the underlying OccName. -}
+class HasOccName name where
+  occName :: name -> OccName
 \end{code}
 
 
@@ -502,7 +508,7 @@ isDataSymOcc _                    = False
 -- it is a data constructor or variable or whatever)
 isSymOcc :: OccName -> Bool
 isSymOcc (OccName DataName s _)  = isLexConSym s
-isSymOcc (OccName TcClsName s _) = isLexConSym s
+isSymOcc (OccName TcClsName s _) = isLexConSym s || isLexVarSym s
 isSymOcc (OccName VarName s _)   = isLexSym s
 isSymOcc (OccName TvName s _)    = isLexSym s
 -- Pretty inefficient!
