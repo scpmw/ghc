@@ -235,9 +235,6 @@ data OccName = OccName
     }
     deriving Typeable
 
-occName :: NameSpace -> FastString -> OccName
-occName sp s = OccName sp s b
-  where b = reverse (dropWhile isDigit (reverse (unpackFS s)))
 \end{code}
 
 
@@ -304,10 +301,11 @@ mkOccNameBase :: NameSpace -> String -> String -> OccName
 mkOccNameBase occ_sp str base = OccName occ_sp (mkFastString str) base
 
 mkOccName :: NameSpace -> String -> OccName
-mkOccName occ_sp str = occName occ_sp (mkFastString str)
+mkOccName occ_sp str = mkOccNameFS occ_sp (mkFastString str)
 
 mkOccNameFS :: NameSpace -> FastString -> OccName
-mkOccNameFS occ_sp fs = occName occ_sp fs
+mkOccNameFS occ_sp fs = OccName occ_sp fs b
+  where b = reverse (dropWhile isDigit (reverse (unpackFS fs)))
 
 mkVarOcc :: String -> OccName
 mkVarOcc s = mkOccName varName s
@@ -796,7 +794,7 @@ tidyOccName in_scope occ@(OccName occ_sp _ base_occ)
 
 \begin{code}
 mkTupleOcc :: NameSpace -> TupleSort -> Arity -> OccName
-mkTupleOcc ns sort ar = occName ns (mkFastString str)
+mkTupleOcc ns sort ar = mkOccName ns str
   where
  	-- no need to cache these, the caching is done in the caller
 	-- (TysWiredIn.mk_tuple)
@@ -919,5 +917,5 @@ instance Binary OccName where
     get bh = do
 	  aa <- get bh
 	  ab <- get bh
-	  return (occName aa ab)
+	  return (mkOccNameFS aa ab)
 \end{code}
