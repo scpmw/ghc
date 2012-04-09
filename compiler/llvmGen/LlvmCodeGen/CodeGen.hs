@@ -11,7 +11,7 @@ import Llvm
 import LlvmCodeGen.Base
 import LlvmCodeGen.Regs
 
-import LlvmMeta ( genVariableMeta )
+import LlvmMeta ( genVariableMeta, LlvmAnnotator )
 
 import BlockId
 import CgUtils ( activeStgRegs, callerSaves )
@@ -36,9 +36,9 @@ type LlvmStatements = OrdList LlvmStatement
 -- -----------------------------------------------------------------------------
 -- | Top-level of the LLVM proc Code generator
 --
-genLlvmProc :: RawCmmDecl -> (LMMetaInt, LMMetaInt) -> LlvmM [LlvmCmmDecl]
-genLlvmProc (CmmProc info lbl (ListGraph blocks)) annotId = do
-    (lmblocks, lmdata) <- basicBlocksCodeGen blocks annotId
+genLlvmProc :: RawCmmDecl -> LlvmAnnotator -> LlvmM [LlvmCmmDecl]
+genLlvmProc (CmmProc info lbl (ListGraph blocks)) annotGen = do
+    (lmblocks, lmdata) <- basicBlocksCodeGen blocks (annotGen lbl) annotGen
     let proc = CmmProc info lbl (ListGraph lmblocks)
     return (proc:lmdata)
 
@@ -49,23 +49,24 @@ genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"
 --
 
 -- | Generate code for a list of blocks that make up a complete procedure.
-basicBlocksCodeGen :: [CmmBasicBlock] -> (LMMetaInt, LMMetaInt)
+basicBlocksCodeGen :: [CmmBasicBlock] -> (LMMetaInt, LMMetaInt) -> LlvmAnnotator
                       -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
-basicBlocksCodeGen cmmBlocks (scopeId, annotId)
-  = do (prologue, tops1) <- funPrologue cmmBlocks scopeId
-       (blockss, topss) <- fmap unzip $ mapM basicBlockCodeGen cmmBlocks
+basicBlocksCodeGen cmmBlocks (blockId, annotId) annotGen
+  = do (prologue, tops1) <- funPrologue cmmBlocks blockId
+       (blockss, topss) <- fmap unzip $ mapM (basicBlockCodeGen annotGen) cmmBlocks
        let ((BasicBlock bid fstmts):rblks) = concat blockss
-       let fblocks = (BasicBlock bid $ fromOL prologue ++ fstmts):rblks
        let annot = MetaStmt [(fsLit "dbg", annotId)]
-       let annotBlock (BasicBlock bid stmts) = BasicBlock bid (map annot stmts)
-       return (map annotBlock fblocks, tops1 ++ concat topss)
+       let fblocks = (BasicBlock bid $ (map annot $ fromOL prologue) ++ fstmts):rblks
+       return (fblocks, tops1 ++ concat topss)
 
 
 -- | Generate code for one block
-basicBlockCodeGen :: CmmBasicBlock -> LlvmM ( [LlvmBasicBlock], [LlvmCmmDecl] )
-basicBlockCodeGen (BasicBlock id stmts)
+basicBlockCodeGen :: LlvmAnnotator -> CmmBasicBlock
+                     -> LlvmM ( [LlvmBasicBlock], [LlvmCmmDecl] )
+basicBlockCodeGen annotGen (BasicBlock id stmts)
   = do (instrs, top) <- stmtsToInstrs stmts
-       return ([BasicBlock id (fromOL instrs)], top)
+       let annot = MetaStmt [(fsLit "dbg", snd $ annotGen $ blockLbl id)]
+       return ([BasicBlock id (map annot $ fromOL instrs)], top)
 
 
 -- -----------------------------------------------------------------------------

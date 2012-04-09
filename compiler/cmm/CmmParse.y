@@ -240,12 +240,12 @@ cmmproc :: { ExtCode }
 		         $6;
 		         return (entry_ret_label, info, live, formals, gc_block, frame) }
 		     blks <- code (cgStmtsToBlocks stmts)
-		     code (emitInfoTableAndCode entry_ret_label (CmmInfo gc_block frame info) formals blks Nothing []) }
+		     code (emitInfoTableAndCode entry_ret_label (CmmInfo gc_block frame info) formals blks) }
 
 	| info maybe_formals_without_hints ';'
 		{ do (entry_ret_label, info, live) <- $1;
 		     formals <- sequence $2;
-		     code (emitInfoTableAndCode entry_ret_label (CmmInfo Nothing Nothing info) formals [] Nothing []) }
+		     code (emitInfoTableAndCode entry_ret_label (CmmInfo Nothing Nothing info) formals []) }
 
 	| NAME maybe_formals_without_hints maybe_gc_block maybe_frame '{' body '}'
 		{% withThisPackage $ \pkg ->
@@ -258,7 +258,7 @@ cmmproc :: { ExtCode }
 		          		$6;
 		          		return (formals, gc_block, frame) }
 			blks <- code (cgStmtsToBlocks stmts)
-			code (emitProc (CmmInfo gc_block frame CmmNonInfoTable) (mkCmmCodeLabel pkg $1) formals blks Nothing []) }
+			code (emitProc (CmmInfo gc_block frame CmmNonInfoTable) (mkCmmCodeLabel pkg $1) formals blks) }
 
 info	:: { ExtFCode (CLabel, CmmInfoTable, [Maybe LocalReg]) }
 	: 'INFO_TABLE' '(' NAME ',' INT ',' INT ',' INT ',' STRING ',' STRING ')'

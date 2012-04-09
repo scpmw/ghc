@@ -27,12 +27,12 @@ import CgForeignCall
 import CgUtils
 import CgProf
 import CgInfoTbls
-import CgHpc (cgInstrument)
 
 import ClosureInfo
 import OldCmmUtils
 import OldCmm
 
+import CLabel         ( toEntryLbl )
 import StgSyn
 import StaticFlags
 import Id
@@ -377,9 +377,8 @@ cgInlinePrimOp primop args bndr (AlgAlt tycon) live_in_alts alts
                              (tagToClosure tycon tag_amode)) })
 
                 -- Compile the alts
-        ; (branches, mb_deflt, ticks) <- cgAlgAlts NoGC Nothing{-cc_slot-}
+        ; (branches, mb_deflt) <- cgAlgAlts NoGC Nothing{-cc_slot-}
                                             (AlgAlt tycon) alts
-        ; mapM_ addTick ticks
 
                 -- Do the switch
         ; emitSwitch tag_amode branches mb_deflt 0 (tyConFamilySize tycon - 1)
@@ -423,8 +422,7 @@ cgEvalAlts cc_slot bndr alt_type@(PrimAlt tycon) alts
   = do  { let   rep = tyConCgRep tycon
                 reg = dataReturnConvPrim rep    -- Bottom for voidRep
 
-        ; instr <- freshInstr
-        ; (abs_c, ticks) <- forkProc $ cgInstrument instr $ do
+        ; abs_c <- forkProc $ do
                 {       -- Bind the case binder, except if it's void
                         -- (reg is bottom in that case)
                   whenC (nonVoidArg rep) $
@@ -432,7 +430,8 @@ cgEvalAlts cc_slot bndr alt_type@(PrimAlt tycon) alts
                 ; restoreCurrentCostCentre cc_slot True
                 ; cgPrimAlts GCMayHappen alt_type reg alts }
 
-        ; lbl <- emitReturnTarget (idName bndr) abs_c instr ticks
+        ; lbl <- emitReturnTarget (idName bndr) abs_c
+        ; saveContext (toEntryLbl undefined lbl)
         ; returnFC (CaseAlts lbl Nothing bndr) }
 
 cgEvalAlts cc_slot bndr (UbxTupAlt _) [(con,args,_,rhs)]
@@ -445,8 +444,7 @@ cgEvalAlts cc_slot bndr (UbxTupAlt _) [(con,args,_,rhs)]
              text "cgEvalAlts: dodgy case of unboxed tuple type" )
     do  {       -- forkAbsC for the RHS, so that the envt is
                 -- not changed for the emitReturn call
-          instr <- freshInstr
-        ; (abs_c, ticks) <- forkProc $ cgInstrument instr $ do 
+          abs_c <- forkProc $ do
                 { (live_regs, ptrs, nptrs, _) <- bindUnboxedTupleComponents args
                         -- Restore the CC *after* binding the tuple components,
                         -- so that we get the stack offset of the saved CC right.
@@ -455,7 +453,8 @@ cgEvalAlts cc_slot bndr (UbxTupAlt _) [(con,args,_,rhs)]
                         -- and finally the code for the alternative
                 ; unbxTupleHeapCheck live_regs ptrs nptrs noStmts
                                      (cgExpr rhs) }
-        ; lbl <- emitReturnTarget (idName bndr) abs_c instr ticks
+        ; lbl <- emitReturnTarget (idName bndr) abs_c
+        ; saveContext (toEntryLbl undefined lbl)
         ; returnFC (CaseAlts lbl Nothing bndr) }
 
 cgEvalAlts cc_slot bndr alt_type alts
@@ -472,13 +471,10 @@ cgEvalAlts cc_slot bndr alt_type alts
         --
         -- which is worse than having the alt code in the switch statement
 
-        ; instr <- freshInstr
-
-        ; (alts, mb_deflt, ticks) <- withInstr instr $
-                                     cgAlgAlts GCMayHappen cc_slot alt_type alts
+        ; (alts, mb_deflt) <- cgAlgAlts GCMayHappen cc_slot alt_type alts
 
         ; (lbl, branches) <- emitAlgReturnTarget (idName bndr)
-                                alts mb_deflt instr ticks fam_sz
+                                alts mb_deflt fam_sz
 
         ; returnFC (CaseAlts lbl branches bndr) }
   where
@@ -516,11 +512,10 @@ cgAlgAlts :: GCFlag
        -> AltType                               --  ** AlgAlt or PolyAlt only **
        -> [StgAlt]                              -- The alternatives
        -> FCode ( [(ConTagZ, CgStmts)], -- The branches
-                  Maybe CgStmts,        -- The default case
-                  [Tickish ()])         -- Ticks on alternatives
+                  Maybe CgStmts )       -- The default case
 
 cgAlgAlts gc_flag cc_slot alt_type alts
-  = do (alts, ticks) <- forkAlts [ cgAlgAlt gc_flag cc_slot alt_type alt | alt <- alts]
+  = do alts <- forkAlts [ cgAlgAlt gc_flag cc_slot alt_type alt | alt <- alts]
        let
             mb_deflt = case alts of -- DEFAULT is always first, if present
                          ((DEFAULT,blks) : _) -> Just blks
@@ -529,7 +524,7 @@ cgAlgAlts gc_flag cc_slot alt_type alts
             branches = [(dataConTagZ con, blks)
                        | (DataAlt con, blks) <- alts]
        -- in
-       return (branches, mb_deflt, ticks)
+       return (branches, mb_deflt)
 
 
 cgAlgAlt :: GCFlag
@@ -539,11 +534,10 @@ cgAlgAlt :: GCFlag
          -> FCode (AltCon, CgStmts)
 
 cgAlgAlt gc_flag cc_slot alt_type (con, args, _use_mask, rhs)
-  = do  { (abs_c, ticks) <- getCgStmts $ do
+  = do  { abs_c <- getCgStmts $ do
                 { bind_con_args con args
                 ; restoreCurrentCostCentre cc_slot True
                 ; maybeAltHeapCheck gc_flag alt_type (cgExpr rhs) }
-        ; mapM_ addTick ticks
         ; return (con, abs_c) }
   where
     bind_con_args DEFAULT      _    = nopC
@@ -578,8 +572,7 @@ cgPrimAlts :: GCFlag
 --
 -- INVARIANT: the default binder is already bound
 cgPrimAlts gc_flag alt_type scrutinee alts
-  = do  { (tagged_absCs, ticks) <- forkAlts (map (cgPrimAlt gc_flag alt_type) alts)
-        ; mapM_ addTick ticks
+  = do  { tagged_absCs <- forkAlts (map (cgPrimAlt gc_flag alt_type) alts)
         ; let ((DEFAULT, deflt_absC) : others) = tagged_absCs   -- There is always a default
               alt_absCs = [(lit,rhs) | (LitAlt lit, rhs) <- others]
         ; emitLitSwitch (CmmReg scrutinee) alt_absCs deflt_absC }
@@ -591,8 +584,7 @@ cgPrimAlt :: GCFlag
 
 cgPrimAlt gc_flag alt_type (con, [], [], rhs)
   = ASSERT( case con of { DEFAULT -> True; LitAlt _ -> True; _ -> False } )
-    do  { (abs_c, ticks) <- getCgStmts (maybeAltHeapCheck gc_flag alt_type (cgExpr rhs))
-        ; mapM_ addTick ticks
+    do  { abs_c <- getCgStmts (maybeAltHeapCheck gc_flag alt_type (cgExpr rhs))
         ; returnFC (con, abs_c) }
 cgPrimAlt _ _ _ = panic "cgPrimAlt: non-empty lists"
 \end{code}

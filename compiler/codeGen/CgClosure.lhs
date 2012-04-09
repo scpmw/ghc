@@ -36,7 +36,6 @@ import CgParallel
 import CgInfoTbls
 import CgCallConv
 import CgUtils
-import CgHpc (cgInstrument)
 import ClosureInfo
 import SMRep
 import OldCmm
@@ -248,8 +247,7 @@ NB: Thunks cannot have a primitive type!
 
 \begin{code}
 closureCodeBody _binder_info cl_info _cc [{- No args i.e. thunk -}] body = do
-  { instr <- freshInstr 
-  ; (body_absC, ticks) <- getCgStmts $ cgInstrument instr $ do
+  { body_absC <- getCgStmts $ do
 	{ tickyEnterThunk cl_info
 	; ldvEnterClosure cl_info  -- NB: Node always points when profiling
 	; thunkWrapper cl_info $ do
@@ -260,7 +258,7 @@ closureCodeBody _binder_info cl_info _cc [{- No args i.e. thunk -}] body = do
 	    ; cgExpr body }
 	}
     
-  ; emitClosureCodeAndInfoTable cl_info [] body_absC instr ticks }
+  ; emitClosureCodeAndInfoTable cl_info [] body_absC }
 \end{code}
 
 If there is /at least one argument/, then this closure is in
@@ -291,11 +289,10 @@ closureCodeBody _binder_info cl_info cc args body
   { reg_save_code <- mkSlowEntryCode cl_info reg_args
 
 	-- Emit the main entry code
-  ; instr <- freshInstr
-  ; (blks, ticks) <- forkProc $ cgInstrument instr $
+  ; blks <- forkProc $
 	    mkFunEntryCode cl_info cc reg_args stk_args
 			   sp_top reg_save_code body
-  ; emitClosureCodeAndInfoTable cl_info [] blks instr ticks
+  ; emitClosureCodeAndInfoTable cl_info [] blks
   }}
 
 

@@ -2,8 +2,9 @@
 module Debug (
 
   TickMapEntry(..), TickMap,
+  Tickish(..), -- reexported
 
-  Tickish(..),
+  pprTickMap, getTicksByParent, getInstrId,
 
   debugWriteEventlog
 
@@ -21,12 +22,13 @@ import UniqSet
 import SrcLoc
 import FastString   ( unpackFS, mkFastString )
 import Literal      ( Literal( MachStr ) )
+import FastString   ( sLit )
 
 import Control.Monad ( forM_ )
 
 import Data.Word
 import Data.Maybe
-import Data.Map     ( Map, elems, lookup )
+import Data.Map as M ( Map, elems, lookup, split, size )
 import Data.Char    ( ord )
 
 import Foreign.ForeignPtr
@@ -35,14 +37,38 @@ import Foreign.ForeignPtr
 #include "../../includes/rts/EventLogFormat.h"
 
 data TickMapEntry = TickMapEntry {
-  timInstr :: Maybe Int,           -- ^ The ID of the instrumentation added to the proc
+  timLabel :: CLabel,              -- ^ Label of this entry
   timParent :: Maybe TickMapEntry, -- ^ Parent context, if any
   timTicks :: [Tickish ()]         -- ^ Debug ticks found in the context
   }
 type TickMap = Map CLabel TickMapEntry
 
-instance PlatformOutputable TickMapEntry where
-  pprPlatform _ (TickMapEntry instr ctx ts) = ppr (instr, fmap timInstr ctx, ts)
+instance Eq TickMapEntry where
+  tim1 == tim2  = timLabel tim1 == timLabel tim2
+
+-- | Shows the tick map in a nice tree form
+pprTickMap :: Platform -> TickMap -> SDoc
+pprTickMap p tick_map =
+  let lvl p pre = vcat $ map (pp pre) $ getTicksByParent tick_map p
+      pp pre tim
+        = pre <> pprPlatform p (timLabel tim) <+> ppr (timTicks tim)
+          $$ nest 3 (lvl (Just tim) (ptext (sLit "> ")))
+  in lvl Nothing empty
+
+-- | Gets child ticks of a tick map entry. If @Nothing@ is passed,
+-- returns all top-level tick map entryies.
+--
+-- Note this is not very eficient.
+getTicksByParent :: TickMap -> Maybe TickMapEntry -> [TickMapEntry]
+getTicksByParent tick_map tim = filter ((==tim) . timParent) $ M.elems tick_map
+
+-- | Instrumentation number is the position in the tick map.
+--
+-- Note that has, in fact, O(log n) complexity due to using Data.Map
+-- instead of Data.IntMap/UniqFM.
+getInstrId :: TickMap -> TickMapEntry -> Int
+getInstrId tick_map tim = M.size low
+  where (low, _high) = M.split (timLabel tim) tick_map
 
 -- | Packs the given static value into a (variable-length) event-log
 -- packet.
@@ -73,14 +99,15 @@ putModuleEvent bh mod_loc =
   putEvent bh EVENT_DEBUG_MODULE $ do
     putString bh $ fromMaybe "???" $ ml_hs_file mod_loc
 
-putProcedureEvent :: BinHandle -> Platform -> TickMapEntry -> CLabel -> IO ()
-putProcedureEvent bh platform tim lbl =
+putProcedureEvent :: BinHandle -> Platform -> TickMap -> TickMapEntry -> CLabel -> IO ()
+putProcedureEvent bh platform tick_map tim lbl =
   putEvent bh EVENT_DEBUG_PROCEDURE $ do
-    put_ bh $ encInstr $ timInstr tim
-    put_ bh $ encInstr $ (timInstr =<< timParent tim)
+    put_ bh $ encInstr $ Just tim
+    put_ bh $ encInstr $ timParent tim
     putString bh $ showSDocC  $ pprCLabel platform lbl
- where encInstr (Just i) = fromIntegral i
-       encInstr Nothing  = 0xffff :: Word16
+ where encInstr tim = case fmap (getInstrId tick_map) tim of
+         Just i  -> fromIntegral i
+         Nothing -> 0xffff :: Word16
        showSDocC = flip renderWithStyle (mkCodeStyle CStyle)
 
 putAnnotEvent :: BinHandle -> UniqSet Var -> Maybe Var -> Tickish () -> IO ()
@@ -142,9 +169,9 @@ debugWriteEventlog platform mod_loc tick_map lbls = do
   -- Put data
   putModuleEvent bh mod_loc
   forM_ lbls $ \(cmml, asml) ->
-    case Data.Map.lookup cmml tick_map of
+    case M.lookup cmml tick_map of
       Just tim -> do
-        putProcedureEvent bh platform tim asml
+        putProcedureEvent bh platform tick_map tim asml
         let mbind = getMainCoreBind (timTicks tim)
         mapM_ (putAnnotEvent bh binds mbind) (timTicks tim)
       Nothing  -> return ()

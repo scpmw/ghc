@@ -80,7 +80,7 @@ codeGen dflags this_mod data_tycons cost_centre_info stg_binds hpc_info = do
                 -- [pipeline-split-init].
 
     dumpIfSet_dyn dflags Opt_D_dump_cmm "Cmm" ( pprCmms (targetPlatform dflags) (fst code_stuff) $$
-                                                pprPlatform (targetPlatform dflags) (snd code_stuff) )
+                                                pprTickMap (targetPlatform dflags) (snd code_stuff) )
     return code_stuff
 
 mkModuleInit

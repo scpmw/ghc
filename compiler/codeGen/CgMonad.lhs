@@ -17,7 +17,7 @@ module CgMonad (
         returnFC, fixC, fixC_, checkedAbsC,
         stmtC, stmtsC, labelC, emitStmts, nopC, whenC, newLabelC,
         newUnique, newUniqSupply,
-        freshInstr, withInstr, getInstrCnt, addTick,
+        addTick, finishInstrument, saveContext,
 
         CgStmts, emitCgStmts, forkCgStmts, cgStmtsToBlocks,
         getCgStmts', getCgStmts,
@@ -110,7 +110,6 @@ data CgInfoDownwards
         cgd_srt     :: SRT,           -- the current SRT
         cgd_ticky   :: CLabel,        -- current destination for ticky counts
         cgd_eob     :: EndOfBlockInfo,-- Info for stuff to do at end of basic block:
-        cgd_instr   :: Maybe Int,     -- ID of containing instrumentation
         cgd_tick_map:: TickMap        -- Tick map after generation (loop)
   }
 
@@ -124,7 +123,6 @@ initCgInfoDown dflags mod tick_map
                    cgd_srt     = error "initC: srt",
                    cgd_ticky   = mkTopTickyCtrLabel,
                    cgd_eob     = initEobInfo,
-                   cgd_instr   = Nothing,
                    cgd_tick_map= tick_map
   }
 
@@ -146,29 +144,22 @@ data CgState
      cgs_hp_usg  :: HeapUsage,
      cgs_uniqs   :: UniqSupply,
 
-     cgs_next_itick :: !Int,
-
-     -- | List of debug annotations we have found for the currently
-     -- translated closure
-     cgs_ticks :: [Tickish ()],
-
      -- | Maps the cmm proc labels to the instrumentation number and
      -- all tick annotations found while generating it
      cgs_tick_map :: TickMap
-  }
+
+     }
 
 -- | Setup initial @CgState@ for the code gen
-initCgState :: UniqSupply -> Int -> CgState
-initCgState uniqs next_itick
+initCgState :: UniqSupply -> CgState
+initCgState uniqs
   = MkCgState { cgs_stmts   = nilOL,
                 cgs_tops    = nilOL,
                 cgs_binds   = emptyVarEnv,
                 cgs_stk_usg = initStkUsage,
                 cgs_hp_usg  = initHpUsage,
                 cgs_uniqs   = uniqs,
-                cgs_next_itick = next_itick,
-                cgs_ticks      = [],
-                cgs_tick_map   = Map.empty
+                cgs_tick_map= Map.empty
   }
 
 -- | @EndOfBlockInfo@ tells what to do at the end of this block of code or, if
@@ -230,6 +221,8 @@ data CgStmt
   = CgStmt  CmmStmt
   | CgLabel BlockId
   | CgFork  BlockId CgStmts
+  | CgTick  (Tickish ())
+  | CgContext CLabel
 
 flattenCgStmts :: BlockId -> CgStmts -> [CmmBasicBlock]
 flattenCgStmts id stmts =
@@ -257,7 +250,7 @@ flattenCgStmts id stmts =
             where (block,blocks) = flatten stmts
         (CgFork fork_id stmts : ss) ->
            flatten (CgFork fork_id stmts : CgStmt stmt : ss)
-        (CgStmt {} : _) -> panic "CgStmt not seen as ordinary"
+        _                      -> panic "CgStmt not seen as ordinary"
 
   flatten (s:ss) =
         case s of
@@ -266,6 +259,7 @@ flattenCgStmts id stmts =
           CgFork fork_id stmts ->
                 (block, BasicBlock fork_id fork_block : fork_blocks ++ blocks)
                 where (fork_block, fork_blocks) = flatten (fromOL stmts)
+          _           -> flatten ss
     where (block,blocks) = flatten ss
 
 isJump :: CmmStmt -> Bool
@@ -278,6 +272,7 @@ isJump _               = False
 isOrdinaryStmt :: CgStmt -> Bool
 isOrdinaryStmt (CgStmt _) = True
 isOrdinaryStmt _          = False
+
 \end{code}
 
 %************************************************************************
@@ -380,9 +375,9 @@ s1 `addCodeBlocksFrom` s2
 
 takeTicksFrom :: CgState -> Code
 takeTicksFrom s2 = do
-  s1 <- getState 
-  setState $ s1 { cgs_next_itick = cgs_next_itick s2
-                , cgs_tick_map = cgs_tick_map s1 `Map.union` cgs_tick_map s2 }
+  s1 <- getState
+  let union = Map.unionWith combineTIMs
+  setState $ s1 { cgs_tick_map = cgs_tick_map s1 `union` cgs_tick_map s2 }
 
 -- | Set @HeapUsage@ virtHp to max of current or $arg2$.
 maxHpHw :: HeapUsage -> VirtualHpOffset -> HeapUsage
@@ -414,7 +409,7 @@ instance Monad FCode where
 initC :: DynFlags -> Module -> FCode a -> IO a
 initC dflags mod (FCode code) = do
     uniqs <- mkSplitUniqSupply 'c'
-    let (res, env) = code (initCgInfoDown dflags mod (cgs_tick_map env)) (initCgState uniqs 0)
+    let (res, env) = code (initCgInfoDown dflags mod (cgs_tick_map env)) (initCgState uniqs)
     return res
 
 returnFC :: a -> FCode a
@@ -521,26 +516,37 @@ newUnique = do
     us <- newUniqSupply
     return (uniqFromSupply us)
 
-addTick :: Tickish () -> FCode ()
-addTick ti = do
-        state <- getState
-        setState $ state {cgs_ticks = ti:cgs_ticks state}
+addTick :: Tickish () -> Code
+addTick = emitCgStmt . CgTick
 
-freshInstr :: FCode Int
-freshInstr = do
-        state <- getState
-        setState $ state { cgs_next_itick = cgs_next_itick state + 1 }
-        return $ cgs_next_itick state
+writeTicksToMap :: CLabel -> [Tickish ()] -> Code
+writeTicksToMap lbl ticks = writeTickMap tim
+  where tim = TickMapEntry { timLabel = lbl
+                           , timParent = Nothing
+                           , timTicks = ticks }
 
-withInstr :: Int -> FCode a -> FCode a
-withInstr instr code = do
-        infoDown <- getInfoDown
-        withInfoDown code (infoDown { cgd_instr = Just instr})
+writeContextToMap :: CLabel -> CLabel -> Code
+writeContextToMap lbl clbl = do
+  infoDown <- getInfoDown
+  let ctx = Map.lookup clbl (cgd_tick_map infoDown)
+      tim = TickMapEntry { timLabel = lbl
+                         , timParent = ctx
+                         , timTicks = [] }
+  writeTickMap tim
 
-getInstrCnt :: FCode Int
-getInstrCnt = do
-        state <- getState
-        return (cgs_next_itick state)
+saveContext :: CLabel -> Code
+saveContext = emitCgStmt . CgContext
+
+writeTickMap :: TickMapEntry -> Code
+writeTickMap tim = do
+  state <- getState
+  let insert = Map.insertWith combineTIMs (timLabel tim) tim
+  setState $ state { cgs_tick_map = insert (cgs_tick_map state) }
+
+combineTIMs :: TickMapEntry -> TickMapEntry -> TickMapEntry
+combineTIMs tim1 tim2
+  = tim1 { timParent = timParent tim1 `mplus` timParent tim2
+         , timTicks  = timTicks tim1 ++ timTicks tim2 }
 
 ------------------
 getInfoDown :: FCode CgInfoDownwards
@@ -577,13 +583,11 @@ forkClosureBody body_code = do
     us    <- newUniqSupply
     state <- getState
     let body_info_down   = info { cgd_eob = initEobInfo }
-        ((), fork_state) = doFCode body_code body_info_down 
-                                   (initCgState us (cgs_next_itick state))
+        ((), fork_state) = doFCode body_code body_info_down (initCgState us)
 
     ASSERT( isNilOL (cgs_stmts fork_state) )
       setState $ state `addCodeBlocksFrom` fork_state
-    ASSERT( null (cgs_ticks fork_state) )
-      takeTicksFrom fork_state
+    takeTicksFrom fork_state
 
 -- | @forkStatics@ $fc$ compiles $fc$ in an environment whose statics come
 -- from the current bindings, but which is otherwise freshly initialised.
@@ -596,25 +600,23 @@ forkStatics body_code = do
     state <- getState
     let rhs_info_down = info { cgd_statics = cgs_binds state,
                                cgd_eob     = initEobInfo }
-        (result, fork_state_out) = doFCode body_code rhs_info_down
-                                   (initCgState us (cgs_next_itick state))
+        (result, fork_state_out) = doFCode body_code rhs_info_down (initCgState us)
 
     ASSERT( isNilOL (cgs_stmts fork_state_out) )
       setState (state `addCodeBlocksFrom` fork_state_out)
-    ASSERT( null (cgs_ticks fork_state_out) )
-      takeTicksFrom fork_state_out
+    takeTicksFrom fork_state_out
     return result
 
 -- | @forkProc@ takes a code and compiles it in the current environment,
 -- returning the basic blocks thus constructed. The current environment is
 -- passed on completely unchanged. It is pretty similar to @getBlocks@, except
 -- that the latter does affect the environment.
-forkProc :: Code -> FCode (CgStmts, [Tickish ()])
+forkProc :: Code -> FCode CgStmts
 forkProc body_code = do
     info  <- getInfoDown
     us    <- newUniqSupply
     state <- getState
-    let fork_state_in = (initCgState us (cgs_next_itick state))
+    let fork_state_in = (initCgState us)
                             { cgs_binds   = cgs_binds state,
                               cgs_stk_usg = cgs_stk_usg state,
                               cgs_hp_usg  = cgs_hp_usg state }
@@ -632,8 +634,7 @@ codeOnly body_code = do
     info  <- getInfoDown
     us    <- newUniqSupply
     state <- getState
-    let fork_state_in = (initCgState us (cgs_next_itick state))
-                                         { cgs_binds   = cgs_binds state,
+    let fork_state_in = (initCgState us) { cgs_binds   = cgs_binds state,
                                            cgs_stk_usg = cgs_stk_usg state,
                                            cgs_hp_usg  = cgs_hp_usg state }
         ((), fork_state_out) = doFCode body_code info fork_state_in
@@ -644,30 +645,27 @@ codeOnly body_code = do
 -- environment. The current environment is passed on unmodified, except that:
 --     * the worst stack high-water mark is incorporated
 --     * the virtual Hp is moved on to the worst virtual Hp for the branches
-forkAlts :: [FCode a] -> FCode ([a], [Tickish ()])
-forkAlts branch_fcodes = do
+forkAlts :: [FCode a] -> FCode [a]
+forkAlts branch_fcodes = do 
     info  <- getInfoDown
     us    <- newUniqSupply
     state <- getState
-    let compile (us,it) branch
-            = ((us2, it2), result)
+    let compile us branch = (us2, doFCode branch info branch_state)
             where
-                it2          = cgs_next_itick (snd result)
                 (us1,us2)    = splitUniqSupply us
-                branch_state = (initCgState us1 it) {
+                branch_state = (initCgState us1) {
                                    cgs_binds   = cgs_binds state,
                                    cgs_stk_usg = cgs_stk_usg state,
                                    cgs_hp_usg  = cgs_hp_usg state }
-                result       = doFCode branch info branch_state
-        (_us, results) = mapAccumL compile (us, cgs_next_itick state) branch_fcodes
+        (_us, results) = mapAccumL compile us branch_fcodes
         (branch_results, branch_out_states) = unzip results
     -- NB foldl. state is the *left* argument to stateIncUsage
     setState $ foldl stateIncUsage state branch_out_states
     mapM_ takeTicksFrom branch_out_states
-    return (branch_results, concatMap cgs_ticks branch_out_states)
+    return branch_results
 
 -- | @forkEval@ takes two blocks of code.
---
+-- 
 --   *  The first meddles with the environment to set it up as expected by
 --      the alternatives of a @case@ which does an eval (or gc-possible primop).
 --   *  The second block is the code for the alternatives.
@@ -676,7 +674,7 @@ forkAlts branch_fcodes = do
 -- @forkEval@ picks up the virtual stack pointer and returns a suitable
 -- @EndOfBlockInfo@ for the caller to use, together with whatever value
 -- is returned by the second block.
---
+-- 
 -- It uses @initEnvForAlternatives@ to initialise the environment, and
 -- @stateIncUsageAlt@ to incorporate usage; the latter ignores the heap usage.
 forkEval :: EndOfBlockInfo       -- For the body
@@ -701,7 +699,7 @@ forkEvalHelp body_eob_info env_code body_code = do
     let info_body      = info { cgd_eob = body_eob_info }
         (_, env_state) = doFCode env_code info_body
                                  (state {cgs_uniqs = us})
-        state_for_body = (initCgState (cgs_uniqs env_state) (cgs_next_itick env_state))
+        state_for_body = (initCgState (cgs_uniqs env_state))
                             { cgs_binds   = binds_for_body,
                               cgs_stk_usg = stk_usg_for_body }
         binds_for_body   = nukeVolatileBinds (cgs_binds env_state)
@@ -756,10 +754,7 @@ emitStmts stmts = emitCgStmts $ fmap CgStmt stmts
 -- forkLabelledCode is for emitting a chunk of code with a label, outside
 -- of the current instruction stream.
 forkLabelledCode :: Code -> FCode BlockId
-forkLabelledCode code 
-  = do { (stmts, ticks) <- getCgStmts code 
-       ; mapM_ addTick ticks
-       ; forkCgStmts stmts }
+forkLabelledCode code = getCgStmts code >>= forkCgStmts
 
 emitCgStmt :: CgStmt -> Code
 emitCgStmt stmt = do
@@ -771,20 +766,19 @@ emitDecl decl = do
     state <- getState
     setState $ state { cgs_tops = cgs_tops state `snocOL` decl }
 
-emitProc :: CmmInfo -> CLabel -> [CmmFormal] -> [CmmBasicBlock] -> Maybe Int -> [Tickish ()] -> Code
-emitProc info lbl [] blocks instr ticks = do
-    finishInstrument lbl instr ticks
+emitProc :: CmmInfo -> CLabel -> [CmmFormal] -> [CmmBasicBlock] -> Code
+emitProc info lbl [] blocks = do
     let proc_block = CmmProc info lbl (ListGraph blocks)
     state <- getState
     setState $ state { cgs_tops = cgs_tops state `snocOL` proc_block }
-emitProc _ _ (_:_) _ _ _ = panic "emitProc called with nonempty args"
+emitProc _ _ (_:_) _ = panic "emitProc called with nonempty args"
 
 -- Emit a procedure whose body is the specified code; no info table
 emitSimpleProc :: CLabel -> Code -> Code
 emitSimpleProc lbl code = do
-    (stmts, ticks) <- getCgStmts code
-    blks <- cgStmtsToBlocks stmts
-    emitProc (CmmInfo Nothing Nothing CmmNonInfoTable) lbl [] blks Nothing ticks
+    stmts <- getCgStmts code
+    blks <- cgStmtsToBlocks =<< finishInstrument lbl stmts
+    emitProc (CmmInfo Nothing Nothing CmmNonInfoTable) lbl [] blks
 
 -- Get all the CmmTops (there should be no stmts)
 -- Return a single Cmm which may be split from other Cmms by
@@ -795,21 +789,6 @@ getCmm code = do
     ((), state2) <- withState code (state1 { cgs_tops  = nilOL })
     setState $ state2 { cgs_tops = cgs_tops state1 }
     return (fromOL (cgs_tops state2))
-
--- Associates the given label with collected ticks, as well as
--- generated instrumentation.
-finishInstrument :: CLabel -> Maybe Int -> [Tickish ()] -> Code
-finishInstrument lbl instr ticks = do
-    state <- getState
-    infoDown <- getInfoDown
-    let findInstr i = find ((== Just i) . timInstr) $ Map.elems $ cgd_tick_map infoDown
-        ctx         = cgd_instr infoDown >>= findInstr
-        tick_entry  = TickMapEntry { timInstr = instr
-                                   , timParent = ctx
-                                   , timTicks = ticks }
-    setState $ state {
-      cgs_tick_map = Map.insert lbl tick_entry $ cgs_tick_map state
-      }
 
 -- ----------------------------------------------------------------------------
 -- CgStmts
@@ -836,17 +815,39 @@ cgStmtsToBlocks stmts = do
     id <- newLabelC
     return (flattenCgStmts id stmts)
 
+finishInstrument :: CLabel -> CgStmts -> FCode CgStmts
+finishInstrument lbl stmts =
+  let go lbl ticks [] accs = do
+        writeTicksToMap lbl ticks
+        return $ toOL $ reverse accs
+      go lbl ticks (s:ss) accs = case s of
+        CgFork id stmts -> do
+          let l = blockLbl id
+          writeContextToMap l lbl
+          stmts' <- go l [] (fromOL stmts) []
+          let fork' = CgFork id stmts'
+          go lbl ticks ss (fork':accs)
+        CgTick tick     ->
+          go lbl (tick:ticks) ss accs
+        CgContext l     -> do
+          writeContextToMap l lbl
+          go lbl ticks ss accs
+        other ->
+          go lbl ticks ss (other:accs)
+  in go lbl [] (fromOL stmts) []
+
 -- collect the code emitted by an FCode computation
-getCgStmts' :: FCode a -> FCode (a, (CgStmts, [Tickish ()]))
+getCgStmts' :: FCode a -> FCode (a, CgStmts)
 getCgStmts' fcode = do
     state1 <- getState
     (a, state2) <- withState fcode (state1 { cgs_stmts = nilOL })
-    setState $ state2 { cgs_stmts = cgs_stmts state1
-                      , cgs_ticks = cgs_ticks state1 }
-    return (a, (cgs_stmts state2, cgs_ticks state2))
+    setState $ state2 { cgs_stmts = cgs_stmts state1  }
+    return (a, cgs_stmts state2)
 
-getCgStmts :: FCode a -> FCode (CgStmts, [Tickish ()])
-getCgStmts fcode = getCgStmts' fcode >>= return . snd
+getCgStmts :: FCode a -> FCode CgStmts
+getCgStmts fcode = do
+    (_,stmts) <- getCgStmts' fcode
+    return stmts
 
 -- Simple ways to construct CgStmts:
 noCgStmts :: CgStmts

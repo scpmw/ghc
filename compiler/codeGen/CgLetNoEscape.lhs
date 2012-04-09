@@ -31,8 +31,6 @@ import CgCon
 import CgHeapery
 import CgInfoTbls
 import CgStackery
-import CgHpc (cgInstrument)
-
 import OldCmm
 import OldCmmUtils
 import CLabel
@@ -40,6 +38,7 @@ import ClosureInfo
 import CostCentre
 import Id
 import BasicTypes
+import Unique        ( getUnique )
 \end{code}
 
 %************************************************************************
@@ -170,14 +169,15 @@ cgLetNoEscapeClosure
 		    ; nukeDeadBindings full_live_in_rhss })
 
 		(do { deAllocStackTop retAddrSizeW
-		    ; instr <- freshInstr
-		    ; (abs_c, ticks) <- forkProc $ cgInstrument instr $
-                                        cgLetNoEscapeBody bndr cc cc_slot args body
+		    ; abs_c <- forkProc $ cgLetNoEscapeBody bndr cc 
+						  cc_slot args body
 
 			-- Ignore the label that comes back from
 			-- mkRetDirectTarget.  It must be conjured up elswhere
-		    ; _ <- emitReturnTarget (idName bndr) abs_c instr ticks
+		    ; _ <- emitReturnTarget (idName bndr) abs_c
 		    ; return () })
+
+        ; saveContext $ mkReturnPtLabel $ getUnique $ idName bndr
 
 	; returnFC (bndr, letNoEscapeIdInfo bndr vSp lf_info) }
 \end{code}

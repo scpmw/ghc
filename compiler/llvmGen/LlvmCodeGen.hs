@@ -15,6 +15,7 @@ import LlvmMangler
 
 import LlvmMeta
 
+import BlockId ( blockLbl )
 import CgUtils ( fixStgRegisters )
 import OldCmm
 import OldPprCmm
@@ -120,7 +121,7 @@ cmmProcLlvmGens mod_loc (cmm : cmms) tick_map count
 
 -- | Complete LLVM code generation phase for a single top-level chunk of Cmm.
 cmmLlvmGen :: ModLocation -> TickMap -> Int -> RawCmmDecl -> LlvmM ()
-cmmLlvmGen mod_loc tick_map count cmm@(CmmProc nfo lbl _) = do
+cmmLlvmGen mod_loc tick_map count cmm@(CmmProc nfo lbl (ListGraph blocks)) = do
 
     -- rewrite assignments to global regs
     let fixed_cmm = fixStgRegisters cmm
@@ -134,7 +135,8 @@ cmmLlvmGen mod_loc tick_map count cmm@(CmmProc nfo lbl _) = do
     let entryLbl = case nfo of
           Nothing                   -> lbl
           Just (Statics info_lbl _) -> info_lbl
-    annotId <- cmmMetaLlvmProc lbl entryLbl mod_loc tick_map
+    let blockLbls = map (\(BasicBlock id _) -> blockLbl id) blocks
+    annotId <- cmmMetaLlvmProc lbl entryLbl blockLbls mod_loc tick_map
 
     -- generate llvm code from cmm
     llvmBC <- withClearVars $ genLlvmProc fixed_cmm annotId
