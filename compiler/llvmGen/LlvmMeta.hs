@@ -399,14 +399,17 @@ typeToMeta ty = case ty of
                       pars <- mapM (getTypeMeta . fst) parTs
                       compositeType dW_TAG_subroutine_type (ret:pars) nullLit
  where
-  mkType tag fields =  return $ LMMeta $ map LMLitVar $
+  mkType tag fields = do
+   Just unitMeta <- getUniqMeta unitN
+   return $ LMMeta $ map LMLitVar $
     [ mkI32 tag
-    , nullLit                                         -- Context
+    , LMMetaRef unitMeta                              -- Context
     , LMMetaString $ mkFastString $ showSDoc $ ppr ty -- Name
     , nullLit                                         -- File reference
     , mkI32 0                                         -- Line number
     , mkI64 $ fromIntegral $ llvmWidthInBits ty       -- Width in bits
     , mkI64 $ fromIntegral $ llvmWidthInBits llvmWord -- Alignment in bits
+    , mkI64 0                                         -- Offset in bits
     ] ++ fields
   baseType enc = mkType dW_TAG_base_type
     [ mkI32 0                                         -- Flags
@@ -438,8 +441,9 @@ genVariableMeta vname vty scopeId = do
     , LMMetaRef scopeId                               -- Context
     , LMMetaString vname                              -- Name
     , LMMetaRef fileId                                -- File reference
-    , mkI32 0                                         -- Line / argument number
+    , mkI32 1                                         -- Line / argument number
     , tyDesc                                          -- Type description
+    , mkI32 0                                         -- Flags
     ]
 
 -- | Return buffer contents as a LLVM string

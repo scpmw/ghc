@@ -118,7 +118,7 @@ declareInstrinct :: LMString -> LlvmType -> [LlvmType] -> LlvmM (LlvmVar, [LlvmC
 declareInstrinct fname retTy parTys = do
 
     let funSig = LlvmFunctionDecl fname ExternallyVisible CC_Ccc retTy
-                    FixedArgs (tysToParams parTys) llvmFunAlign
+                    FixedArgs (tysToParams parTys) Nothing
     let fty = LMFunction funSig
 
     let fv   = LMGlobalVar fname fty (funcLinkage funSig) Nothing Nothing False
