@@ -130,7 +130,7 @@ cmmMetaLlvmPrelude mod_loc = do
   -- the definitions can reference each other.
   flip mapM_ cachedTypeMeta $ \(ty, uniq) -> do
     Just i <- getUniqMeta uniq
-    tyMeta <- typeToMeta ty
+    tyMeta <- typeToMeta' ty
     renderMeta i tyMeta
 
   -- Emit TBAA nodes
@@ -253,7 +253,7 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
 
   -- get global metadata ids from context
   Just unitId <- getUniqMeta unitN
-  procTypeMeta <- getTypeMeta llvmFunTy
+  procTypeMeta <- typeToMeta llvmFunTy
 
   procId <- getMetaUniqueId
   renderMeta procId $ LMMeta $ map LMLitVar
@@ -369,34 +369,34 @@ findGoodSourceTick lbl unit tiMap
     isSourceTick SourceNote {} = True
     isSourceTick _             = False
 
--- | Gives type description as meta data or a reference to a metadata
--- node that contains it.
-getTypeMeta :: LlvmType -> LlvmM LlvmLit
-getTypeMeta ty
+-- | Gives type description as meta data or a reference to an existing
+-- metadata node that contains it.
+typeToMeta :: LlvmType -> LlvmM LlvmLit
+typeToMeta ty
   | Just uniq <- Prelude.lookup ty cachedTypeMeta
               = do Just i <- getUniqMeta uniq
                    return (LMMetaRef i)
-  | otherwise = typeToMeta ty
+  | otherwise = typeToMeta' ty
 
 -- | Gives type description as meta data
-typeToMeta :: LlvmType -> LlvmM LlvmLit
-typeToMeta ty = case ty of
+typeToMeta' :: LlvmType -> LlvmM LlvmLit
+typeToMeta' ty = case ty of
   LMInt{}       -> baseType dW_ATE_signed
   LMFloat{}     -> baseType dW_ATE_float
   LMDouble{}    -> baseType dW_ATE_float
   LMFloat80{}   -> baseType dW_ATE_float
   LMFloat128{}  -> baseType dW_ATE_float
-  (LMPointer t) -> derivedType dW_TAG_pointer_type =<< getTypeMeta t
-  (LMArray n t) -> compositeType dW_TAG_array_type [subrangeDesc n] =<< getTypeMeta t
-  LMLabel       -> derivedType dW_TAG_pointer_type =<< getTypeMeta LMVoid
+  (LMPointer t) -> derivedType dW_TAG_pointer_type =<< typeToMeta t
+  (LMArray n t) -> compositeType dW_TAG_array_type [subrangeDesc n] =<< typeToMeta t
+  LMLabel       -> derivedType dW_TAG_pointer_type =<< typeToMeta LMVoid
   LMVoid        -> return nullLit
-  (LMStruct ts) -> do members <- mapM getTypeMeta ts
+  (LMStruct ts) -> do members <- mapM typeToMeta ts
                       compositeType dW_TAG_structure_type members nullLit
   (LMAlias(_,t))-> derivedType dW_TAG_typedef =<< typeToMeta t
   LMMetaType    -> error "typeToMeta: Meta data has no type representation in DWARF!"
   (LMFunction (LlvmFunctionDecl{ decReturnType=retT, decParams=parTs }))
-                -> do ret <- getTypeMeta retT
-                      pars <- mapM (getTypeMeta . fst) parTs
+                -> do ret <- typeToMeta retT
+                      pars <- mapM (typeToMeta . fst) parTs
                       compositeType dW_TAG_subroutine_type (ret:pars) nullLit
  where
   mkType tag fields = do
@@ -434,7 +434,7 @@ typeToMeta ty = case ty of
 
 genVariableMeta :: LMString -> LlvmType -> LMMetaInt -> LlvmM LlvmLit
 genVariableMeta vname vty scopeId = do
-  tyDesc <- getTypeMeta vty
+  tyDesc <- typeToMeta vty
   Just fileId <- getUniqMeta fileN
   return $ LMMeta $ map LMLitVar
     [ mkI32 dW_TAG_auto_variable
