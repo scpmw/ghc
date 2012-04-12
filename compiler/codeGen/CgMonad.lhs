@@ -224,6 +224,10 @@ data CgStmt
   | CgTick  (Tickish ())
   | CgContext CLabel
 
+isContextStmt :: CgStmt -> Bool
+isContextStmt CgContext{} = True
+isContextStmt _           = False
+
 flattenCgStmts :: BlockId -> CgStmts -> [CmmBasicBlock]
 flattenCgStmts id stmts =
         case flatten (fromOL stmts) of
@@ -712,7 +716,9 @@ forkEvalHelp body_eob_info env_code body_code = do
 
     -- The code coming back should consist only of nested declarations,
     -- notably of the return vector!
-    ASSERT( isNilOL (cgs_stmts state_at_end_return) )
+    --
+    -- We allow context annotations to be taken over, however.
+    ASSERT( all isContextStmt $ fromOL $ cgs_stmts state_at_end_return )
       setState $ state `stateIncUsageEval` state_at_end_return
     takeTicksFrom state_at_end_return
     return (virtSp_from_env, value_returned)
