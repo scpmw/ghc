@@ -604,6 +604,7 @@ void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *
 	// if applicable.
 	dwarf_new_proc(unit, name, low_pc_ptr, high_pc_ptr, DwarfSourceDwarf, proc);
 
+    // Go throug
 }
 
 DwarfUnit *dwarf_get_unit(char *name)
@@ -694,9 +695,11 @@ void dwarf_trace_debug_data()
 			continue;
 		}
 
-		// Get event type and size.
+		// Get event type and size. Note that utils/Binary.hs writes
+		// StdWord16 as little-endian.
 		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
-		StgWord16 size = *(StgWord16 *)dbg; dbg += sizeof(StgWord16);
+		StgWord8 sizeh = *dbg++; StgWord8 sizel = *dbg++;
+		StgWord16 size = (((StgWord16)sizeh) << 8) + sizel;
 
 		// Follow data
 		char *proc_name = 0;
