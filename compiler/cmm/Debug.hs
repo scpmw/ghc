@@ -1,4 +1,13 @@
 
+-----------------------------------------------------------------------------
+--
+-- Debugging data
+--
+-- Association of debug data on the Cmm level, with methods to encode it in
+-- event log format for later inclusion in profiling event logs.
+--
+-----------------------------------------------------------------------------
+
 module Debug (
 
   TickMapEntry(..), TickMap,
@@ -56,15 +65,15 @@ pprTickMap p tick_map =
   in lvl Nothing empty
 
 -- | Gets child ticks of a tick map entry. If @Nothing@ is passed,
--- returns all top-level tick map entryies.
+-- returns all top-level tick map entries.
 --
--- Note this is not very eficient.
+-- Note this is not very efficient.
 getTicksByParent :: TickMap -> Maybe TickMapEntry -> [TickMapEntry]
 getTicksByParent tick_map tim = filter ((==tim) . timParent) $ M.elems tick_map
 
 -- | Instrumentation number is the position in the tick map.
 --
--- Note that has, in fact, O(log n) complexity due to using Data.Map
+-- Note this has, in fact, O(log n) complexity due to using Data.Map
 -- instead of Data.IntMap/UniqFM.
 getInstrId :: TickMap -> TickMapEntry -> Int
 getInstrId tick_map tim = M.size low
