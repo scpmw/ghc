@@ -225,9 +225,8 @@ stat_endInit(void)
 
 #endif
 
-#ifdef USE_PERF_EVENT
-	perf_event_start_mutator_count();
-#endif
+    /* No need to call perf_event_start_mutator_count(), as it gets
+       initialized per-task */
 
 }
 

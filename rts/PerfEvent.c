@@ -91,7 +91,11 @@ void perf_event_init(Task *task)
 	attr.sample_period = 100000;
 	attr.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID;
 	attr.exclude_kernel = 1;
-	attr.disabled = 1;
+
+	// Start enabled - not strictly right, as we aren't in the mutator
+	// here, but we will only get a perf_event_start_mutator_count()
+	// call on the next garbage collection. FIXME: improve
+	//attr.disabled = 1;
 
 	// Allocate counter
 	task->perf_event_fd = sys_perf_event_open(&attr, 0, -1, -1, 0);
