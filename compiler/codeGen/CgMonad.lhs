@@ -824,7 +824,7 @@ cgStmtsToBlocks stmts = do
 finishInstrument :: CLabel -> CgStmts -> FCode CgStmts
 finishInstrument lbl stmts =
   let go lbl ticks [] accs = do
-        writeTicksToMap lbl ticks
+        writeTicksToMap lbl (reverse ticks)
         return $ toOL $ reverse accs
       go lbl ticks (s:ss) accs = case s of
         CgFork id stmts -> do
