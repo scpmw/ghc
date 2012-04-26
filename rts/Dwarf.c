@@ -65,12 +65,13 @@ static void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg);
 
 static void dwarf_load_file(char *module_path, seg_space *seg);
 static void dwarf_load_dies(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg);
-static void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg);
+static void dwarf_load_proc_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg);
+static void dwarf_load_block_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg);
 static char *dwarf_findname(Dwarf_Die die);
 
 static DwarfUnit *dwarf_new_unit(char *name, char *comp_dir);
-static DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name, void *low_pc, void *high_pc,
-                                 DwarfSource source, DwarfProc *after);
+static DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name, Dwarf_Addr low_pc, Dwarf_Addr high_pc,
+                                 DwarfSource source, seg_space *seg);
 
 #ifdef TRACING
 static void dwarf_trace_all_unaccounted(void);
@@ -395,7 +396,7 @@ void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg)
 	Elf_Scn *scn = 0; GElf_Shdr hdr;
 	GElf_Shdr sym_shdr;
 	GElf_Half sym_shndx = ~0;
-	void *sym_offset = 0;
+	Dwarf_Addr sym_offset = 0;
 	while ((scn = elf_nextscn(elf, scn))) {
 		if (!gelf_getshdr(scn, &hdr))
 			return;
@@ -442,7 +443,7 @@ void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg)
 
 					Elf_Scn *sym_scn = elf_getscn(elf, sym.st_shndx);
 					if (gelf_getshdr(sym_scn, &sym_shdr) == &sym_shdr) {
-						sym_offset = (char *)seg->base - sym_shdr.sh_addr + sym_shdr.sh_offset;
+						sym_offset = sym_shdr.sh_offset - sym_shdr.sh_addr;
 					} else {
 						sym_offset = 0;
 						memset(&sym_shdr, 0, sizeof(sym_shdr));
@@ -480,19 +481,13 @@ void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg)
 					break;
 
 				{
-					void *start = (char *)sym_offset+sym.st_value;
-					void *end = (char *)start+sym.st_size;
-
-					// Finally, range-check the symbol so we don't
-					// associate it with the wrong memory region.
-					if ((char *)start < (char *)seg->start ||
-						(char *)end > (char *)seg->end)
-						break;
+					Dwarf_Addr start = sym_offset+sym.st_value;
+					Dwarf_Addr end = start+sym.st_size;
 
 					// Add procedure
 					dwarf_new_proc(unit, name,
 					               start, end,
-					               DwarfSourceSymtab, 0);
+					               DwarfSourceSymtab, seg);
 
 				}
 				break;
@@ -507,7 +502,8 @@ void dwarf_load_dies(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space 
 {
 
 	// Load data from node
-	dwarf_load_die(unit, dbg, die, seg);
+	dwarf_load_proc_die(unit, dbg, die, seg);
+	dwarf_load_block_die(unit, dbg, die, seg);
 
 	// Recurse
 	Dwarf_Error error; Dwarf_Die child;
@@ -539,7 +535,7 @@ static char *dwarf_findname(Dwarf_Die die) {
 	return 0;
 }
 
-void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg)
+void dwarf_load_proc_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg)
 {
 
 	// Get node tag
@@ -585,26 +581,100 @@ void dwarf_load_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *
 		return;
 	}
 
-	// Apply offset to translate into our address space
-	// TODO: Check this is actually doing the right thing, haven't
-	//       tested with dynamic libs so far
-	void *low_pc_ptr = (char *)seg->base + low_pc;
-	void *high_pc_ptr = (char *)seg->base + high_pc;
+	// Create the new procedure entry
+	dwarf_new_proc(unit, name, low_pc, high_pc, DwarfSourceDwarf, seg);
 
-	// Outside of range?
-	if ((char *)low_pc_ptr < (char *)seg->start ||
-	    (char *)high_pc_ptr > (char *)seg->end)
-		return;
+}
 
-	// Already have the proc? This can happen when there are multiple
-	// inlinings.
-	DwarfProc *proc = dwarf_get_proc(unit, name);
+void dwarf_load_block_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_space *seg)
+{
 
-	// We insert a new entry anyway - directly after the existing one,
-	// if applicable.
-	dwarf_new_proc(unit, name, low_pc_ptr, high_pc_ptr, DwarfSourceDwarf, proc);
+    // Only interested in lexical blocks here
+    Dwarf_Half tag = 0;
+    Dwarf_Error error;
+    if (dwarf_tag(die, &tag, &error) != DW_DLV_OK
+        || tag != DW_TAG_lexical_block)
+        return;
 
-    // Go throug
+    // Find a variable starting with "__debug_ghc_" - this is our marker.
+    char *MARKER_PREFIX = "__debug_ghc_";
+    int marker_len = strlen(MARKER_PREFIX);
+    Dwarf_Die bchild;
+    Dwarf_Half btag = 0;
+    char *bname = 0;
+    int res;
+    for (res = dwarf_child(die, &bchild, &error);
+         res == DW_DLV_OK;
+         res = dwarf_siblingof(dbg, bchild, &bchild, &error)) {
+
+        if (dwarf_tag(bchild, &btag, &error) != DW_DLV_OK
+            || btag != DW_TAG_variable)
+            continue;
+
+        // Get name, check prefix
+        if (dwarf_diename(bchild, &bname, &error) != DW_DLV_OK
+            || strncmp(bname, MARKER_PREFIX, marker_len)) {
+            bname = 0;
+            continue;
+        }
+
+        // Go over prefix - the rest of the string is the name of
+        // the block this code was generated from.
+        bname += marker_len;
+    }
+
+    // Marker not found? Then this lexical block isn't interesting to
+    // us.
+    if (!bname)
+        return;
+
+    // Check if there is a simple low-pc/high-pc pair annotation
+	Dwarf_Attribute attr;
+    Dwarf_Addr low_pc, high_pc;
+    if (dwarf_attr(die, DW_AT_low_pc, &attr, &error) != DW_DLV_OK
+        || dwarf_formaddr(attr, &low_pc, &error) != DW_DLV_OK
+        || dwarf_attr(die, DW_AT_high_pc, &attr, &error) != DW_DLV_OK
+        || dwarf_formaddr(attr, &high_pc, &error) != DW_DLV_OK) {
+
+        // ... or possibly a more cumbersome range list
+        Dwarf_Off range_off;
+        if (dwarf_attr(die, DW_AT_ranges, &attr, &error) != DW_DLV_OK
+            || dwarf_global_formref(attr, &range_off, &error) != DW_DLV_OK) {
+
+            // No info? stop
+            return;
+
+        }
+
+        // Get range list
+        Dwarf_Ranges *ranges = 0;
+        Dwarf_Signed cnt = 0;
+        Dwarf_Unsigned bytes = 0;
+        if (dwarf_get_ranges_a(dbg,range_off,die,
+                               &ranges,&cnt,&bytes,&error) != DW_DLV_OK)
+            return;
+
+        // Emit a procedure for each range. Note this is pretty
+        // inefficient - but we don't expect this to happen too often,
+        // so it should be okay.
+        Dwarf_Signed i;
+        for (i = 0; i < cnt; i++) {
+            dwarf_new_proc(unit, bname, ranges[i].dwr_addr1, ranges[i].dwr_addr2,
+                           DwarfSourceDwarfBlock, seg);
+        }
+
+        // Dealloc range list
+        dwarf_ranges_dealloc(dbg, ranges, cnt);
+
+    } else {
+
+        // So we have a block with simple high_pc/low_pc
+        // annotation. Emit an entry for it.
+        dwarf_new_proc(unit, bname, low_pc, high_pc, DwarfSourceDwarfBlock, seg);
+
+
+    }
+
 }
 
 DwarfUnit *dwarf_get_unit(char *name)
@@ -634,15 +704,34 @@ DwarfProc *dwarf_get_proc(DwarfUnit *unit, char *name)
 }
 
 DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name,
-                          void *low_pc, void *high_pc,
+                          Dwarf_Addr low_pc, Dwarf_Addr high_pc,
                           DwarfSource source,
-                          DwarfProc *after)
+                          seg_space *seg)
 {
 
+
+	// Apply offset to translate into our address space
+	// TODO: Check this is actually doing the right thing, haven't
+	//       tested with dynamic libs so far
+	void *low_pc_ptr = (char *)seg->base + low_pc;
+	void *high_pc_ptr = (char *)seg->base + high_pc;
+
+    // Range-check the symbol so we don't associate it with the wrong
+    // memory region.
+    if ((char *)low_pc_ptr < (char *)seg->start ||
+        (char *)high_pc_ptr > (char *)seg->end)
+        return 0;
+
+	// Already have the proc? This can happen when there are multiple
+	// inlinings.
+	DwarfProc *after = dwarf_get_proc(unit, name);
+
+    // Always create new procedure entry no matter whether we already
+    // have the procedure or not (could optimize this in future...)
 	DwarfProc *proc = (DwarfProc *)stgMallocBytes(sizeof(DwarfProc), "dwarf_new_proc");
 	proc->name = strdup(name);
-	proc->low_pc = low_pc;
-	proc->high_pc = high_pc;
+	proc->low_pc = low_pc_ptr;
+	proc->high_pc = high_pc_ptr;
 	proc->source = source;
 	proc->copied = 0;
 

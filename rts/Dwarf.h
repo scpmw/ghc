@@ -22,6 +22,7 @@ struct DwarfUnit_ {
 
 enum DwarfSource_ {
 	DwarfSourceDwarf,
+	DwarfSourceDwarfBlock,
 	DwarfSourceSymtab,
 };
 
