@@ -23,6 +23,7 @@ import LlvmCodeGen.Base
 import LlvmCodeGen.Ppr
 import LlvmCodeGen.Regs ( stgTBAA )
 
+import BlockId          ( blockLbl )
 import CLabel
 import Module
 import DynFlags
@@ -37,7 +38,7 @@ import SrcLoc          (srcSpanFile,
                         srcSpanStartLine, srcSpanStartCol,
                         srcSpanEndLine, srcSpanEndCol)
 import MonadUtils      ( MonadIO(..), zipWith3M )
-import Outputable      ( showSDoc, ppr )
+import Outputable      ( showSDoc, ppr, renderWithStyle, mkCodeStyle,  CodeStyle(..) )
 
 import System.Directory(getCurrentDirectory)
 import Data.List       (maximumBy)
@@ -227,7 +228,7 @@ emitFileMeta filePath = do
       return fileId
 
 
-type LlvmAnnotator = CLabel -> (LMMetaInt, LMMetaInt)
+type LlvmAnnotator = CLabel -> (LMMetaInt, LMMetaInt, LMMetaInt)
 
 -- | Generates meta data for a procedure. Returns an annotator that
 -- can be used to retreive the metadata ids for various parts of the
@@ -319,13 +320,27 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
           , LMMetaRef bid                           -- Block context
           , nullLit                                 -- Inlined from location
           ]
-        return (timLabel tim, (bid, id))
+
+        -- Unfortunately, we actually *want* to be able to identify
+        -- individual blocks after compilation - with many of them
+        -- sharing the same source line annotation. So we do a little
+        -- trick here: We generate a special variable in the scope
+        -- above, the name of which will tell the RTS what the block
+        -- name actually is.
+        platform <- getLlvmPlatform
+        let bname = renderWithStyle (pprCLabel platform (timLabel tim))
+                                    (mkCodeStyle CStyle)
+            vname = mkFastString ("__debug_ghc_" ++ bname)
+        vid <- getMetaUniqueId
+        renderMeta vid =<< genVariableMeta vname Nothing i8 bid
+
+        return (timLabel tim, (bid, id, vid))
 
   -- Generate meta data for procedure top-level
   let procTim = case  Map.lookup cmmLabel tiMap of
         Just t  -> t
         Nothing -> TickMapEntry cmmLabel Nothing []
-  (_,(blockId,lineId)) <- makeBlockMeta procId 0 procTim
+  (_,topIds@(blockId,_,_)) <- makeBlockMeta procId 0 procTim
 
   -- Generate meta data for blocks
   let blockTims = mapMaybe (flip Map.lookup tiMap) blockLabels
@@ -335,7 +350,7 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
   -- Closure for getting annotation IDs.
   let annot l = case Map.lookup l metas of
         Just ids -> ids
-        Nothing  -> (blockId, lineId)
+        Nothing  -> topIds
 
   return annot
 
@@ -499,7 +514,9 @@ cmmDebugLlvmGens mod_loc tick_map cmm = do
   -- Build a list mapping Cmm labels to linker labels
   let proc_lbl (Just (Statics info_lbl _)) _ = info_lbl
       proc_lbl _                           l = l
-      lbls = [(l, proc_lbl i l) | CmmProc i l _ <- cmm]
+      block_lbls (BasicBlock i _)            = let l = blockLbl i in (l,l)
+      lbls = concat [ (l, proc_lbl i l) : map block_lbls bs
+                    | CmmProc i l (ListGraph bs) <- cmm]
 
   -- Write debug data as event log
   platform <- getLlvmPlatform

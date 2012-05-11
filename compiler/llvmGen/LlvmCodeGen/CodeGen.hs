@@ -49,9 +49,9 @@ genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"
 --
 
 -- | Generate code for a list of blocks that make up a complete procedure.
-basicBlocksCodeGen :: [CmmBasicBlock] -> (LMMetaInt, LMMetaInt) -> LlvmAnnotator
+basicBlocksCodeGen :: [CmmBasicBlock] -> (LMMetaInt, LMMetaInt, LMMetaInt) -> LlvmAnnotator
                       -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
-basicBlocksCodeGen cmmBlocks (blockId, annotId) annotGen
+basicBlocksCodeGen cmmBlocks (blockId, annotId, _) annotGen
   = do (prologue, tops1) <- funPrologue cmmBlocks blockId
        (blockss, topss) <- fmap unzip $ mapM (basicBlockCodeGen annotGen) cmmBlocks
        let ((BasicBlock bid fstmts):rblks) = concat blockss
@@ -65,8 +65,10 @@ basicBlockCodeGen :: LlvmAnnotator -> CmmBasicBlock
                      -> LlvmM ( [LlvmBasicBlock], [LlvmCmmDecl] )
 basicBlockCodeGen annotGen (BasicBlock id stmts)
   = do (instrs, top) <- stmtsToInstrs stmts
-       let annot = MetaStmt [(fsLit "dbg", snd $ annotGen $ blockLbl id)]
-       return ([BasicBlock id (map annot $ fromOL instrs)], top)
+       let (_,annotId,varId) = annotGen $ blockLbl id
+       let annot = MetaStmt [(fsLit "dbg", annotId)]
+       (ps, pt) <- blockPrologue varId
+       return ([BasicBlock id (map annot $ fromOL (ps `appOL` instrs))], pt ++ top)
 
 
 -- -----------------------------------------------------------------------------
@@ -1340,6 +1342,11 @@ funEpilogue live = do
     let (vars, stmts) = unzip loads
     return (vars, concatOL stmts)
 
+-- | Block prologue.
+blockPrologue :: LMMetaInt -> LlvmM StmtData
+blockPrologue varId = do
+  -- Declare block marker variable
+  debugDeclareValue (LMMetaRef varId) (LMLitVar (LMIntLit 0 i8))
 
 -- | A serries of statements to trash all the STG registers.
 --
