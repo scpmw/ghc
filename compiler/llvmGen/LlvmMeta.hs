@@ -519,13 +519,14 @@ cmmDebugLlvmGens mod_loc tick_map cmm = do
                     | CmmProc i l (ListGraph bs) <- cmm]
 
   -- Write debug data as event log
-  platform <- getLlvmPlatform
-  dbg <- liftIO $ debugWriteEventlog platform mod_loc tick_map lbls
+  dflags <- getDynFlag id
+  dbg <- liftIO $ debugWriteEventlog dflags mod_loc tick_map lbls
 
   -- Convert to a string
   dbgStr <- bufferAsString dbg
 
   -- Names for symbol / section
+  platform <- getLlvmPlatform
   let debug_sym  = fsLit $ "__debug_ghc"
       sectPrefix = case platformOS platform of
         OSDarwin -> "__DWARF,"

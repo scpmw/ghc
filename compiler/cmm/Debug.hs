@@ -21,24 +21,22 @@ module Debug (
 
 import Binary
 import CLabel
+import DynFlags
 import Platform
 import Module
 import CoreSyn
-import PprCore      ( pprCoreAlt )
 import Outputable
-import Var          ( Var( varName ) )
-import UniqSet
+import UniqFM
 import SrcLoc
-import FastString   ( unpackFS, mkFastString )
-import Literal      ( Literal( MachStr ) )
-import FastString   ( sLit )
+import FastString    ( unpackFS, sLit )
+import Var
 
 import Control.Monad ( forM_ )
 
 import Data.Word
 import Data.Maybe
 import Data.Map as M ( Map, elems, lookup, split, size )
-import Data.Char    ( ord )
+import Data.Char     ( ord )
 
 import Foreign.ForeignPtr
 
@@ -82,17 +80,51 @@ getInstrId tick_map tim = M.size low
 -- | Packs the given static value into a (variable-length) event-log
 -- packet.
 putEvent :: BinHandle -> Word8 -> IO () -> IO ()
-putEvent bh id cts = do
-  put_ bh id
-  -- Put placeholder for size
-  sizePos <- put bh (0 :: Word16)
-  -- Put contents
-  cts
-  -- Put final size
-  endPos <- tellBin bh
-  putAt bh sizePos $ fromIntegral $ (endPos `diffBin` sizePos) - 2
-  -- Seek back
-  seekBin bh endPos
+putEvent bh id cts = catchSize bh 0x10000 wrap omit
+ where wrap = do
+         put_ bh id
+         -- Put placeholder for size
+         sizePos <- put bh (0 :: Word16)
+         -- Put contents
+         cts
+         -- Put final size
+         endPos <- tellBin bh
+         putAt bh sizePos $ fromIntegral $ (endPos `diffBin` sizePos) - 2
+         -- Seek back
+         seekBin bh endPos
+       omit = return ()
+
+-- | Puts an alternate version if the first one is bigger than the
+-- given limit.
+--
+-- This is a pretty crude way of handling oversized
+-- packets... Can't think of a better way right now though.
+catchSize :: BinHandle -> Int -> IO () -> IO () -> IO ()
+catchSize bh limit cts1 cts2 = do
+
+  -- Put contents, note how much size it uses
+  start <- tellBin bh :: IO (Bin ())
+  cts1
+  end <- tellBin bh
+
+  -- Seek back and put second version if size is over limit
+  if (end `diffBin` start) >= limit
+    then do seekBin bh start
+            cts2
+    else return ()
+
+-- | Holds identities of core pieces we have decided to output
+type CoreMap = UniqFM [AltCon]
+
+mkCoreMap :: [Tickish()] -> CoreMap
+mkCoreMap = listToUFM_C (++) . map mkEntry
+  where mkEntry (CoreNote bind con _) = (bind, [con])
+        mkEntry _                     = error "mkCoreMap: Non-core tickish!"
+
+elemCoreMap :: (Var, AltCon) -> CoreMap -> Bool
+elemCoreMap (bind, con) m = case lookupUFM m bind of
+  Just cs -> con `elem` cs
+  Nothing -> False
 
 -- | Put a string C-style - null-terminated. We assume that the string
 -- is ASCII.
@@ -103,9 +135,10 @@ putString bh str = do
   mapM_ (putByte bh . fromIntegral . ord) str
   putByte bh 0
 
-putModuleEvent :: BinHandle -> ModLocation -> IO ()
-putModuleEvent bh mod_loc =
+putModuleEvent :: BinHandle -> PackageId -> ModLocation -> IO ()
+putModuleEvent bh package mod_loc =
   putEvent bh EVENT_DEBUG_MODULE $ do
+    putString bh $ packageIdString package
     putString bh $ fromMaybe "???" $ ml_hs_file mod_loc
 
 putProcedureEvent :: BinHandle -> Platform -> TickMap -> TickMapEntry -> CLabel -> IO ()
@@ -119,7 +152,7 @@ putProcedureEvent bh platform tick_map tim lbl =
          Nothing -> 0xffff :: Word16
        showSDocC = flip renderWithStyle (mkCodeStyle CStyle)
 
-putAnnotEvent :: BinHandle -> UniqSet Var -> Maybe Var -> Tickish () -> IO ()
+putAnnotEvent :: BinHandle -> CoreMap -> Maybe (Tickish ()) -> Tickish () -> IO ()
 putAnnotEvent bh _ _ (SourceNote ss names) =
   putEvent bh EVENT_DEBUG_SOURCE $ do
     put_ bh $ encLoc $ srcSpanStartLine ss
@@ -130,14 +163,16 @@ putAnnotEvent bh _ _ (SourceNote ss names) =
     putString bh names
  where encLoc x = fromIntegral x :: Word16
 
-putAnnotEvent bh bnds mbind (CoreNote lbl corePtr)
-  | mbind == Just lbl =
+putAnnotEvent bh bnds mbind c@(CoreNote lbl con corePtr)
+  | mbind == Just c =
       putEvent bh EVENT_DEBUG_CORE $ do
         putString bh $ showSDocDump $ ppr lbl
-        let sDocStr = take 0x8000 . showSDoc
-        putString bh $ case corePtr of
-          ExprPtr core -> sDocStr $ ppr $ stripCore bnds core
-          AltPtr  alt  -> sDocStr $ pprCoreAlt $ stripAlt bnds alt
+        putString bh $ case con of
+          DEFAULT -> ""
+          _       -> showSDoc $ ppr con
+        case corePtr of
+          ExprPtr core -> putCoreExpr bh bnds core
+          AltPtr  alt  -> putCoreAlt bh bnds alt
 
 putAnnotEvent _ _ _ _ = return ()
 
@@ -153,34 +188,34 @@ putAnnotEvent _ _ _ _ = return ()
 -- ticks. If we just ignore all with other names, we cover all
 -- interesting Core without having to split everything in millions of
 -- tiny core pieces.
-getMainCoreBind :: [Tickish ()] -> Maybe Var
-getMainCoreBind (CoreNote bnd _:_) = Just bnd
-getMainCoreBind (_:xs)             = getMainCoreBind xs
-getMainCoreBind _                  = Nothing
+getMainCoreBind :: [Tickish ()] -> Maybe (Tickish ())
+getMainCoreBind (c@CoreNote{}:_) = Just c
+getMainCoreBind (_:xs)           = getMainCoreBind xs
+getMainCoreBind _                = Nothing
 
 -- | Generates debug data into a buffer
 debugWriteEventlog ::
-  Platform -> ModLocation
+  DynFlags -> ModLocation
   -> TickMap
   -> [(CLabel, CLabel)]  -- ^ (label in cmm/tick map, code label in assembler)
   -> IO (Int, ForeignPtr Word8)
-debugWriteEventlog platform mod_loc tick_map lbls = do
+debugWriteEventlog dflags mod_loc tick_map lbls = do
 
   -- Collect all bindings that we want to output core pieces for. We
   -- will use this map to make sure that we don't output a piece of
   -- core twice (see stripCore).
   let collect tim = getMainCoreBind (timTicks tim)
-      binds = mkUniqSet $ mapMaybe collect $ elems tick_map
+      binds = mkCoreMap $ mapMaybe collect $ elems tick_map
 
   -- Open a binary memory handle
   bh <- openBinMem $ 1024 * 1024
 
   -- Put data
-  putModuleEvent bh mod_loc
+  putModuleEvent bh (thisPackage dflags) mod_loc
   forM_ lbls $ \(cmml, asml) ->
     case M.lookup cmml tick_map of
       Just tim -> do
-        putProcedureEvent bh platform tick_map tim asml
+        putProcedureEvent bh (targetPlatform dflags) tick_map tim asml
         let mbind = getMainCoreBind (timTicks tim)
         mapM_ (putAnnotEvent bh binds mbind) (timTicks tim)
       Nothing  -> return ()
@@ -188,44 +223,79 @@ debugWriteEventlog platform mod_loc tick_map lbls = do
   -- Return buffer
   getBinMemBuf bh
 
--- | This "strips" the core of all information that's uninteresting or
--- redundant in the context of debug output. This means:
---
---  * Annotations that clutter up the view unecessarily, such as casts
---
---  * Any sub-tree of core that gets emitted seperately. In this case
---    we emit a placeholder so a program reading it can link the two
---    pieces of core together later
-stripCore :: UniqSet Var -> CoreExpr -> CoreExpr
-stripCore bs (App e1 e2) = App (stripCore bs e1) (stripCore bs e2)
-stripCore bs (Lam b e)
-  | b `elemSet` bs       = Lam b (placeholder b)
-  | otherwise            = Lam b (stripCore bs e)
-stripCore bs (Let es e)  = Let (stripLet bs es) (stripCore bs e)
-stripCore bs (Tick _ e)  = stripCore bs e -- strip out
-stripCore bs (Case e b t as)
-  | b `elemSet` bs       = Case (stripCore bs e) b t [(DEFAULT,[],placeholder b)]
-  | otherwise            = Case (stripCore bs e) b t (map (stripAlt bs) as)
-stripCore bs (CoreSyn.Cast e _)  = stripCore bs e -- strip out
-stripCore _  other       = other
+-- | Constants for core binary representation
+coreMisc, coreApp, coreRef, coreLam, coreLet, coreCase, coreAlt :: Word8
+coreMisc = 0
+coreApp  = 1
+coreRef  = 2
+coreLam  = 3
+coreLet  = 4
+coreCase = 5
+coreAlt  = 6
 
-stripAlt :: UniqSet Var -> CoreAlt -> CoreAlt
-stripAlt bs (a, bn, e) = (a, bn, stripCore bs e)
+putCoreExpr :: BinHandle -> CoreMap -> CoreExpr -> IO ()
+putCoreExpr bh bs (App e1 e2) = do
+  put_ bh coreApp
+  putCoreExpr bh bs e1
+  putCoreExpr bh bs e2
+putCoreExpr bh bs (Lam b e) = do
+  put_ bh coreLam
+  putString bh $ showSDoc $ ppr b
+  putCoreExpr bh bs e
+putCoreExpr bh bs (Let es e) = do
+  put_ bh coreLet
+  putCoreLet bh bs es
+  putCoreExpr bh bs e
+putCoreExpr bh bs (Case expr bind ty alts) = do
+  put_ bh coreCase
+  putCoreExpr bh bs expr
+  putString bh $ showSDoc $ ppr bind
+  putString bh $ showSDoc $ ppr ty
+  put_ bh (fromIntegral (length alts) :: Word16)
+  forM_ alts $ \alt@(a, _, _) -> checkCoreRef bh bs (bind, a) $
+    putCoreAlt bh bs alt
+putCoreExpr bh bs (Cast e _) = putCoreExpr bh bs e
+putCoreExpr bh bs (Tick _ e) = putCoreExpr bh bs e
+-- All other elements are supposed to have a simple "pretty printed"
+-- representation that we can simply output verbatim.
+putCoreExpr bh _ other = do
+  put_ bh coreMisc
+  putString bh $ showSDoc $ ppr other
 
-stripLet :: UniqSet Var -> CoreBind -> CoreBind
-stripLet bs (NonRec b e)
-  | b `elemSet` bs       = NonRec b (placeholder b)
-  | otherwise            = NonRec b (stripCore bs e)
-stripLet bs (Rec ps)     = Rec (map f ps)
-  where
-    f (b, e)
-      | b `elemSet` bs   = (b, placeholder b)
-      | otherwise        = (b, stripCore bs e)
+putCoreAlt :: BinHandle -> CoreMap -> CoreAlt -> IO ()
+putCoreAlt bh bs (a,b,e) = do
+  put_ bh coreAlt
+  putString bh $ case a of
+    DEFAULT -> ""
+    _       -> showSDoc $ ppr a
+  put_ bh (fromIntegral (length b) :: Word16)
+  mapM_ (putString bh . showSDoc . ppr) b
+  putCoreExpr bh bs e
 
--- | Placeholder string. FIXME: This *might* collide with existing strings
-placeholder :: Var -> CoreExpr
-placeholder = Lit . MachStr . mkFastString .
-              ("__Core__" ++) . showSDocDump . ppr . varName
+putCoreLet :: BinHandle -> CoreMap -> CoreBind -> IO ()
+putCoreLet bh bs (NonRec b e) = do
+  put_ bh (1 :: Word16) -- could use 0 to mark non-recursive case?
+  putString bh $ showSDoc $ ppr b
+  putString bh $ showSDoc $ ppr $ varType b
+  checkCoreRef bh bs (b, DEFAULT) $
+    putCoreExpr bh bs e
+putCoreLet bh bs (Rec ps) = do
+  put_ bh (fromIntegral (length ps) :: Word16)
+  forM_ ps $ \(b, e) -> do
+    putString bh $ showSDoc $ ppr b
+    putString bh $ showSDoc $ ppr $ varType b
+    checkCoreRef bh bs (b, DEFAULT) $
+      putCoreExpr bh bs e
 
-elemSet :: Var -> UniqSet Var -> Bool
-elemSet = elementOfUniqSet
+-- | Generate reference to core piece that was output elsewhere... Or
+-- proceed with given code otherwise.
+checkCoreRef :: BinHandle -> CoreMap -> (Var, AltCon) -> IO () -> IO ()
+checkCoreRef bh bs (b,a) code
+  | (b,a) `elemCoreMap` bs  = do
+      put_ bh coreRef
+      putString bh $ showSDocDump $ ppr b
+      putString bh $ case a of
+        DEFAULT -> ""
+        _       -> showSDoc $ ppr a
+  | otherwise =
+      code

@@ -396,6 +396,8 @@ data Tickish id =
   -- carry the core that a piece of Stg was generated from.
   | CoreNote
     { coreBind :: Var          -- ^ Name the core fragment is bound to
+    , coreCon  :: AltCon       -- ^ Constructor of the alternative
+                               --   (for "case" alternatives)
     , coreNote :: ExprPtr Var  -- ^ Source covered
     }
 

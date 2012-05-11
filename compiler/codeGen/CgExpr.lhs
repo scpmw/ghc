@@ -296,8 +296,8 @@ cgExpr (StgTick (SourceNote src names) expr) = do
   addTick (SourceNote src names)
   cgExpr expr
 
-cgExpr (StgTick (CoreNote bnd core) expr) = do
-  addTick (CoreNote bnd core)
+cgExpr (StgTick (CoreNote bnd alt core) expr) = do
+  addTick (CoreNote bnd alt core)
   cgExpr expr
 
 \end{code}

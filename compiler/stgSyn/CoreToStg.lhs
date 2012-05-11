@@ -417,7 +417,7 @@ coreToStgExpr (Case scrut bndr _ alts) = do
                 -- Records whether each param is used in the RHS
             good_use_mask = [ b `elementOfFVInfo` rhs_fvs | b <- binders' ]
 
-        let rhs3 = StgTick (CoreNote bndr (AltPtr alt)) rhs2
+        let rhs3 = StgTick (CoreNote bndr con (AltPtr alt)) rhs2
 
         return ( (con, binders', good_use_mask, rhs3),
                  binders' `minusFVBinders` rhs_fvs,
@@ -825,6 +825,7 @@ annotateCore (bnd, expr) rhs = StgTick note rhs
  where
    note = CoreNote {
      coreBind = bnd,
+     coreCon = DEFAULT,
      coreNote = ExprPtr expr
      }
 
