@@ -25,7 +25,7 @@ module LlvmCodeGen.Base (
 
         cmmToLlvmType, widthToLlvmFloat, widthToLlvmInt, llvmFunTy,
         llvmFunSig, llvmStdFunAttrs, llvmFunAlign, llvmInfAlign,
-        llvmPtrBits, mkLlvmFunc, tysToParams,
+        llvmRegArgPos, llvmPtrBits, mkLlvmFunc, tysToParams,
 
         strCLabel_llvm, strDisplayName_llvm, strProcedureName_llvm,
         genCmmLabelRef, genStringLabelRef
@@ -53,6 +53,8 @@ import MonadUtils ( MonadIO(..) )
 import BufWrite   ( BufHandle )
 import UniqSupply
 import ErrUtils
+
+import Data.List  ( elemIndex )
 
 -- ----------------------------------------------------------------------------
 -- * Some Data Types
@@ -137,6 +139,10 @@ llvmInfAlign = Just wORD_SIZE
 -- | A Function's arguments
 llvmFunArgs :: [LlvmVar]
 llvmFunArgs = map lmGlobalRegArg activeStgRegs
+
+-- | Position of a register in function arguments
+llvmRegArgPos :: GlobalReg -> Maybe Int
+llvmRegArgPos r = elemIndex r activeStgRegs
 
 -- | Llvm standard fun attributes
 llvmStdFunAttrs :: [LlvmFuncAttr]

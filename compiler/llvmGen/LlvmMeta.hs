@@ -46,6 +46,7 @@ import Data.Map as Map (lookup, fromList)
 import Data.Function   (on)
 import Data.Char       (ord, chr, isAscii, isPrint, intToDigit)
 import Data.Word       (Word8)
+import Data.Bits       (shiftL)
 
 import Foreign.Ptr
 import Foreign.ForeignPtr
@@ -56,20 +57,22 @@ import Foreign.Storable
 lLVMDebugVersion, dW_TAG_compile_unit, dW_TAG_subroutine_type :: Integer
 dW_TAG_file_type, dW_TAG_subprogram, dW_TAG_lexical_block :: Integer
 dW_TAG_base_type, dW_TAG_structure_type, dW_TAG_pointer_type :: Integer
-dW_TAG_array_type, dW_TAG_subrange_type, dW_TAG_typedef, dW_TAG_auto_variable :: Integer
+dW_TAG_array_type, dW_TAG_subrange_type, dW_TAG_typedef :: Integer
+dW_TAG_arg_variable, dW_TAG_auto_variable :: Integer
 lLVMDebugVersion       = 0x90000
-dW_TAG_compile_unit    = 17 + lLVMDebugVersion
-dW_TAG_subroutine_type = 32 + lLVMDebugVersion
-dW_TAG_file_type       = 41 + lLVMDebugVersion
-dW_TAG_subprogram      = 46 + lLVMDebugVersion
-dW_TAG_lexical_block   = 11 + lLVMDebugVersion
-dW_TAG_base_type       = 36 + lLVMDebugVersion
-dW_TAG_array_type      = 1  + lLVMDebugVersion
-dW_TAG_structure_type  = 19 + lLVMDebugVersion
-dW_TAG_pointer_type    = 15 + lLVMDebugVersion
-dW_TAG_subrange_type   = 33 + lLVMDebugVersion
-dW_TAG_typedef         = 22 + lLVMDebugVersion
+dW_TAG_array_type      = 1   + lLVMDebugVersion
+dW_TAG_lexical_block   = 11  + lLVMDebugVersion
+dW_TAG_pointer_type    = 15  + lLVMDebugVersion
+dW_TAG_compile_unit    = 17  + lLVMDebugVersion
+dW_TAG_structure_type  = 19  + lLVMDebugVersion
+dW_TAG_typedef         = 22  + lLVMDebugVersion
+dW_TAG_subroutine_type = 32  + lLVMDebugVersion
+dW_TAG_subrange_type   = 33  + lLVMDebugVersion
+dW_TAG_base_type       = 36  + lLVMDebugVersion
+dW_TAG_file_type       = 41  + lLVMDebugVersion
+dW_TAG_subprogram      = 46  + lLVMDebugVersion
 dW_TAG_auto_variable   = 256 + lLVMDebugVersion
+dW_TAG_arg_variable    = 257 + lLVMDebugVersion
 
 _dW_ATE_address, _dW_ATE_boolean, dW_ATE_float, dW_ATE_signed,
   _dW_ATE_signed_char, _dW_ATE_unsigned, _dW_ATE_unsigned_char :: Integer
@@ -432,16 +435,19 @@ typeToMeta' ty = case ty of
     , mkI64 (fromIntegral $ n-1)                      -- High value
     ]
 
-genVariableMeta :: LMString -> LlvmType -> LMMetaInt -> LlvmM LlvmLit
-genVariableMeta vname vty scopeId = do
+genVariableMeta :: LMString -> Maybe Int -> LlvmType -> LMMetaInt -> LlvmM LlvmLit
+genVariableMeta vname par vty scopeId = do
   tyDesc <- typeToMeta vty
   Just fileId <- getUniqMeta fileN
   return $ LMMeta $ map LMLitVar
-    [ mkI32 dW_TAG_auto_variable
+    [ mkI32 $ case par of
+         Nothing -> dW_TAG_auto_variable
+         Just _  -> dW_TAG_arg_variable
     , LMMetaRef scopeId                               -- Context
     , LMMetaString vname                              -- Name
     , LMMetaRef fileId                                -- File reference
-    , mkI32 1                                         -- Line / argument number
+    , mkI32 (fromIntegral (maybe 0 (+1) par `shiftL` 24))
+                                                      -- Line / argument number
     , tyDesc                                          -- Type description
     , mkI32 0                                         -- Flags
     ]

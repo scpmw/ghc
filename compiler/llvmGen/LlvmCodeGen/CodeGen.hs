@@ -1269,35 +1269,51 @@ funPrologue cmmBlocks scopeId = do
         markStackReg r
         return $ toOL [alloc, Store arg reg]
 
-  (declStmts, tops) <- declareRegister (CmmGlobal BaseReg) (fsLit "BaseReg") scopeId
+  -- Declare registers
+  let dbgRegs = [(CmmGlobal BaseReg, fsLit "BaseReg")
+                ,(CmmGlobal Sp, fsLit "Sp")]
+      declare (r, n) = debugDeclareRegister r n scopeId
+  (declStmtss, topss) <- fmap unzip $ mapM declare dbgRegs
 
-  return (concatOL stmtss `appOL` declStmts, tops)
+  return (concatOL stmtss `appOL` concatOL declStmtss, concat topss)
 
 
 -- | Declares the value of a register as a variable in debugging data
-declareRegister :: CmmReg -> LMString -> LMMetaInt -> LlvmM StmtData
-declareRegister reg rname scopeId = do
-
-  -- Get instrinct functions
-  (declareFn, tops1) <- declareInstrinct (fsLit "llvm.dbg.declare") LMVoid [LMMetaType, LMMetaType]
-  (valueFn, tops2) <- declareInstrinct (fsLit "llvm.dbg.value") LMVoid [LMMetaType, i64, LMMetaType]
+debugDeclareRegister :: CmmReg -> LMString -> LMMetaInt -> LlvmM StmtData
+debugDeclareRegister reg rname scopeId = do
 
   -- Check whether register is on stack or as value. Declare
   -- accordingly.
-  onStack <- checkStackReg BaseReg
-  stmts <- case onStack of
+  let argNo = case reg of
+        CmmLocal  _ -> Nothing
+        CmmGlobal r -> llvmRegArgPos r
+  onStack <- case reg of
+    CmmLocal _  -> return True
+    CmmGlobal r -> checkStackReg r
+  case onStack of
     True -> do
       rvar <- getCmmReg reg
-      varMeta <- genVariableMeta rname (pLower $ getVarType rvar) scopeId
-      let pars = map LMLitVar [ LMMeta [rvar], varMeta ]
-      return $ unitOL $ Expr $ Call StdCall declareFn pars []
+      varMeta <- genVariableMeta rname argNo (pLower $ getVarType rvar) scopeId
+      debugDeclareVariable varMeta rvar
     False -> do
       (rvar, ty, ss) <- getCmmRegVal reg
-      varMeta <- genVariableMeta rname ty scopeId
-      let pars = map LMLitVar [ LMMeta [rvar], LMIntLit 0 i64, varMeta ]
-      return $ ss `snocOL` (Expr $ Call StdCall valueFn pars [])
+      varMeta <- genVariableMeta rname argNo ty scopeId
+      (stmts, tops) <- debugDeclareValue varMeta rvar
+      return (ss `appOL` stmts, tops)
 
-  return (stmts, tops1 ++ tops2)
+-- | Declares a debug variable to correspond to the value at an address
+debugDeclareVariable :: LlvmLit -> LlvmVar -> LlvmM StmtData
+debugDeclareVariable varMeta addr = do
+  (declareFn, tops) <- declareInstrinct (fsLit "llvm.dbg.declare") LMVoid [LMMetaType, LMMetaType]
+  let pars = map LMLitVar [ LMMeta [addr], varMeta ]
+  return (unitOL $ Expr $ Call StdCall declareFn pars [], tops)
+
+-- | Declares a debug variable to be a constant value
+debugDeclareValue :: LlvmLit -> LlvmVar -> LlvmM StmtData
+debugDeclareValue varMeta val = do
+  (valueFn, tops) <- declareInstrinct (fsLit "llvm.dbg.value") LMVoid [LMMetaType, i64, LMMetaType]
+  let pars = map LMLitVar [ LMMeta [val], LMIntLit 0 i64, varMeta ]
+  return (unitOL $ Expr $ Call StdCall valueFn pars [], tops)
 
 -- | Function epilogue. Load STG variables to use as argument for call.
 -- STG Liveness optimisation done here.
