@@ -775,8 +775,9 @@ void dwarf_trace_debug_data()
 {
 	// Go through available debugging data
 	StgWord8 *dbg = (StgWord8 *)dwarf_ghc_debug_data;
+	StgWord8 *dbg_limit = dbg + dwarf_ghc_debug_data_size;
 	DwarfUnit *unit = 0;
-	while (dbg && dbg < (StgWord8 *)dwarf_ghc_debug_data + dwarf_ghc_debug_data_size) {
+	while (dbg && dbg < dbg_limit) {
 
 		// Ignore zeroes
 		if (!*dbg) {
@@ -789,6 +790,12 @@ void dwarf_trace_debug_data()
 		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
 		StgWord8 sizeh = *dbg++; StgWord8 sizel = *dbg++;
 		StgWord16 size = (((StgWord16)sizeh) << 8) + sizel;
+
+		// Sanity-check size
+		if (dbg + size >= dbg_limit) {
+			barf("Debug data packet num %d exceeds section size! Probably corrupt debug data.", num);
+			break;
+		}
 
 		// Follow data
 		char *proc_name = 0;
