@@ -798,11 +798,11 @@ void dwarf_trace_debug_data()
 		}
 
 		// Follow data
-		char *proc_name = 0;
+		char *proc_name = 0, *unit_name = 0;
 		DwarfProc *proc = 0;
 		switch (num) {
 
-		case EVENT_DEBUG_MODULE: // name, ...
+		case EVENT_DEBUG_MODULE: // package, name, ...
 
 			// If we had a unit before: Trace all data we didn't see a
 			// matching proc for
@@ -810,7 +810,9 @@ void dwarf_trace_debug_data()
 
 			// Get unit (with minimal added security)
 			if (strlen((char *)dbg) >= size) break;
-			unit = dwarf_get_unit((char *)dbg);
+			unit_name = ((char *)dbg) + strlen((char *)dbg) + 1;
+			if (strlen((char *)dbg) + strlen(unit_name) + 1 >= size) break;
+			unit = dwarf_get_unit(unit_name);
 			break;
 
 		case EVENT_DEBUG_PROCEDURE: // instr, parent, name, ...
