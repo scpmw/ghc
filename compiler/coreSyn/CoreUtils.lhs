@@ -258,9 +258,9 @@ mkTick t (Lam x e)
   | otherwise        = Tick t (Lam x e)
 
   -- finally make sure we don't add duplicated ticks
-mkTick t e
-  | hasTick t e = e
-  | otherwise   = Tick t e
+mkTick t e = case filterTick t e of
+  Just e' -> Tick t e'
+  Nothing -> e
 
 isSaturatedConApp :: CoreExpr -> Bool
 isSaturatedConApp e = go e []
@@ -283,9 +283,16 @@ tickHNFArgs t e = push t e
   push t (App f arg) = App (push t f) (mkTick t arg)
   push _t e = e
 
-hasTick :: Tickish Id -> CoreExpr -> Bool
-hasTick t (Tick t' e) = t == t' || hasTick t e
-hasTick _ _other      = False
+-- | Either returns a core expression that doesn't have ticks
+-- annotations covered by the given tick top-level, or "Nothing" if
+-- the expression has a tick annotatation that in turn already
+-- contains the given tick.
+filterTick :: Tickish Id -> CoreExpr -> Maybe CoreExpr
+filterTick t (Tick t2 e)
+  | tickishContains t t2 = filterTick t e
+  | tickishContains t2 t = Nothing
+  | otherwise            = fmap (Tick t2) (filterTick t e)
+filterTick _ other       = Just other
 
 \end{code}
 

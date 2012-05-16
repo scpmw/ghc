@@ -46,6 +46,7 @@ module CoreSyn (
 
         tickishCounts, tickishScoped, tickishIsCode, mkNoTick, mkNoScope,
         tickishCanSplit, tickishLax,
+        tickishContains,
 
         -- * Unfolding data types
         Unfolding(..),  UnfoldingGuidance(..), UnfoldingSource(..),
@@ -103,7 +104,7 @@ import BasicTypes
 import FastString
 import Outputable
 import Util
-import SrcLoc     ( RealSrcSpan )
+import SrcLoc     ( RealSrcSpan, containsSpan )
 
 import Data.Data hiding (TyCon)
 import Data.Int
@@ -461,10 +462,17 @@ tickishCanSplit Breakpoint{} = False
 tickishCanSplit _ = True
 
 -- | Return True if it is okay to float new code into the tick
-tickishLax :: Tickish id -> Bool
+tickishLax :: Tickish Id -> Bool
 tickishLax SourceNote{} = True
 tickishLax _tickish     = False  -- all the rest for now
 
+-- | Returns whether one tick "contains" the other one, therefore
+-- making the second tick redundant.
+tickishContains :: Tickish Id -> Tickish Id -> Bool
+tickishContains (SourceNote sp1 n1) (SourceNote sp2 n2)
+  = (n1 == n2) && containsSpan sp1 sp2
+tickishContains t1 t2
+  = (t1 == t2)
 \end{code}
 
 

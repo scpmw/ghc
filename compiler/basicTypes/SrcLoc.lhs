@@ -62,6 +62,7 @@ module SrcLoc (
 
         -- ** Predicates on SrcSpan
         isGoodSrcSpan, isOneLineSpan,
+        containsSpan,
 
         -- * Located
 	Located, 
@@ -349,6 +350,17 @@ isOneLineSpan :: SrcSpan -> Bool
 -- For "bad" 'SrcSpan', it returns False
 isOneLineSpan (RealSrcSpan s) = srcSpanStartLine s == srcSpanEndLine s
 isOneLineSpan (UnhelpfulSpan _) = False
+
+-- | Tests whether the first span "contains" the other span, meaning
+-- that it covers more source than the other one. True if the spans
+-- are eqal.
+containsSpan :: RealSrcSpan -> RealSrcSpan -> Bool
+containsSpan s1 s2
+  = srcSpanFile s1 == srcSpanFile s2
+    && (srcSpanStartLine s1, srcSpanStartCol s1)
+       <= (srcSpanStartLine s2, srcSpanStartCol s2)
+    && (srcSpanEndLine s1, srcSpanEndCol s1)
+       >= (srcSpanEndLine s2, srcSpanEndCol s2)
 
 \end{code}
 
