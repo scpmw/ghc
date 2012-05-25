@@ -1083,12 +1083,14 @@ we can sort them into the right place when doing dependency analysis.
 \begin{code}
 occAnal env (Tick tickish body)
   | Breakpoint _ ids <- tickish
-  = (mapVarEnv markInsideSCC usage
+  = (mapVarEnv markInsideLam usage
          +++ mkVarEnv (zip ids (repeat NoOccInfo)), Tick tickish body')
     -- never substitute for any of the Ids in a Breakpoint
 
-  | tickishScoped tickish
-  = (mapVarEnv markInsideSCC usage, Tick tickish body')
+  | tickishScoped tickish && not (tickishLax tickish)
+  = (mapVarEnv markInsideLam usage, Tick tickish body')
+    -- treat strictly scoped ticks as lambdas - meaning it isn't
+    -- allowed to unconditionally inline into them.
 
   | otherwise
   = (usage, Tick tickish body')
@@ -1902,12 +1904,9 @@ mkOneOcc env id int_cxt
   | otherwise
   = emptyDetails
 
-markMany, markInsideLam, markInsideSCC :: OccInfo -> OccInfo
+markMany, markInsideLam :: OccInfo -> OccInfo
 
 markMany _  = NoOccInfo
-
-markInsideSCC occ = markInsideLam occ
-  -- inside an SCC, we can inline lambdas only.
 
 markInsideLam (OneOcc _ one_br int_cxt) = OneOcc True one_br int_cxt
 markInsideLam occ                       = occ
