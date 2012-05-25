@@ -40,7 +40,7 @@ import CoreSyn		-- All of it
 import CoreSubst
 import OccurAnal        ( occurAnalyseExpr )
 import CoreFVs		( exprFreeVars, exprsFreeVars, bindFreeVars, rulesFreeVars )
-import CoreUtils        ( exprType, eqExpr )
+import CoreUtils        ( exprType, eqExpr, mkTick )
 import PprCore		( pprRules )
 import Type             ( Type )
 import TcType		( tcSplitTyConApp_maybe )
@@ -721,6 +721,12 @@ match renv subst (Cast e1 co1) (Cast e2 co2)
   = do	{ subst1 <- match_co renv subst co1 co2
 	; match renv subst1 e1 e2 }
 
+-- See note [Tick annotations in RULE matching]
+match renv subst e1 (Tick t e2)
+  | tickishLax t
+  = match renv subst' e1 e2
+  where subst' = subst { rs_binds = rs_binds subst . mkTick t }
+
 -- Everything else fails
 match _ _ _e1 _e2 = -- pprTrace "Failing at" ((text "e1:" <+> ppr _e1) $$ (text "e2:" <+> ppr _e2)) $
                     Nothing
@@ -891,9 +897,11 @@ Hence, (a) the guard (not (isLocallyBoundR v2))
 Note [Tick annotations in RULE matching]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We used to look through Notes in both template and expression being
-matched.  This would be incorrect for ticks, which we cannot discard,
-so we do not look through Ticks at all.  cf Note [Notes in call
-patterns] in SpecConstr
+matched.  This would be incorrect for ticks, which we cannot discard.
+So we either not look through Ticks at all - or float them to the
+top of the rule application where it makes sense.
+
+cf Note [Notes in call patterns] in SpecConstr
 
 Note [Matching lets]
 ~~~~~~~~~~~~~~~~~~~~
@@ -1053,7 +1061,7 @@ ruleCheck _   (Lit _) 	    = emptyBag
 ruleCheck _   (Type _)      = emptyBag
 ruleCheck _   (Coercion _)  = emptyBag
 ruleCheck env (App f a)     = ruleCheckApp env (App f a) []
-ruleCheck env (Tick _ e)  = ruleCheck env e
+ruleCheck env (Tick _ e)    = ruleCheck env e
 ruleCheck env (Cast e _)    = ruleCheck env e
 ruleCheck env (Let bd e)    = ruleCheckBind env bd `unionBags` ruleCheck env e
 ruleCheck env (Lam _ e)     = ruleCheck env e
