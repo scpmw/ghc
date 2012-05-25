@@ -402,6 +402,12 @@ data Tickish id =
     , coreNote :: ExprPtr Var  -- ^ Source covered
     }
 
+  -- | An optimization note. Marks than an optimization rule was
+  -- applied at this point.
+  | OptNote
+    { optRule :: RuleName
+    }
+
   deriving (Eq, Ord, Data, Typeable)
 
 -- | A hackish newtype mostly for making the expression ignored by all
@@ -425,8 +431,7 @@ tickishCounts :: Tickish id -> Bool
 tickishCounts n@ProfNote{} = profNoteCount n
 tickishCounts HpcTick{}    = True
 tickishCounts Breakpoint{} = True
-tickishCounts SourceNote{} = False
-tickishCounts CoreNote{}   = False
+tickishCounts _            = False
 
 tickishScoped :: Tickish id -> Bool
 tickishScoped n@ProfNote{} = profNoteScope n
@@ -437,6 +442,7 @@ tickishScoped Breakpoint{} = True
    -- breakpoints around and changing their result type (see #1531).
 tickishScoped SourceNote{} = True
 tickishScoped CoreNote{}   = True
+tickishScoped OptNote{}    = True
 
 mkNoTick :: Tickish id -> Tickish id
 mkNoTick n@ProfNote{} = n {profNoteCount = False}
@@ -453,6 +459,7 @@ mkNoScope t = t
 tickishIsCode :: Tickish id -> Bool
 tickishIsCode SourceNote{} = False
 tickishIsCode CoreNote{}   = False
+tickishIsCode OptNote{}    = False
 tickishIsCode _tickish     = True  -- all the rest for now
 
 -- | Return True if this Tick can be split into (tick,scope) parts with
@@ -464,6 +471,7 @@ tickishCanSplit _ = True
 -- | Return True if it is okay to float new code into the tick
 tickishLax :: Tickish Id -> Bool
 tickishLax SourceNote{} = True
+tickishLax OptNote{}    = True
 tickishLax _tickish     = False  -- all the rest for now
 
 -- | Returns whether one tick "contains" the other one, therefore
@@ -1321,6 +1329,7 @@ seqTickish HpcTick{} = ()
 seqTickish Breakpoint{ breakpointFVs = ids } = seqBndrs ids
 seqTickish SourceNote{} = ()
 seqTickish CoreNote{} = ()
+seqTickish OptNote{} = ()
 
 seqBndr :: CoreBndr -> ()
 seqBndr b = b `seq` ()

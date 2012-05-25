@@ -1780,6 +1780,7 @@ toIfaceTickish :: Tickish Id -> IfaceTickish
 toIfaceTickish (ProfNote cc tick push) = IfaceSCC cc tick push
 toIfaceTickish (HpcTick modl ix)       = IfaceHpcTick modl ix
 toIfaceTickish (SourceNote src names)  = IfaceSource src names
+toIfaceTickish (OptNote rname)         = IfaceOpt rname
 toIfaceTickish _ = panic "toIfaceTickish"
 
 ---------------------

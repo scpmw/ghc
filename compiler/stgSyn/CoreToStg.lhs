@@ -353,6 +353,7 @@ coreToStgExpr (Tick tick expr)
          HpcTick{}    -> return ()
          ProfNote{}   -> return ()
          SourceNote{} -> return ()
+         OptNote{}    -> return ()
          Breakpoint{} -> panic "coreToStgExpr: breakpoint should not happen"
          _otherwise   -> panic "coreToStgExpr: Tick"
        (expr2, fvs, escs) <- coreToStgExpr expr

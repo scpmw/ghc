@@ -370,7 +370,7 @@ lookupRule is_active id_unf in_scope fn args rules
   = -- pprTrace "matchRules" (ppr fn <+> ppr args $$ ppr rules ) $
     case go [] rules of
 	[]     -> Nothing
-	(m:ms) -> Just (findBest (fn,args) m ms)
+	(m:ms) -> Just $ opt_note $ findBest (fn,args) m ms
   where
     rough_args = map roughTopName args
 
@@ -384,6 +384,8 @@ lookupRule is_active id_unf in_scope fn args rules
                                    --       , let unf = idUnfolding arg_id
                                    --       , isCheapUnfolding unf] )
 				   go ms rs
+
+    opt_note (r, e) = (r, mkTick (OptNote $ ru_name r) e)
 
 findBest :: (Id, [CoreExpr])
 	 -> (CoreRule,CoreExpr) -> [(CoreRule,CoreExpr)] -> (CoreRule,CoreExpr)

@@ -300,6 +300,10 @@ cgExpr (StgTick (CoreNote bnd alt core) expr) = do
   addTick (CoreNote bnd alt core)
   cgExpr expr
 
+cgExpr (StgTick (OptNote rname) expr) = do
+  addTick (OptNote rname)
+  cgExpr expr
+
 \end{code}
 %********************************************************
 %*                                                     *

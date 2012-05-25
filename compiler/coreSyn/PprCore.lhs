@@ -493,9 +493,11 @@ instance Outputable id => Outputable (Tickish id) where
       hcat [ ptext (sLit "src<"), pprUserRealSpan True span, char '>']
   ppr (CoreNote {coreBind = bnd}) =
       hcat [ ptext (sLit "core<"), ppr bnd, ptext (sLit "=...>") ]
+  ppr (OptNote {optRule = rname}) =
+      hcat [ ptext (sLit "opt<"), ppr rname, ptext (sLit ">") ]
 \end{code}
 
------------------------------------------------------
+---------------------------------------------------------
 --      Vectorisation declarations
 -----------------------------------------------------
 
