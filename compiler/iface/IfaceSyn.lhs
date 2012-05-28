@@ -259,7 +259,7 @@ data IfaceExpr
 data IfaceTickish
   = IfaceHpcTick Module Int                -- from HpcTick x
   | IfaceSCC     CostCentre Bool Bool      -- from ProfNote
-  | IfaceSource  RealSrcSpan String        -- from SourceNote
+  | IfaceSource  RealSrcSpan String !Int   -- from SourceNote
   | IfaceOpt     FastString                -- from OptNote
   -- no breakpoints: we never export these into interface files
 
@@ -674,7 +674,7 @@ pprIfaceTickish (IfaceHpcTick m ix)
   = braces (text "tick" <+> ppr m <+> ppr ix)
 pprIfaceTickish (IfaceSCC cc tick scope)
   = braces (pprCostCentreCore cc <+> ppr tick <+> ppr scope)
-pprIfaceTickish (IfaceSource src _names)
+pprIfaceTickish (IfaceSource src _names _)
   = braces (pprUserRealSpan True src)
 pprIfaceTickish (IfaceOpt rname)
   = braces (text "opt" <+> ftext rname)

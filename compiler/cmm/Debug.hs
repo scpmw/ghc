@@ -153,7 +153,7 @@ putProcedureEvent bh platform tick_map tim lbl =
        showSDocC = flip renderWithStyle (mkCodeStyle CStyle)
 
 putAnnotEvent :: BinHandle -> CoreMap -> Maybe (Tickish ()) -> Tickish () -> IO ()
-putAnnotEvent bh _ _ (SourceNote ss names) =
+putAnnotEvent bh _ _ (SourceNote ss names _) =
   putEvent bh EVENT_DEBUG_SOURCE $ do
     put_ bh $ encLoc $ srcSpanStartLine ss
     put_ bh $ encLoc $ srcSpanStartCol ss

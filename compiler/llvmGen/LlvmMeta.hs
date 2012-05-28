@@ -372,7 +372,7 @@ findGoodSourceTick lbl unit tiMap
   where
     unitFS = mkFastString unit
     ticks = findSourceTis (Map.lookup lbl tiMap)
-    rangeRating (SourceNote span _) =
+    rangeRating (SourceNote span _ _) =
       (srcSpanFile span == unitFS,
        srcSpanEndLine span - srcSpanStartLine span,
        srcSpanEndCol span - srcSpanStartCol span)

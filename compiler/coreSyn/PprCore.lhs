@@ -489,8 +489,8 @@ instance Outputable id => Outputable (Tickish id) where
          (True,True)  -> hcat [ptext (sLit "scctick<"), ppr cc, char '>']
          (True,False) -> hcat [ptext (sLit "tick<"),    ppr cc, char '>']
          _            -> hcat [ptext (sLit "scc<"),     ppr cc, char '>']
-  ppr (SourceNote span _) =
-      hcat [ ptext (sLit "src<"), pprUserRealSpan True span, char '>']
+  ppr (SourceNote span _ f) =
+      hcat [ ptext (sLit "src<"), ppr f, ptext (sLit ":"), pprUserRealSpan True span, char '>']
   ppr (CoreNote {coreBind = bnd}) =
       hcat [ ptext (sLit "core<"), ppr bnd, ptext (sLit "=...>") ]
   ppr (OptNote {optRule = rname}) =

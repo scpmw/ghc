@@ -391,6 +391,7 @@ data Tickish id =
     { sourceSpan :: RealSrcSpan -- ^ Source covered
     , sourceName :: String      -- ^ Name for source location
                                 --   (uses same names as CCs)
+    , sourceFloat :: !Int
     }
 
   -- | A core note. These types of ticks only live after Core2Stg and
@@ -446,6 +447,7 @@ tickishScoped OptNote{}    = True
 
 mkNoTick :: Tickish id -> Tickish id
 mkNoTick n@ProfNote{} = n {profNoteCount = False}
+mkNoTick n@SourceNote{} = n {sourceFloat = sourceFloat n + 1 }
 mkNoTick Breakpoint{} = panic "mkNoTick: Breakpoint" -- cannot split a BP
 mkNoTick t = t
 
@@ -477,8 +479,8 @@ tickishLax _tickish     = False  -- all the rest for now
 -- | Returns whether one tick "contains" the other one, therefore
 -- making the second tick redundant.
 tickishContains :: Tickish Id -> Tickish Id -> Bool
-tickishContains (SourceNote sp1 n1) (SourceNote sp2 n2)
-  = (n1 == n2) && containsSpan sp1 sp2
+tickishContains (SourceNote sp1 n1 f1) (SourceNote sp2 n2 f2)
+  = f1 <= f2 && n1 == n2 && containsSpan sp1 sp2
 tickishContains t1 t2
   = (t1 == t2)
 \end{code}
