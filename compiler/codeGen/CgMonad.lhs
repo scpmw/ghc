@@ -523,29 +523,14 @@ newUnique = do
 addTick :: Tickish () -> Code
 addTick = emitCgStmt . CgTick
 
-writeTicksToMap :: CLabel -> [Tickish ()] -> Code
-writeTicksToMap lbl ticks = writeTickMap tim
-  where tim = TickMapEntry { timLabel = lbl
-                           , timParent = Nothing
-                           , timTicks = ticks }
-
-writeContextToMap :: CLabel -> CLabel -> Code
-writeContextToMap lbl clbl = do
-  infoDown <- getInfoDown
-  let ctx = Map.lookup clbl (cgd_tick_map infoDown)
-      tim = TickMapEntry { timLabel = lbl
-                         , timParent = ctx
-                         , timTicks = [] }
-  writeTickMap tim
-
 saveContext :: CLabel -> Code
 saveContext = emitCgStmt . CgContext
 
-writeTickMap :: TickMapEntry -> Code
-writeTickMap tim = do
+writeTickMap :: [TickMapEntry] -> Code
+writeTickMap tims = do
   state <- getState
-  let insert = Map.insertWith combineTIMs (timLabel tim) tim
-  setState $ state { cgs_tick_map = insert (cgs_tick_map state) }
+  let insert tim = Map.insertWith combineTIMs (timLabel tim) tim
+  setState $ state { cgs_tick_map = foldr insert (cgs_tick_map state) tims }
 
 combineTIMs :: TickMapEntry -> TickMapEntry -> TickMapEntry
 combineTIMs tim1 tim2
@@ -822,25 +807,45 @@ cgStmtsToBlocks stmts = do
     return (flattenCgStmts id stmts)
 
 finishInstrument :: CLabel -> CgStmts -> FCode CgStmts
-finishInstrument lbl stmts =
-  let go lbl ticks [] accs = do
-        writeTicksToMap lbl (reverse ticks)
-        return $ toOL $ reverse accs
-      go lbl ticks (s:ss) accs = case s of
-        CgFork id stmts -> do
+finishInstrument lbl stmts = do
+
+  -- Helpers for generating tick map entries
+  infoDown <- getInfoDown
+  let mkTicks lbl ticks = TickMapEntry { timLabel = lbl
+                                       , timParent = Nothing
+                                       , timTicks = ticks }
+      lookupCtx clbl = Map.lookup clbl (cgd_tick_map infoDown)
+      mkContext lbl clbl = TickMapEntry { timLabel = lbl
+                                        , timParent = lookupCtx clbl
+                                        , timTicks = [] }
+
+  -- Main loop: Strip out tick and context nodes, generate tick map
+  -- entries.
+  let go lbl ticks [] accs tims
+        = let tim = mkTicks lbl (reverse ticks)
+          in (tim : tims, toOL (reverse accs))
+      go lbl ticks (s:ss) accs tims
+        = case s of
+        CgFork id stmts ->
           let l = blockLbl id
-          writeContextToMap l lbl
-          stmts' <- go l [] (fromOL stmts) []
-          let fork' = CgFork id stmts'
-          go lbl ticks ss (fork':accs)
+              tim = mkContext l lbl
+              (tims', stmts') = go l [] (fromOL stmts) [] tims
+              fork' = CgFork id stmts'
+          in go lbl ticks ss (fork':accs) (tim:tims')
         CgTick tick     ->
-          go lbl (tick:ticks) ss accs
-        CgContext l     -> do
-          writeContextToMap l lbl
-          go lbl ticks ss accs
+          go lbl (tick:ticks) ss accs tims
+        CgContext l     ->
+          let tim = mkContext l lbl
+          in go lbl ticks ss accs (tim:tims)
         other ->
-          go lbl ticks ss (other:accs)
-  in go lbl [] (fromOL stmts) []
+          go lbl ticks ss (other:accs) tims
+
+  -- Now run it and return results. Note all of this *must* avoid
+  -- synchronizing on the monad in any way - otherwise we'll run into
+  -- loops!
+  let (tims, stmts') = go lbl [] (fromOL stmts) [] []
+  writeTickMap tims
+  return stmts'
 
 -- collect the code emitted by an FCode computation
 getCgStmts' :: FCode a -> FCode (a, CgStmts)
