@@ -543,11 +543,11 @@ mk_switch :: CmmExpr -> [(ConTagZ, CgStmts)]
 mk_switch _tag_expr [(tag,stmts)] _ lo_tag hi_tag _via_C
   | lo_tag == hi_tag
   = ASSERT( tag == lo_tag )
-    return stmts
+    getBranchInline stmts
 
 -- SINGLETON BRANCH, NO DEFAULT: no case analysis to do
 mk_switch _tag_expr [(_tag,stmts)] Nothing _lo_tag _hi_tag _via_C
-  = return stmts
+  = getBranchInline stmts
         -- The simplifier might have eliminated a case
         --       so we may have e.g. case xs of
         --                               [] -> e
@@ -556,7 +556,8 @@ mk_switch _tag_expr [(_tag,stmts)] Nothing _lo_tag _hi_tag _via_C
 
 -- SINGLETON BRANCH: one equality check to do
 mk_switch tag_expr [(tag,stmts)] (Just deflt) _lo_tag _hi_tag _via_C
-  = return (CmmCondBranch cond deflt `consCgStmt` stmts)
+  = do branch <- getBranchInline stmts
+       return (CmmCondBranch cond deflt `consCgStmt` branch)
   where
     cond  =  cmmNeWord tag_expr (CmmLit (mkIntCLit tag))
         -- We have lo_tag < hi_tag, but there's only one branch,
@@ -684,6 +685,14 @@ assignTemp' e
   | isTrivialCmmExpr e = return (CmmNop, e)
   | otherwise          = do { reg <- newTemp (cmmExprType e)
                             ; return (CmmAssign (CmmLocal reg) e, CmmReg (CmmLocal reg)) }
+
+getBranchInline :: CgStmts -> FCode CgStmts
+getBranchInline stmts = do
+  dflags <- getDynFlags
+  if hscTarget dflags == HscLlvm
+    then do lbl <- forkCgStmts stmts
+            return $ oneCgStmt $ CmmBranch lbl
+    else return stmts
 
 emitLitSwitch :: CmmExpr                        -- Tag to switch on
               -> [(Literal, CgStmts)]           -- Tagged branches
