@@ -200,6 +200,8 @@ cgRhsClosure bndr cc bndr_info fvs upd_flag args body = do
 		-- Compile the body
 	; closureCodeBody bndr_info closure_info cc args body })
 
+  ; saveContext (entryLabelFromCI closure_info)
+
 	-- BUILD THE OBJECT
   ; let
 	to_amode (info, offset) = do { amode <- idInfoToAmode info
