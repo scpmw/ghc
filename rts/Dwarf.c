@@ -867,7 +867,6 @@ void dwarf_trace_unaccounted(DwarfUnit *unit, StgBool put_module)
 
 			// Need to put module header?
 			if (put_module) {
-				traceModule(unit->name, 0, 0);
 				traceDebugModule(unit->name);
 				put_module = 0;
 			}

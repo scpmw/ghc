@@ -146,28 +146,29 @@
 
 /* Range 45 - 59 is available for new GHC and common events */
 
-#define EVENT_HPC_MODULE          51 /* (name, boxes, hash)    */
-#define EVENT_TICK_DUMP           52 /* (freqs, counts)        */
-#define EVENT_INSTR_PTR_SAMPLE    53 /* (ips)                  */
-
-#define EVENT_DEBUG_MODULE        55
-#define EVENT_DEBUG_PROCEDURE     56
-#define EVENT_DEBUG_SOURCE        57
-#define EVENT_DEBUG_CORE          58
-#define EVENT_DEBUG_PTR_RANGE     59
-
 /* Range 60 - 80 is used by eden for parallel tracing
  * see http://www.mathematik.uni-marburg.de/~eden/
  */
 
 /* Range 100 - 139 is reserved for Mercury */
 
+/* Range 200 - 210 is hereby reserved for profiling stuff. In hopes that I this
+   is were I can find some peace. */
+
+#define EVENT_DEBUG_MODULE        200
+#define EVENT_DEBUG_PROCEDURE     201
+#define EVENT_DEBUG_SOURCE        202
+#define EVENT_DEBUG_CORE          203
+#define EVENT_DEBUG_PTR_RANGE     204
+
+#define EVENT_INSTR_PTR_SAMPLE    205 /* (ips)                  */
+
 /*
  * The highest event code +1 that ghc itself emits. Note that some event
  * ranges higher than this are reserved but not currently emitted by ghc.
  * This must match the size of the EventDesc[] array in EventLog.c
  */
-#define NUM_GHC_EVENT_TAGS        60
+#define NUM_GHC_EVENT_TAGS        206
 
 #if 0  /* DEPRECATED EVENTS: */
 /* we don't actually need to record the thread, it's implicit */

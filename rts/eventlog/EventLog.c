@@ -93,8 +93,6 @@ char *EventDesc[] = {
   [EVENT_SPARK_STEAL]         = "Spark steal",
   [EVENT_SPARK_FIZZLE]        = "Spark fizzle",
   [EVENT_SPARK_GC]            = "Spark GC",
-  [EVENT_HPC_MODULE]          = "HPC module",
-  [EVENT_TICK_DUMP]           = "Tick dump",
   [EVENT_INSTR_PTR_SAMPLE]    = "Instruction pointer sample",
   [EVENT_DEBUG_MODULE]        = "Debug module data",
   [EVENT_DEBUG_PROCEDURE]     = "Debug procedure data",
@@ -263,8 +261,6 @@ static StgWord16 getEventSize(EventTypeNum t)
     case EVENT_PROGRAM_ARGS:     // (capset, strvec)
     case EVENT_PROGRAM_ENV:      // (capset, strvec)
     case EVENT_THREAD_LABEL:     // (thread, str)
-    case EVENT_HPC_MODULE:       // (name, boxes, hash)
-    case EVENT_TICK_DUMP:        // (freqs, counts)
     case EVENT_INSTR_PTR_SAMPLE: // (ips)
     case EVENT_DEBUG_MODULE: // (variable)
     case EVENT_DEBUG_PROCEDURE: // (variable)
@@ -812,23 +808,6 @@ void postCapMsg(Capability *cap, char *msg, va_list ap)
 void postUserMsg(Capability *cap, char *msg, va_list ap)
 {
     postLogMsg(&capEventBuf[cap->no], EVENT_USER_MSG, msg, ap);
-}
-
-void postModule(char *modName, StgWord32 modCount, StgWord32 modHashNo)
-{
-	nat nameLen = strlen(modName);
-	nat size = nameLen + sizeof(modCount) + sizeof(modHashNo) + sizeof(StgWord32);
-	EventsBuf *eb = &eventBuf; // Should be safe without locking
-	if (!ensureRoomForVariableEvent(eb, size)) {
-		return;
-	}
-	postEventHeader(eb, EVENT_HPC_MODULE);
-	postPayloadSize(eb, size);
-    postBuf(eb,(StgWord8*)modName,nameLen);
-	postWord32(eb,modCount);
-	postWord32(eb,modHashNo);
-	postWord32(eb,0);
-
 }
 
 void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)

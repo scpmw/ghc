@@ -216,12 +216,6 @@ startupHpc(void)
       if (mod->tixArr)
           have_tix = 1;
 
-#ifdef TRACING
-      // Add HPC module announcements to trace
-      traceModule(mod->modName,
-                  mod->tickCount,
-                  mod->hashNo);
-#endif
   }
 
   /* No tix? No point in continuing */
