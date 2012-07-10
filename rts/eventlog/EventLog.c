@@ -365,7 +365,7 @@ initEventLogging(void)
         eventTypes[t].desc = EventDesc[t];
 		eventTypes[t].size = getEventSize(t);
 
-		// Ignore deprecated events
+		// Ignore deprecated and undefined events
 		if (eventTypes[t].size == EVENT_SIZE_DEPRECATED) continue;
 
         // Write in buffer: the start event type.
@@ -864,7 +864,7 @@ void postDebugModule(char *mod_name)
 	EventsBuf *eb = &eventBuf; // Should be safe without locking
 
 	// Check for flush
-	nat size = strlen(mod_name) + 1;
+	nat size = strlen(mod_name) + 2;
 	if (!ensureRoomForVariableEvent(eb, size)) {
 		return;
 	}
@@ -872,7 +872,8 @@ void postDebugModule(char *mod_name)
 	// Write out
 	postEventHeader(eb, EVENT_DEBUG_MODULE);
 	postPayloadSize(eb, size);
-	postBuf(eb, (StgWord8 *)mod_name, (int) size);
+	postWord8(eb, 0); // No package name
+	postBuf(eb, (StgWord8 *)mod_name, (int) size-1);
 
 }
 
