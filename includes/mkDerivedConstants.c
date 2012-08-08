@@ -244,6 +244,8 @@ main(int argc, char *argv[])
     struct_field(Capability, context_switch);
     struct_field(Capability, interrupt);
     struct_field(Capability, sparks);
+    struct_field(Capability, heap_ip_sample_count);
+    struct_field(Capability, heap_ip_samples);
 
     struct_field(bdescr, start);
     struct_field(bdescr, free);

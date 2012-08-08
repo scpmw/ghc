@@ -161,7 +161,11 @@ void traceUserMsg(Capability *cap, char *msg);
  * Profiling
  */
 
-void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips);
+#define SAMPLE_BY_CYCLE 0
+#define SAMPLE_BY_HEAP  1
+
+void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 sample_type,
+                         StgWord32 cnt, void **ips);
 
 void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
 

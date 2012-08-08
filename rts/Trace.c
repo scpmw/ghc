@@ -557,14 +557,15 @@ void traceUserMsg(Capability *cap, char *msg)
     traceFormatUserMsg(cap, "%s", msg);
 }
 
-void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)
+void traceInstrPtrSample(Capability *cap, StgBool own_cap,
+                         StgWord32 sample_type, StgWord32 cnt, void **ips)
 {
 #ifdef DEBUG
 	StgWord32 i;
 	if (RtsFlags.TraceFlags.tracing == TRACE_STDERR) {
 		// Maybe sort this somewhen so it looks more useful...
 		tracePreface();
-		debugBelch("cap %d IP sample:", cap->no);
+		debugBelch("cap %d IP sample type %d:", cap->no, sample_type);
 		for (i = 0; i < cnt; i++)
 			debugBelch(" %p", ips[i]);
 		debugBelch("\n");
@@ -572,7 +573,7 @@ void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void *
 #endif
 	{
         if (eventlog_enabled) {
-            postInstrPtrSample(cap, own_cap, cnt, ips);
+            postInstrPtrSample(cap, own_cap, sample_type, cnt, ips);
         }
 	}
 }

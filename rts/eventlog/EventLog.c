@@ -810,10 +810,11 @@ void postUserMsg(Capability *cap, char *msg, va_list ap)
     postLogMsg(&capEventBuf[cap->no], EVENT_USER_MSG, msg, ap);
 }
 
-void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **ips)
+void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 sample_type,
+                        StgWord32 cnt, void **ips)
 {
-	// (size:16, cap:16, cnt * (tick : 32, freq : 32) )
-	nat size = sizeof(EventCapNo) + cnt * sizeof(StgWord64), i;
+	// (size:16, cap:16, type:16, cnt * (tick : 32, freq : 32) )
+	nat size = sizeof(EventCapNo) + sizeof(StgWord16) + cnt * sizeof(StgWord64), i;
 	EventsBuf *eb = own_cap ? &capEventBuf[cap->no] : &eventBuf;
 	if (!ensureRoomForVariableEvent(eb, size)) {
 		return;
@@ -821,6 +822,7 @@ void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 cnt, void **
 	postEventHeader(eb, EVENT_INSTR_PTR_SAMPLE);
 	postPayloadSize(eb, size);
 	postCapNo(eb, cap->no);
+	postWord16(eb, sample_type);
 	for (i = 0; i < cnt; i++) {
 		postWord64(eb, (StgWord64) ips[i]);
 	}

@@ -18,6 +18,20 @@ import pthread_mutex_unlock;
 import EnterCriticalSection;
 import LeaveCriticalSection;
 
+#ifdef TRACING
+
+#define SAMPLE_IP if (1) {                                              \
+  CInt n;                                                               \
+  n = Capability_heap_ip_sample_count(MyCapability());                  \
+  if (n < 4096::CInt) {                                                 \
+     W_[MyCapability()+OFFSET_Capability_heap_ip_samples+WDS(TO_W_(n))] \
+       = sampleIp;                                                      \
+     Capability_heap_ip_sample_count(MyCapability()) = n+(1::CInt);     \
+  } }
+#else
+#define SAMPLE_IP
+#endif
+
 /* Stack/Heap Check Failure
  * ------------------------
  *
@@ -89,6 +103,7 @@ import LeaveCriticalSection;
                 R1 = ThreadYielding;                                    \
                 goto sched;                                             \
         }                                                               \
+        SAMPLE_IP                                                       \
         if (HpAlloc <= BLOCK_SIZE                                       \
             && bdescr_link(CurrentNursery) != NULL) {                   \
             HpAlloc = 0;                                                \
@@ -153,6 +168,8 @@ INFO_TABLE_RET( stg_enter, RET_SMALL, P_ unused)
 
 __stg_gc_enter_1
 {
+    W_ sampleIp;
+    sampleIp = %ENTRY_CODE(Sp(0));
     Sp_adj(-2);
     Sp(1) = R1;
     Sp(0) = stg_enter_info;
@@ -196,6 +213,11 @@ INFO_TABLE_RET( stg_enter_checkbh, RET_SMALL, UPD_FRAME_PARAMS)
 
 stg_gc_noregs
 {
+    W_ sampleIp;
+    sampleIp = %ENTRY_CODE(Sp(0));
+    if (sampleIp == stg_gc_fun_info) {
+        sampleIp = %GET_ENTRY(UNTAG(R1));
+    }
     GC_GENERIC
 }
 
@@ -218,6 +240,7 @@ INFO_TABLE_RET( stg_gc_unpt_r1, RET_SMALL, P_ unused)
 
 stg_gc_unpt_r1
 {
+    W_ sampleIp; sampleIp = %ENTRY_CODE(Sp(0));
     Sp_adj(-2);
     Sp(1) = R1;
     Sp(0) = stg_gc_unpt_r1_info;
@@ -236,6 +259,7 @@ INFO_TABLE_RET(	stg_gc_unbx_r1, RET_SMALL, W_ unused )
 
 stg_gc_unbx_r1
 {
+    W_ sampleIp; sampleIp = %ENTRY_CODE(Sp(0));
     Sp_adj(-2);
     Sp(1) = R1;
     Sp(0) = stg_gc_unbx_r1_info;
@@ -253,6 +277,7 @@ INFO_TABLE_RET(	stg_gc_f1, RET_SMALL, F_ unused )
 
 stg_gc_f1
 {
+    W_ sampleIp; sampleIp = %ENTRY_CODE(Sp(0));
     Sp_adj(-2);
     F_[Sp + WDS(1)] = F1;
     Sp(0) = stg_gc_f1_info;
@@ -270,6 +295,7 @@ INFO_TABLE_RET(	stg_gc_d1, RET_SMALL, D_ unused )
 
 stg_gc_d1
 {
+    W_ sampleIp; sampleIp = %ENTRY_CODE(Sp(0));
     Sp = Sp - WDS(1) - SIZEOF_StgDouble;
     D_[Sp + WDS(1)] = D1;
     Sp(0) = stg_gc_d1_info;
@@ -288,6 +314,7 @@ INFO_TABLE_RET( stg_gc_l1, RET_SMALL, L_ unused )
 
 stg_gc_l1
 {
+    W_ sampleIp; sampleIp = %ENTRY_CODE(Sp(0));
     Sp_adj(-1) - SIZEOF_StgWord64;
     L_[Sp + WDS(1)] = L1;
     Sp(0) = stg_gc_l1_info;
@@ -365,6 +392,7 @@ __stg_gc_fun
     Sp(2) = R1;
     Sp(1) = size;
     Sp(0) = stg_gc_fun_info;
+    W_ sampleIp; sampleIp = R1;
     GC_GENERIC
 #else
     W_ type;
@@ -377,6 +405,7 @@ __stg_gc_fun
         Sp(1) = size;
         Sp(0) = stg_gc_fun_info;
         // DEBUG_ONLY(foreign "C" debugBelch("stg_fun_gc_gen(ARG_GEN)"););
+        W_ sampleIp; sampleIp = %GET_ENTRY(UNTAG(R1));
         GC_GENERIC
     } else { 
 	jump W_[stg_stack_save_entries + WDS(type)];
@@ -493,6 +522,8 @@ stg_gc_gen
     if (R10 == stg_putMVarzh || R10 == stg_takeMVarzh) {
        unlockClosure(R1, stg_MVAR_DIRTY_info)
     }
+    W_ sampleIp;
+    sampleIp = R10;
     SAVE_EVERYTHING;
     GC_GENERIC
 }
@@ -503,6 +534,8 @@ stg_gc_gen
 stg_gc_ut
 {
     R10 = %ENTRY_CODE(Sp(RET_DYN_NONPTRS(R9) + RET_DYN_PTRS(R9)));
+    W_ sampleIp;
+    sampleIp = R10;
     SAVE_EVERYTHING;
     GC_GENERIC
 }

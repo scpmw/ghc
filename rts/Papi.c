@@ -447,7 +447,8 @@ papi_stop_mutator_count(void)
 #ifdef TRACING
 	// As the counter is disabled, we can savely flush instruction pointer samples
 	if(task->instrPtrSamplePos >= INSTR_PTR_SAMPLE_MIN_SIZE) {
-		traceInstrPtrSample(MY_CAP, 1, task->instrPtrSamplePos, task->instrPtrSample);
+		traceInstrPtrSample(MY_CAP, 1, SAMPLE_BY_CYCLE,
+		                    task->instrPtrSamplePos, task->instrPtrSample);
 		task->instrPtrSamplePos = 0;
 	}
 #endif
@@ -511,7 +512,8 @@ papi_timer(void)
 	// pointer samples.
 	for (task = all_tasks; task; task = task->next) {
 		if(task->instrPtrSamplePos >= INSTR_PTR_SAMPLE_MIN_SIZE) {
-			traceInstrPtrSample(task->cap, 0, task->instrPtrSamplePos, task->instrPtrSample);
+			traceInstrPtrSample(task->cap, 0, SAMPLE_BY_CYCLE,
+			                    task->instrPtrSamplePos, task->instrPtrSample);
 			task->instrPtrSamplePos = 0;
 		}
 	}
