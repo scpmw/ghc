@@ -82,13 +82,49 @@ void perf_event_init(Task *task)
 	if (0 == RtsFlags.PerfEventFlags.sampleType) {
 		return;
 	}
-	
+
 	// Initialize perf_event attributes
 	struct perf_event_attr attr;
 	memset(&attr, 0, sizeof(attr));
 	attr.type = PERF_TYPE_HARDWARE;
-	attr.config = PERF_COUNT_HW_CPU_CYCLES;
-	attr.sample_period = 100000;
+	switch (RtsFlags.PerfEventFlags.sampleType) {
+	case PERF_EVENT_SAMPLE_BY_CYCLE:
+	default:
+		attr.config = PERF_COUNT_HW_CPU_CYCLES;
+		attr.sample_period = 100000;
+		task->perf_event_sample_type = SAMPLE_BY_CYCLE;
+		break;
+	case PERF_EVENT_SAMPLE_BY_CACHE:
+		attr.config = PERF_COUNT_HW_CACHE_REFERENCES;
+		attr.sample_period = 10000;
+		task->perf_event_sample_type = SAMPLE_BY_CACHE;
+		break;
+	case PERF_EVENT_SAMPLE_BY_CACHE_MISS:
+		attr.config = PERF_COUNT_HW_CACHE_MISSES;
+		attr.sample_period = 100;
+		task->perf_event_sample_type = SAMPLE_BY_CACHE_MISS;
+		break;
+	case PERF_EVENT_SAMPLE_BY_BRANCH:
+		attr.config = PERF_COUNT_HW_BRANCH_INSTRUCTIONS;
+		attr.sample_period = 10000;
+		task->perf_event_sample_type = SAMPLE_BY_BRANCH;
+		break;
+	case PERF_EVENT_SAMPLE_BY_BRANCH_MISS:
+		attr.config = PERF_COUNT_HW_BRANCH_MISSES;
+		attr.sample_period = 100;
+		task->perf_event_sample_type = SAMPLE_BY_BRANCH_MISS;
+		break;
+	case PERF_EVENT_SAMPLE_BY_STALLED_FE:
+		attr.config = PERF_COUNT_HW_STALLED_CYCLES_FRONTEND;
+		attr.sample_period = 10000;
+		task->perf_event_sample_type = SAMPLE_BY_STALLED_FE;
+		break;
+	case PERF_EVENT_SAMPLE_BY_STALLED_BE:
+		attr.config = PERF_COUNT_HW_STALLED_CYCLES_BACKEND;
+		attr.sample_period = 10000;
+		task->perf_event_sample_type = SAMPLE_BY_STALLED_BE;
+		break;
+	}
 	attr.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID;
 	attr.exclude_kernel = 1;
 
@@ -115,7 +151,7 @@ void perf_event_init(Task *task)
 
 	// Associate a memory map
 	size_t mmap_length = get_page_size() * (PERF_EVENT_MMAP_PAGES + 1);
-	task->perf_event_mmap = 
+	task->perf_event_mmap =
 		mmap(NULL, mmap_length, PROT_READ | PROT_WRITE, MAP_SHARED, task->perf_event_fd, 0);
 	if (task->perf_event_mmap == MAP_FAILED) {
 		sysErrorBelch("Could not allocate memory-map for perf_event");
@@ -192,7 +228,7 @@ void perf_event_stream(Task *task, StgBool own_task) {
 	}
 
 	// Output samples
-	traceInstrPtrSample(task->cap, own_task, SAMPLE_BY_CYCLE, n_samples, ips);
+	traceInstrPtrSample(task->cap, own_task, task->perf_event_sample_type, n_samples, ips);
 	stgFree(ips);
 
 	// Our final head (for incomplete data we might not have read everyhing!)

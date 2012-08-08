@@ -794,8 +794,29 @@ error = rtsTrue;
 #ifdef TRACING
 			case 'E':
 				OPTION_UNSAFE;
-				RtsFlags.PerfEventFlags.sampleType = 1;
-				break;
+                switch(rts_argv[arg][3]) {
+                case 'c':
+                    RtsFlags.PerfEventFlags.sampleType = PERF_EVENT_SAMPLE_BY_CACHE;
+                    break;
+                case 'C':
+                    RtsFlags.PerfEventFlags.sampleType = PERF_EVENT_SAMPLE_BY_CACHE_MISS;
+                    break;
+                case 'b':
+                    RtsFlags.PerfEventFlags.sampleType = PERF_EVENT_SAMPLE_BY_BRANCH;
+                    break;
+                case 'B':
+                    RtsFlags.PerfEventFlags.sampleType = PERF_EVENT_SAMPLE_BY_BRANCH_MISS;
+                    break;
+                case 's':
+                    RtsFlags.PerfEventFlags.sampleType = PERF_EVENT_SAMPLE_BY_STALLED_FE;
+                    break;
+                case 'S':
+                    RtsFlags.PerfEventFlags.sampleType = PERF_EVENT_SAMPLE_BY_STALLED_BE;
+                    break;
+                case 'y':
+                default:
+                    RtsFlags.PerfEventFlags.sampleType = PERF_EVENT_SAMPLE_BY_CYCLE;
+                }
 #endif
 #endif
 

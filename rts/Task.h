@@ -178,6 +178,7 @@ typedef struct Task_ {
 		struct perf_event_mmap_page *perf_event_data;
 	};
 	StgWord64 perf_event_last_head;
+	StgWord32 perf_event_sample_type;
 #endif
 
 } Task;
