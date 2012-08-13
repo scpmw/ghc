@@ -124,7 +124,7 @@ declareInstrinct fname retTy parTys = do
                     FixedArgs (tysToParams parTys) Nothing
     let fty = LMFunction funSig
 
-    let fv   = LMGlobalVar fname fty (funcLinkage funSig) Nothing Nothing False
+    let fv   = LMGlobalVar fname fty (funcLinkage funSig) Nothing Nothing Constant
 
     fn <- funLookup fname
     tops <- case fn of
@@ -337,9 +337,9 @@ genCall target res args ret = do
 getFunPtr :: (LMString -> LlvmType) -> CmmCallTarget
           -> LlvmM ExprData
 getFunPtr funTy targ = case targ of
-    CmmCallee (CmmLit (CmmLabel lbl)) _ -> do 
+    CmmCallee (CmmLit (CmmLabel lbl)) _ -> do
         name <- strCLabel_llvm lbl
-        litCase name
+        getHsFunc' name (funTy name)
 
     CmmCallee expr _ -> do
         (v1, stmts, top) <- exprToVar expr
@@ -355,36 +355,9 @@ getFunPtr funTy targ = case targ of
         (v2,s1) <- doExpr (pLift fty) $ Cast cast v1 (pLift fty)
         return (v2, stmts `snocOL` s1, top)
 
-    CmmPrim mop _ -> cmmPrimOpFunctions mop >>= litCase
-
-    where
-        litCase name = do
-            fn <- funLookup name
-            case fn of
-                Just ty'@(LMFunction sig) -> do
-                    -- Function in module in right form
-                    let fun = LMGlobalVar name ty' (funcLinkage sig)
-                                    Nothing Nothing False
-                    return (fun, nilOL, [])
-
-                Just ty' -> do
-                    -- label in module but not function pointer, convert
-                    let fty@(LMFunction sig) = funTy name
-                        fun = LMGlobalVar name (pLift ty') (funcLinkage sig)
-                                    Nothing Nothing False
-                    (v1, s1) <- doExpr (pLift fty)
-                                    $ Cast LM_Bitcast fun (pLift fty)
-                    return  (v1, unitOL s1, [])
-
-                Nothing -> do
-                    -- label not in module, create external reference
-                    let fty@(LMFunction sig) = funTy name
-                        fun = LMGlobalVar name fty (funcLinkage sig)
-                                    Nothing Nothing False
-                        top = [CmmData Data [([],[fty])]]
-                    funInsert name fty
-                    return (fun, nilOL, top)
-
+    CmmPrim mop _ -> do
+        name <- cmmPrimOpFunctions mop
+        getHsFunc' name (funTy name)
 
 -- | Conversion of call arguments.
 arg_vars :: [HintedCmmActual]
@@ -1201,25 +1174,10 @@ genLit (CmmFloat r w)
               nilOL, [])
 
 genLit cmm@(CmmLabel l)
-  = do label <- strCLabel_llvm l
-       ty <- funLookup label
+  = do var <- getGlobalPtr =<< strCLabel_llvm l
        let lmty = cmmToLlvmType $ cmmLitType cmm
-       case ty of
-            -- Make generic external label definition and then pointer to it
-            Nothing -> do
-                let glob@(LMGlobal var _) = genStringLabelRef label
-                let ldata = [CmmData Data [([glob], [])]]
-                funInsert label (pLower $ getVarType var)
-                (v1, s1) <- doExpr lmty $ Cast LM_Ptrtoint var llvmWord
-                return (v1, unitOL s1, ldata)
-
-            -- Referenced data exists in this module, retrieve type and make
-            -- pointer to it.
-            Just ty' -> do
-                let var = LMGlobalVar label (LMPointer ty')
-                            ExternallyVisible Nothing Nothing False
-                (v1, s1) <- doExpr lmty $ Cast LM_Ptrtoint var llvmWord
-                return (v1, unitOL s1, [])
+       (v1, s1) <- doExpr lmty $ Cast LM_Ptrtoint var llvmWord
+       return (v1, unitOL s1, [])
 
 genLit (CmmLabelOff label off) = do
     (vlbl, stmts, stat) <- genLit (CmmLabel label)
@@ -1404,32 +1362,18 @@ trashRegs = do plat <- getLlvmPlatform
 -- with foreign functions.
 getHsFunc :: CLabel -> LlvmM ExprData
 getHsFunc lbl
-  = do fn <- strCLabel_llvm lbl
-       ty <- funLookup fn
-       case ty of
-        -- Function in module in right form
-        Just ty'@(LMFunction sig) -> do
-            let fun = LMGlobalVar fn ty' (funcLinkage sig) Nothing Nothing False
-            return (fun, nilOL, [])
+  = do fty <- llvmFunTy
+       name <- strCLabel_llvm lbl
+       getHsFunc' name fty
 
-        -- label in module but not function pointer, convert
-        Just ty' -> do
-            let fun = LMGlobalVar fn (pLift ty') ExternallyVisible
-                            Nothing Nothing False
-            funTy <- llvmFunTy
-            (v1, s1) <- doExpr (pLift funTy) $
-                            Cast LM_Bitcast fun (pLift funTy)
-            return (v1, unitOL s1, [])
-
-        -- label not in module, create external reference
-        Nothing  -> do
-            sig <- llvmFunSig lbl ExternallyVisible
-            let ty' = LMFunction sig
-            let fun = LMGlobalVar fn ty' ExternallyVisible Nothing Nothing False
-            let top = CmmData Data [([],[ty'])]
-            funInsert fn ty'
-            return (fun, nilOL, [top])
-
+getHsFunc' :: LMString -> LlvmType -> LlvmM ExprData
+getHsFunc' name fty
+  = do fun <- getGlobalPtr name
+       if getVarType fun == fty
+         then return (fun, nilOL, [])
+         else do (v1, s1) <- doExpr (pLift fty)
+                               $ Cast LM_Bitcast fun (pLift fty)
+                 return  (v1, unitOL s1, [])
 
 -- | Create a new local var
 mkLocalVar :: LlvmType -> LlvmM LlvmVar

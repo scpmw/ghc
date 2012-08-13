@@ -55,13 +55,13 @@ resolveLlvmDatas = mapM resolveLlvmData
 resolveLlvmData :: LlvmUnresData -> LlvmM LlvmData
 resolveLlvmData (lbl, sec, alias, unres) = do
     label             <- strCLabel_llvm lbl
-    (static, refs)    <- resDatas unres
+    static            <- resDatas unres
     let struct         = Just $ LMStaticStruc static alias
         link           = if (externallyVisibleCLabel lbl)
                             then ExternallyVisible else Internal
-        const          = isSecConstant sec
+        const          = if isSecConstant sec then Constant else Global
         glob           = LMGlobalVar label alias link Nothing Nothing const
-    return (LMGlobal glob struct : refs, [alias])
+    return ([LMGlobal glob struct], [alias])
 
 -- | Should a data in this section be considered constant
 isSecConstant :: Section -> Bool
@@ -79,52 +79,37 @@ isSecConstant (OtherSection _)        = False
 --
 
 -- | Resolve data list
-resDatas :: [UnresStatic] -> LlvmM ([LlvmStatic], [LMGlobal])
+resDatas :: [UnresStatic] -> LlvmM [LlvmStatic]
 
-resDatas cmms = do
-    (stats, globss) <- fmap unzip $ mapM resData cmms
-    return (stats, concat globss)
+resDatas cmms = mapM resData cmms
 
 -- | Resolve an individual static label if it needs to be.
 --
 -- We check the 'LlvmEnv' to see if the reference has been defined in this
 -- module. If it has we can retrieve its type and make a pointer, otherwise
 -- we introduce a generic external definition for the referenced label and
--- then make a pointer.
-resData :: UnresStatic -> LlvmM (LlvmStatic, [LMGlobal])
+-- then make a pointer (see @getCmmStatic@).
+resData :: UnresStatic -> LlvmM LlvmStatic
 
-resData (Right stat) = return (stat, [])
+resData (Right stat) = return stat
 
 resData (Left cmm@(CmmLabel l)) = do
-    label <- strCLabel_llvm l
-    ty <- funLookup label
-    let lmty = cmmToLlvmType $ cmmLitType cmm
-    case ty of
-            -- Make generic external label defenition and then pointer to it
-            Nothing -> do
-                let glob@(LMGlobal var _) = genStringLabelRef label
-                    ptr  = LMStaticPointer var
-                funInsert label (pLower $ getVarType var)
-                return (LMPtoI ptr lmty, [glob])
-            -- Referenced data exists in this module, retrieve type and make
-            -- pointer to it.
-            Just ty' ->
-                let var = LMGlobalVar label (LMPointer ty')
-                            ExternallyVisible Nothing Nothing False
-                    ptr  = LMStaticPointer var
-                in return (LMPtoI ptr lmty, [])
+    var <- getGlobalPtr =<< strCLabel_llvm l
+    let ptr = LMStaticPointer var
+        lmty = cmmToLlvmType $ cmmLitType cmm
+    return $ LMPtoI ptr lmty
 
 resData (Left (CmmLabelOff label off)) = do
-    (var, glob) <- resData (Left (CmmLabel label))
+    var <- resData (Left (CmmLabel label))
     let offset = LMStaticLit $ LMIntLit (toInteger off) llvmWord
-    return (LMAdd var offset, glob)
+    return $ LMAdd var offset
 
 resData (Left (CmmLabelDiffOff l1 l2 off)) = do
-    (var1, glob1) <- resData (Left (CmmLabel l1))
-    (var2, glob2) <- resData (Left (CmmLabel l2))
+    var1 <- resData (Left (CmmLabel l1))
+    var2 <- resData (Left (CmmLabel l2))
     let var = LMSub var1 var2
         offset = LMStaticLit $ LMIntLit (toInteger off) llvmWord
-    return (LMAdd var offset, glob1 ++ glob2)
+    return $ LMAdd var offset
 
 resData _ = panic "resData: Non CLabel expr as left type!"
 

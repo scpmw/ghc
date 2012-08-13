@@ -23,7 +23,6 @@ import LlvmCodeGen.Base
 import LlvmCodeGen.Ppr
 import LlvmCodeGen.Regs ( stgTBAA )
 
-import BlockId          ( blockLbl )
 import CLabel
 import Module
 import DynFlags
@@ -32,7 +31,6 @@ import Debug
 import Binary
 
 import Config          ( cProjectName, cProjectVersion )
-import OldCmm
 import Platform
 import SrcLoc          (srcSpanFile,
                         srcSpanStartLine, srcSpanStartCol,
@@ -252,8 +250,8 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
   displayName <- strDisplayName_llvm entryLabel
 
   funTy <- llvmFunTy
-  let funRef = LMGlobalVar linkageName (LMPointer funTy) Internal Nothing Nothing True
-      local = not . externallyVisibleCLabel $ entryLabel
+  funRef <- getGlobalPtr linkageName
+  let local = not . externallyVisibleCLabel $ entryLabel
       procedureName = displayName
 
   opt <- getDynFlag optLevel
@@ -514,19 +512,12 @@ bufferAsString (len, buf) = liftIO $ do
   -- because the pretty-printing will append a zero byte.
   return $ LMStaticStr str $ LMArray (len + 1) i8
 
-cmmDebugLlvmGens :: ModLocation -> TickMap -> [RawCmmDecl] -> LlvmM ()
-cmmDebugLlvmGens mod_loc tick_map cmm = do
-
-  -- Build a list mapping Cmm labels to linker labels
-  let proc_lbl p l = case topInfoTable p of
-        Just (Statics info_lbl _) -> info_lbl
-        _                         -> l
-      block_lbls (BasicBlock i _)  = let l = blockLbl i in (l,l)
-      lbls = concat [ (l, proc_lbl p l) : map block_lbls bs
-                    | p@(CmmProc _ l (ListGraph bs)) <- cmm]
+cmmDebugLlvmGens :: ModLocation -> TickMap -> LlvmM ()
+cmmDebugLlvmGens mod_loc tick_map = do
 
   -- Write debug data as event log
   dflags <- getDynFlag id
+  lbls <- getLabelMap
   dbg <- liftIO $ debugWriteEventlog dflags mod_loc tick_map lbls
 
   -- Convert to a string
@@ -539,7 +530,7 @@ cmmDebugLlvmGens mod_loc tick_map cmm = do
         OSDarwin -> "__DWARF,"
         _        -> "."
       sectName   = Just $ fsLit (sectPrefix ++ "debug_ghc")
-      lmDebugVar = LMGlobalVar debug_sym (getStatType dbgStr) Internal sectName Nothing False
+      lmDebugVar = LMGlobalVar debug_sym (getStatType dbgStr) Internal sectName Nothing Constant
       lmDebug    = LMGlobal lmDebugVar (Just dbgStr)
 
   renderLlvm $ pprLlvmData ([lmDebug], [])

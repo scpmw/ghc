@@ -30,6 +30,7 @@ import Outputable
 import UniqSupply
 import SysTools ( figureLlvmVersion )
 import MonadUtils
+import qualified Stream
 
 import Data.Maybe ( fromMaybe, catMaybes )
 import Control.Monad ( when )
@@ -39,12 +40,14 @@ import System.IO
 -- -----------------------------------------------------------------------------
 -- | Top-level of the LLVM Code generator
 --
-llvmCodeGen :: DynFlags -> ModLocation -> Handle -> UniqSupply -> [RawCmmGroup] -> TickMap -> IO ()
-llvmCodeGen dflags location h us cmms tick_map
+llvmCodeGen :: DynFlags -> ModLocation -> Handle -> UniqSupply
+               -> Stream.Stream IO (RawCmmGroup,TickMap) ()
+               -> IO ()
+llvmCodeGen dflags location h us cmm_stream
   = do bufh <- newBufHandle h
 
        -- get llvm version, cache for later use
-       ver <- getLlvmVersion
+       ver <- getLlvmVersion dflags
 
        -- warn if unsupported
        when (ver < minSupportLlvmVersion) $
@@ -58,12 +61,13 @@ llvmCodeGen dflags location h us cmms tick_map
 
        -- run code generation
        runLlvm dflags ver bufh us $
-         llvmCodeGen' location cmms tick_map
+         llvmCodeGen' location (liftStream cmm_stream)
 
        bFlush bufh
-  where
-    -- | Handle setting up the LLVM version.
-    getLlvmVersion = do
+
+-- | Handle setting up the LLVM version.
+getLlvmVersion :: DynFlags -> IO Int
+getLlvmVersion dflags = do
         ver <- (fromMaybe defaultLlvmVersion) `fmap` figureLlvmVersion dflags
         -- cache llvm version for later use
         writeIORef (llvmVersion dflags) ver
@@ -78,35 +82,45 @@ llvmCodeGen dflags location h us cmms tick_map
         return ver
 
 
-
-llvmCodeGen' :: ModLocation -> [RawCmmGroup] -> TickMap -> LlvmM ()
-llvmCodeGen' location cmms tick_map
-  = do
-        -- Insert functions into map, collect data
-        let split (CmmData s d' )   = return $ Just (s, d')
-            split p@(CmmProc _ l _) = do
-              lbl <- strCLabel_llvm $ case topInfoTable p of
-                         Nothing                   -> l
-                         Just (Statics info_lbl _) -> info_lbl
-              funInsert lbl =<< llvmFunTy
-              return Nothing
-        let cmm = concat cmms
-        cdata <- fmap catMaybes $ mapM split cmm
-
+llvmCodeGen' :: ModLocation -> Stream.Stream LlvmM (RawCmmGroup,TickMap) () -> LlvmM ()
+llvmCodeGen' location cmm_stream
+  = do  -- Preamble
         renderLlvm pprLlvmHeader
         ghcInternalFunctions
         cmmMetaLlvmPrelude location
+
+        -- Procedures
+        let llvmStream = Stream.mapM (llvmGroupLlvmGens location) cmm_stream
+        tick_maps <- Stream.collect llvmStream
+
+        -- Declare aliases for forward references
+        renderLlvm . pprLlvmData =<< generateAliases
+
+        -- Postamble
+        cmmMetaLlvmUnit location
+        cmmDebugLlvmGens location (last tick_maps)
+        cmmUsedLlvmGens
+
+llvmGroupLlvmGens :: ModLocation -> (RawCmmGroup, TickMap) -> LlvmM TickMap
+llvmGroupLlvmGens location (cmm, tick_map) = do
+
+        -- Insert functions into map, collect data
+        let split (CmmData s d' )   = return $ Just (s, d')
+            split p@(CmmProc _ l _) = do
+              let l' = case topInfoTable p of
+                         Nothing                   -> l
+                         Just (Statics info_lbl _) -> info_lbl
+              lml <- strCLabel_llvm l'
+              funInsert lml =<< llvmFunTy
+              labelInsert l l'
+              return Nothing
+        cdata <- fmap catMaybes $ mapM split cmm
 
         {-# SCC "llvm_datas_gen" #-}
           cmmDataLlvmGens cdata []
         {-# SCC "llvm_procs_gen" #-}
           cmmProcLlvmGens location cmm tick_map 1
-
-        cmmMetaLlvmUnit location
-        cmmDebugLlvmGens location tick_map cmm
-
-        cmmUsedLlvmGens
-
+        return tick_map
 
 -- -----------------------------------------------------------------------------
 -- | Do LLVM code generation on all these Cmms data sections.
@@ -196,7 +210,7 @@ cmmUsedLlvmGens = do
       ty     = (LMArray (length ivars) i8Ptr)
       usedArray = LMStaticArray (map cast ivars) ty
       sectName  = Just $ fsLit "llvm.metadata"
-      lmUsedVar = LMGlobalVar (fsLit "llvm.used") ty Appending sectName Nothing False
+      lmUsedVar = LMGlobalVar (fsLit "llvm.used") ty Appending sectName Nothing Constant
       lmUsed    = LMGlobal lmUsedVar (Just usedArray)
   if null ivars
      then return ()

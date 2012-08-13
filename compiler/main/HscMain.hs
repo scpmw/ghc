@@ -1287,7 +1287,7 @@ hscGenHardCode cgguts mod_summary = do
                    cmmToRawCmm dflags cmms
 
         let dump a = do dumpIfSet_dyn dflags Opt_D_dump_raw_cmm "Raw Cmm"
-                           (ppr a)
+                           (ppr $ fst a)
                         return a
             rawcmms1 = Stream.mapM dump rawcmms0
 
@@ -1343,8 +1343,8 @@ hscCompileCmmFile hsc_env filename = runHsc hsc_env $ do
     let dflags = hsc_dflags hsc_env
     cmm <- ioMsgMaybe $ parseCmmFile dflags filename
     liftIO $ do
-        rawCmms <- cmmToRawCmm dflags (Stream.yield cmm)
-        _ <- codeOutput dflags no_mod no_loc NoStubs [] (rawCmms >> return Data.Map.empty)
+        rawCmms <- cmmToRawCmm dflags (Stream.yield (cmm, Data.Map.empty))
+        _ <- codeOutput dflags no_mod no_loc NoStubs [] rawCmms
         return ()
   where
     no_mod = panic "hscCmmFile: no_mod"
@@ -1358,7 +1358,7 @@ tryNewCodeGen   :: HscEnv -> Module -> [TyCon]
                 -> CollectedCCs
                 -> [(StgBinding,[(Id,[Id])])]
                 -> HpcInfo
-                -> IO (Stream IO Old.CmmGroup TickMap)
+                -> IO (Stream IO (Old.CmmGroup, TickMap) ())
          -- Note we produce a 'Stream' of CmmGroups, so that the
          -- backend can be run incrementally.  Otherwise it generates all
          -- the C-- up front, which has a significant space cost.
@@ -1389,19 +1389,19 @@ tryNewCodeGen hsc_env this_mod data_tycons
 
     let run_pipeline topSRT cmmgroup = do
            (topSRT, cmmgroup) <- cmmPipeline hsc_env topSRT cmmgroup
-           return (topSRT,cmmOfZgraph cmmgroup)
+           return (topSRT,(cmmOfZgraph cmmgroup, Data.Map.empty))
 
     let pipeline_stream = {-# SCC "cmmPipeline" #-} do
           (topSRT, _) <- Stream.mapAccumL run_pipeline initTopSRT ppr_stream1
-          Stream.yield (cmmOfZgraph (srtToData topSRT))
+          Stream.yield (cmmOfZgraph (srtToData topSRT), Data.Map.empty)
 
     let
-        dump2 a = do dumpIfSet_dyn dflags Opt_D_dump_cmmz "Output Cmm" $ ppr a
+        dump2 a = do dumpIfSet_dyn dflags Opt_D_dump_cmmz "Output Cmm" $ ppr $ fst a
                      return a
 
         ppr_stream2 = Stream.mapM dump2 pipeline_stream
 
-    return (ppr_stream2 >> return Data.Map.empty)
+    return ppr_stream2
 
 
 

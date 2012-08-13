@@ -70,7 +70,10 @@ ppLlvmGlobal (LMGlobal var@(LMGlobalVar _ _ link x a c) dat) =
             Just stat -> ppr stat
             Nothing   -> ppr (pLower $ getVarType var)
 
-        const' = if c then text "constant" else text "global"
+        const' = case c of
+          Global   -> text "global"
+          Constant -> text "constant"
+          Alias    -> text "alias"
 
     in ppAssignment var $ ppr link <+> const' <+> rhs <> sect <> align
        $+$ newLine
