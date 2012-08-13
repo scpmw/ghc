@@ -57,7 +57,7 @@ module Lexer (
    extension, bangPatEnabled, datatypeContextsEnabled,
    traditionalRecordSyntaxEnabled,
    typeLiteralsEnabled,
-   explicitNamespacesEnabled,
+   explicitNamespacesEnabled, sccProfilingOn,
    addWarning,
    lexTokenStream
   ) where
@@ -321,6 +321,10 @@ $tab+         { warn Opt_WarnTabs (text "Tab character") }
 
   "[" @varid "|"  / { ifExtension qqEnabled }
                      { lex_quasiquote_tok }
+
+  -- qualified quasi-quote (#5555)
+  "[" @qual @varid "|"  / { ifExtension qqEnabled }
+                          { lex_qquasiquote_tok }
 }
 
 <0> {
@@ -496,6 +500,7 @@ data Token
   | ITdcolon
   | ITequal
   | ITlam
+  | ITlcase
   | ITvbar
   | ITlarrow
   | ITrarrow
@@ -547,7 +552,7 @@ data Token
   | ITrational   FractionalLit
 
   | ITprimchar   Char
-  | ITprimstring FastString
+  | ITprimstring FastBytes
   | ITprimint    Integer
   | ITprimword   Integer
   | ITprimfloat  FractionalLit
@@ -562,7 +567,14 @@ data Token
   | ITidEscape   FastString     --  $x
   | ITparenEscape               --  $(
   | ITtyQuote                   --  ''
-  | ITquasiQuote (FastString,FastString,RealSrcSpan) --  [:...|...|]
+  | ITquasiQuote (FastString,FastString,RealSrcSpan)
+    -- ITquasiQuote(quoter, quote, loc)
+    -- represents a quasi-quote of the form
+    -- [quoter| quote |]
+  | ITqQuasiQuote (FastString,FastString,FastString,RealSrcSpan)
+    -- ITqQuasiQuote(Qual, quoter, quote, loc)
+    -- represents a qualified quasi-quote of the form
+    -- [Qual.quoter| quote |]
 
   -- Arrow notation extension
   | ITproc
@@ -647,7 +659,8 @@ reservedWordsFM = listToUFM $
          ( "capi",           ITcapiconv,      bit cApiFfiBit),
          ( "prim",           ITprimcallconv,  bit ffiBit),
 
-         ( "rec",            ITrec,           bit recBit),
+         ( "rec",            ITrec,           bit arrowsBit .|. 
+                                              bit recursiveDoBit),
          ( "proc",           ITproc,          bit arrowsBit)
      ]
 
@@ -755,13 +768,17 @@ pop_and act span buf len = do _ <- popLexState
 nextCharIs :: StringBuffer -> (Char -> Bool) -> Bool
 nextCharIs buf p = not (atEnd buf) && p (currentChar buf)
 
+{-# INLINE nextCharIsNot #-}
+nextCharIsNot :: StringBuffer -> (Char -> Bool) -> Bool
+nextCharIsNot buf p = not (nextCharIs buf p)
+
 notFollowedBy :: Char -> AlexAccPred Int
 notFollowedBy char _ _ _ (AI _ buf)
-  = nextCharIs buf (/=char)
+  = nextCharIsNot buf (== char)
 
 notFollowedBySymbol :: AlexAccPred Int
 notFollowedBySymbol _ _ _ (AI _ buf)
-  = nextCharIs buf (`notElem` "!#$%&*+./<=>?@\\^|-~")
+  = nextCharIsNot buf (`elem` "!#$%&*+./<=>?@\\^|-~")
 
 -- We must reject doc comments as being ordinary comments everywhere.
 -- In some cases the doc comment will be selected as the lexeme due to
@@ -771,13 +788,16 @@ notFollowedBySymbol _ _ _ (AI _ buf)
 isNormalComment :: AlexAccPred Int
 isNormalComment bits _ _ (AI _ buf)
   | haddockEnabled bits = notFollowedByDocOrPragma
-  | otherwise           = nextCharIs buf (/='#')
+  | otherwise           = nextCharIsNot buf (== '#')
   where
     notFollowedByDocOrPragma
-       = not $ spaceAndP buf (`nextCharIs` (`elem` "|^*$#"))
+       = afterOptionalSpace buf (\b -> nextCharIsNot b (`elem` "|^*$#"))
 
-spaceAndP :: StringBuffer -> (StringBuffer -> Bool) -> Bool
-spaceAndP buf p = p buf || nextCharIs buf (==' ') && p (snd (nextChar buf))
+afterOptionalSpace :: StringBuffer -> (StringBuffer -> Bool) -> Bool
+afterOptionalSpace buf p
+    = if nextCharIs buf (== ' ')
+      then p (snd (nextChar buf))
+      else p buf
 
 atEOL :: AlexAccPred Int
 atEOL _ _ _ (AI _ buf) = atEnd buf || currentChar buf == '\n'
@@ -960,23 +980,37 @@ splitQualName orig_buf len parens = split orig_buf orig_buf
 
 varid :: Action
 varid span buf len =
-  fs `seq`
   case lookupUFM reservedWordsFM fs of
-        Just (keyword,0)    -> do
-                maybe_layout keyword
-                return (L span keyword)
-        Just (keyword,exts) -> do
-                b <- extension (\i -> exts .&. i /= 0)
-                if b then do maybe_layout keyword
-                             return (L span keyword)
-                     else return (L span (ITvarid fs))
-        _other -> return (L span (ITvarid fs))
+    Just (ITcase, _) -> do
+      lambdaCase <- extension lambdaCaseEnabled
+      keyword <- if lambdaCase
+                 then do
+                   lastTk <- getLastTk
+                   return $ case lastTk of
+                     Just ITlam -> ITlcase
+                     _          -> ITcase
+                 else
+                   return ITcase
+      maybe_layout keyword
+      return $ L span keyword
+    Just (keyword, 0) -> do
+      maybe_layout keyword
+      return $ L span keyword
+    Just (keyword, exts) -> do
+      extsEnabled <- extension $ \i -> exts .&. i /= 0
+      if extsEnabled
+        then do
+          maybe_layout keyword
+          return $ L span keyword
+        else
+          return $ L span $ ITvarid fs
+    Nothing ->
+      return $ L span $ ITvarid fs
   where
-        fs = lexemeToFastString buf len
+    !fs = lexemeToFastString buf len
 
 conid :: StringBuffer -> Int -> Token
-conid buf len = ITconid fs
-  where fs = lexemeToFastString buf len
+conid buf len = ITconid $! lexemeToFastString buf len
 
 qvarsym, qconsym, prefixqvarsym, prefixqconsym :: StringBuffer -> Int -> Token
 qvarsym buf len = ITqvarsym $! splitQualName buf len False
@@ -988,17 +1022,18 @@ varsym, consym :: Action
 varsym = sym ITvarsym
 consym = sym ITconsym
 
-sym :: (FastString -> Token) -> RealSrcSpan -> StringBuffer -> Int
-    -> P (RealLocated Token)
+sym :: (FastString -> Token) -> Action
 sym con span buf len =
   case lookupUFM reservedSymsFM fs of
-        Just (keyword,exts) -> do
-                b <- extension exts
-                if b then return (L span keyword)
-                     else return (L span $! con fs)
-        _other -> return (L span $! con fs)
+    Just (keyword, exts) -> do
+      extsEnabled <- extension exts
+      let !tk | extsEnabled = keyword
+              | otherwise   = con fs
+      return $ L span tk
+    Nothing ->
+      return $ L span $! con fs
   where
-        fs = lexemeToFastString buf len
+    !fs = lexemeToFastString buf len
 
 -- Variations on the integral numeric literal.
 tok_integral :: (Integer -> Token)
@@ -1075,6 +1110,7 @@ maybe_layout t = do -- If the alternative layout rule is enabled then
     where f ITdo    = pushLexState layout_do
           f ITmdo   = pushLexState layout_do
           f ITof    = pushLexState layout
+          f ITlcase = pushLexState layout
           f ITlet   = pushLexState layout
           f ITwhere = pushLexState layout
           f ITrec   = pushLexState layout
@@ -1208,10 +1244,8 @@ lex_string s = do
                    setInput i
                    if any (> '\xFF') s
                     then failMsgP "primitive string literal must contain only characters <= \'\\xFF\'"
-                    else let s' = mkZFastString (reverse s) in
-                         return (ITprimstring s')
-                        -- mkZFastString is a hack to avoid encoding the
-                        -- string in UTF-8.  We just want the exact bytes.
+                    else let fb = unsafeMkFastBytesString (reverse s)
+                         in return (ITprimstring fb)
               _other ->
                 return (ITstring (mkFastString (reverse s)))
           else
@@ -1423,6 +1457,18 @@ getCharOrFail i =  do
 -- -----------------------------------------------------------------------------
 -- QuasiQuote
 
+lex_qquasiquote_tok :: Action
+lex_qquasiquote_tok span buf len = do
+  let (qual, quoter) = splitQualName (stepOn buf) (len - 2) False
+  quoteStart <- getSrcLoc
+  quote <- lex_quasiquote quoteStart ""
+  end <- getSrcLoc
+  return (L (mkRealSrcSpan (realSrcSpanStart span) end)
+           (ITqQuasiQuote (qual,
+                           quoter,
+                           mkFastString (reverse quote),
+                           mkRealSrcSpan quoteStart end)))
+
 lex_quasiquote_tok :: Action
 lex_quasiquote_tok span buf len = do
   let quoter = tail (lexemeToString buf (len - 1))
@@ -1491,6 +1537,7 @@ data PState = PState {
         buffer     :: StringBuffer,
         dflags     :: DynFlags,
         messages   :: Messages,
+        last_tk    :: Maybe Token,
         last_loc   :: RealSrcSpan, -- pos of previous token
         last_len   :: !Int,        -- len of previous token
         loc        :: RealSrcLoc,  -- current loc (end of prev token + 1)
@@ -1594,6 +1641,12 @@ setLastToken loc len = P $ \s -> POk s {
   last_loc=loc,
   last_len=len
   } ()
+
+setLastTk :: Token -> P ()
+setLastTk tk = P $ \s -> POk s { last_tk = Just tk } ()
+
+getLastTk :: P (Maybe Token)
+getLastTk = P $ \s@(PState { last_tk = last_tk }) -> POk s last_tk
 
 data AlexInput = AI RealSrcLoc StringBuffer
 
@@ -1796,8 +1849,8 @@ inRulePragBit :: Int
 inRulePragBit = 19
 rawTokenStreamBit :: Int
 rawTokenStreamBit = 20 -- producing a token stream with all comments included
-recBit :: Int
-recBit = 22 -- rec
+sccProfilingOnBit :: Int
+sccProfilingOnBit = 21
 alternativeLayoutRuleBit :: Int
 alternativeLayoutRuleBit = 23
 relaxedLayoutBit :: Int
@@ -1812,6 +1865,10 @@ typeLiteralsBit :: Int
 typeLiteralsBit = 28
 explicitNamespacesBit :: Int
 explicitNamespacesBit = 29
+lambdaCaseBit :: Int
+lambdaCaseBit = 30
+multiWayIfBit :: Int
+multiWayIfBit = 31
 
 
 always :: Int -> Bool
@@ -1854,6 +1911,8 @@ relaxedLayout :: Int -> Bool
 relaxedLayout flags = testBit flags relaxedLayoutBit
 nondecreasingIndentation :: Int -> Bool
 nondecreasingIndentation flags = testBit flags nondecreasingIndentationBit
+sccProfilingOn :: Int -> Bool
+sccProfilingOn flags = testBit flags sccProfilingOnBit
 traditionalRecordSyntaxEnabled :: Int -> Bool
 traditionalRecordSyntaxEnabled flags = testBit flags traditionalRecordSyntaxBit
 typeLiteralsEnabled :: Int -> Bool
@@ -1861,6 +1920,10 @@ typeLiteralsEnabled flags = testBit flags typeLiteralsBit
 
 explicitNamespacesEnabled :: Int -> Bool
 explicitNamespacesEnabled flags = testBit flags explicitNamespacesBit
+lambdaCaseEnabled :: Int -> Bool
+lambdaCaseEnabled flags = testBit flags lambdaCaseBit
+multiWayIfEnabled :: Int -> Bool
+multiWayIfEnabled flags = testBit flags multiWayIfBit
 
 -- PState for parsing options pragmas
 --
@@ -1877,6 +1940,7 @@ mkPState flags buf loc =
       buffer        = buf,
       dflags        = flags,
       messages      = emptyMessages,
+      last_tk       = Nothing,
       last_loc      = mkRealSrcSpan loc loc,
       last_len      = 0,
       loc           = loc,
@@ -1907,8 +1971,6 @@ mkPState flags buf loc =
                .|. magicHashBit                `setBitIf` xopt Opt_MagicHash                flags
                .|. kindSigsBit                 `setBitIf` xopt Opt_KindSignatures           flags
                .|. recursiveDoBit              `setBitIf` xopt Opt_RecursiveDo              flags
-               .|. recBit                      `setBitIf` xopt Opt_DoRec                    flags
-               .|. recBit                      `setBitIf` xopt Opt_Arrows                   flags
                .|. unicodeSyntaxBit            `setBitIf` xopt Opt_UnicodeSyntax            flags
                .|. unboxedTuplesBit            `setBitIf` xopt Opt_UnboxedTuples            flags
                .|. datatypeContextsBit         `setBitIf` xopt Opt_DatatypeContexts         flags
@@ -1917,11 +1979,14 @@ mkPState flags buf loc =
                .|. rawTokenStreamBit           `setBitIf` dopt Opt_KeepRawTokenStream       flags
                .|. alternativeLayoutRuleBit    `setBitIf` xopt Opt_AlternativeLayoutRule    flags
                .|. relaxedLayoutBit            `setBitIf` xopt Opt_RelaxedLayout            flags
+               .|. sccProfilingOnBit           `setBitIf` dopt Opt_SccProfilingOn           flags
                .|. nondecreasingIndentationBit `setBitIf` xopt Opt_NondecreasingIndentation flags
                .|. safeHaskellBit              `setBitIf` safeImportsOn                     flags
                .|. traditionalRecordSyntaxBit  `setBitIf` xopt Opt_TraditionalRecordSyntax  flags
                .|. typeLiteralsBit             `setBitIf` xopt Opt_DataKinds flags
                .|. explicitNamespacesBit       `setBitIf` xopt Opt_ExplicitNamespaces flags
+               .|. lambdaCaseBit               `setBitIf` xopt Opt_LambdaCase               flags
+               .|. multiWayIfBit               `setBitIf` xopt Opt_MultiWayIf               flags
       --
       setBitIf :: Int -> Bool -> Int
       b `setBitIf` cond | cond      = bit b
@@ -1930,7 +1995,7 @@ mkPState flags buf loc =
 addWarning :: WarningFlag -> SrcSpan -> SDoc -> P ()
 addWarning option srcspan warning
  = P $ \s@PState{messages=(ws,es), dflags=d} ->
-       let warning' = mkWarnMsg srcspan alwaysQualify warning
+       let warning' = mkWarnMsg d srcspan alwaysQualify warning
            ws' = if wopt option d then ws `snocBag` warning' else ws
        in POk s{messages=(ws', es)} ()
 
@@ -1975,7 +2040,7 @@ srcParseErr
   -> MsgDoc
 srcParseErr buf len
   = hcat [ if null token
-             then ptext (sLit "parse error (possibly incorrect indentation)")
+             then ptext (sLit "parse error (possibly incorrect indentation or mismatched brackets)")
              else hcat [ptext (sLit "parse error on input "),
                         char '`', text token, char '\'']
     ]
@@ -2249,7 +2314,13 @@ lexToken = do
         let span = mkRealSrcSpan loc1 end
         let bytes = byteDiff buf buf2
         span `seq` setLastToken span bytes
-        t span buf bytes
+        lt <- t span buf bytes
+        case unLoc lt of
+          ITlineComment _  -> return lt
+          ITblockComment _ -> return lt
+          lt' -> do
+            setLastTk lt'
+            return lt
 
 reportLexError :: RealSrcLoc -> RealSrcLoc -> StringBuffer -> [Char] -> P a
 reportLexError loc1 loc2 buf str
@@ -2318,7 +2389,7 @@ dispatch_pragmas prags span buf len = case Map.lookup (clean_pragma (lexemeToStr
 
 known_pragma :: Map String Action -> AlexAccPred Int
 known_pragma prags _ _ len (AI _ buf) = (isJust $ Map.lookup (clean_pragma (lexemeToString (offsetBytes (- len) buf) len)) prags)
-                                          && (nextCharIs buf (\c -> not (isAlphaNum c || c == '_')))
+                                          && (nextCharIsNot buf (\c -> isAlphaNum c || c == '_'))
 
 clean_pragma :: String -> String
 clean_pragma prag = canon_ws (map toLower (unprefix prag))

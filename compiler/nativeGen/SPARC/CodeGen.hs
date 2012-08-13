@@ -48,7 +48,6 @@ import CPrim
 import BasicTypes
 import DynFlags
 import FastString
-import StaticFlags      ( opt_PIC )
 import OrdList
 import Outputable
 import Platform
@@ -61,10 +60,7 @@ cmmTopCodeGen :: RawCmmDecl
               -> NatM [NatCmmDecl CmmStatics Instr]
 
 cmmTopCodeGen (CmmProc info lab (ListGraph blocks))
- = do
-      dflags <- getDynFlags
-      let platform = targetPlatform dflags
-      (nat_blocks,statics) <- mapAndUnzipM (basicBlockCodeGen platform) blocks
+ = do (nat_blocks,statics) <- mapAndUnzipM basicBlockCodeGen blocks
 
       let proc = CmmProc info lab (ListGraph $ concat nat_blocks)
       let tops = proc : concat statics
@@ -80,12 +76,11 @@ cmmTopCodeGen (CmmData sec dat) = do
 --      are indicated by the NEWBLOCK instruction.  We must split up the
 --      instruction stream into basic blocks again.  Also, we extract
 --      LDATAs here too.
-basicBlockCodeGen :: Platform
-                  -> CmmBasicBlock
+basicBlockCodeGen :: CmmBasicBlock
                   -> NatM ( [NatBasicBlock Instr]
                           , [NatCmmDecl CmmStatics Instr])
 
-basicBlockCodeGen platform cmm@(BasicBlock id stmts) = do
+basicBlockCodeGen cmm@(BasicBlock id stmts) = do
   instrs <- stmtsToInstrs stmts
   let
         (top,other_blocks,statics)
@@ -102,7 +97,7 @@ basicBlockCodeGen platform cmm@(BasicBlock id stmts) = do
 
         -- do intra-block sanity checking
         blocksChecked
-                = map (checkBlock platform cmm)
+                = map (checkBlock cmm)
                 $ BasicBlock id top : other_blocks
 
   return (blocksChecked, statics)
@@ -139,7 +134,8 @@ stmtToInstrs stmt = case stmt of
 
     CmmBranch   id              -> genBranch id
     CmmCondBranch arg id        -> genCondJump id arg
-    CmmSwitch   arg ids         -> genSwitch arg ids
+    CmmSwitch   arg ids         -> do dflags <- getDynFlags
+                                      genSwitch dflags arg ids
     CmmJump     arg _           -> genJump arg
 
     CmmReturn
@@ -293,9 +289,9 @@ genCondJump bid bool = do
 -- -----------------------------------------------------------------------------
 -- Generating a table-branch
 
-genSwitch :: CmmExpr -> [Maybe BlockId] -> NatM InstrBlock
-genSwitch expr ids
-        | opt_PIC
+genSwitch :: DynFlags -> CmmExpr -> [Maybe BlockId] -> NatM InstrBlock
+genSwitch dflags expr ids
+        | dopt Opt_PIC dflags
         = error "MachCodeGen: sparc genSwitch PIC not finished\n"
 
         | otherwise
@@ -321,11 +317,12 @@ genSwitch expr ids
                         , JMP_TBL (AddrRegImm dst (ImmInt 0)) ids label
                         , NOP ]
 
-generateJumpTableForInstr :: Instr -> Maybe (NatCmmDecl CmmStatics Instr)
-generateJumpTableForInstr (JMP_TBL _ ids label) =
+generateJumpTableForInstr :: DynFlags -> Instr
+                          -> Maybe (NatCmmDecl CmmStatics Instr)
+generateJumpTableForInstr _ (JMP_TBL _ ids label) =
         let jumpTable = map jumpTableEntry ids
         in Just (CmmData ReadOnlyData (Statics label jumpTable))
-generateJumpTableForInstr _ = Nothing
+generateJumpTableForInstr _ _ = Nothing
 
 
 
@@ -640,12 +637,13 @@ outOfLineMachOp_table mop
 
         MO_PopCnt w  -> fsLit $ popCntLabel w
 
-        MO_S_QuotRem {} -> unsupported
-        MO_U_QuotRem {} -> unsupported
-        MO_Add2 {}      -> unsupported
-        MO_U_Mul2 {}    -> unsupported
-        MO_WriteBarrier -> unsupported
-        MO_Touch        -> unsupported
+        MO_S_QuotRem {}  -> unsupported
+        MO_U_QuotRem {}  -> unsupported
+        MO_U_QuotRem2 {} -> unsupported
+        MO_Add2 {}       -> unsupported
+        MO_U_Mul2 {}     -> unsupported
+        MO_WriteBarrier  -> unsupported
+        MO_Touch         -> unsupported
     where unsupported = panic ("outOfLineCmmOp: " ++ show mop
                             ++ " not supported here")
 

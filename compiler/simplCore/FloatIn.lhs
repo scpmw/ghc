@@ -31,7 +31,7 @@ import Id		( isOneShotBndr, idType )
 import Var
 import Type		( isUnLiftedType )
 import VarSet
-import Util		( zipEqual, zipWithEqual, count )
+import Util
 import UniqFM
 import Outputable
 \end{code}
@@ -204,7 +204,8 @@ Urk! if all are tyvars, and we don't float in, we may miss an
 
 \begin{code}
 fiExpr to_drop lam@(_, AnnLam _ _)
-  | go False bndrs 	-- Float in
+  | okToFloatInside bndrs 	-- Float in
+     -- NB: Must line up with noFloatIntoRhs (AnnLam...); see Trac #7088
   = mkLams bndrs (fiExpr to_drop body)
 
   | otherwise	 	-- Dump it all here
@@ -212,12 +213,6 @@ fiExpr to_drop lam@(_, AnnLam _ _)
 
   where
     (bndrs, body) = collectAnnBndrs lam
-
-    go seen_one_shot_id [] = seen_one_shot_id
-    go seen_one_shot_id (b:bs)
-      | isTyVar       b = go seen_one_shot_id bs
-      | isOneShotBndr b = go True bs
-      | otherwise       = False	 -- Give up at a non-one-shot Id
 \end{code}
 
 We don't float lets inwards past an SCC.
@@ -354,19 +349,27 @@ For @Case@, the possible ``drop points'' for the \tr{to_drop}
 bindings are: (a)~inside the scrutinee, (b)~inside one of the
 alternatives/default [default FVs always {\em first}!].
 
+Floating case expressions inward was added to fix Trac #5658: strict bindings
+not floated in. In particular, this change allows array indexing operations,
+which have a single DEFAULT alternative without any binders, to be floated
+inward. SIMD primops for unpacking SIMD vectors into an unboxed tuple of unboxed
+scalars also need to be floated inward, but unpacks have a single non-DEFAULT
+alternative that binds the elements of the tuple. We now therefore also support
+floating in cases with a single alternative that may bind values.
+
 \begin{code}
-fiExpr to_drop (_, AnnCase scrut case_bndr _ [(DEFAULT,[],rhs)])
+fiExpr to_drop (_, AnnCase scrut case_bndr _ [(con,alt_bndrs,rhs)])
   | isUnLiftedType (idType case_bndr)
   , exprOkForSideEffects (deAnnotate scrut)
   = wrapFloats shared_binds $
     fiExpr (case_float : rhs_binds) rhs
   where
-    case_float = FB (unitVarSet case_bndr) scrut_fvs 
-                    (FloatCase scrut' case_bndr DEFAULT [])
+    case_float = FB (mkVarSet (case_bndr : alt_bndrs)) scrut_fvs 
+                    (FloatCase scrut' case_bndr con alt_bndrs)
     scrut' = fiExpr scrut_binds scrut
     [shared_binds, scrut_binds, rhs_binds]
        = sepBindsByDropPoint False [freeVarsOf scrut, rhs_fvs] to_drop
-    rhs_fvs   = freeVarsOf rhs `delVarSet` case_bndr
+    rhs_fvs   = freeVarsOf rhs `delVarSetList` (case_bndr : alt_bndrs)
     scrut_fvs = freeVarsOf scrut
 
 fiExpr to_drop (_, AnnCase scrut case_bndr ty alts)
@@ -391,8 +394,18 @@ fiExpr to_drop (_, AnnCase scrut case_bndr ty alts)
 
     fi_alt to_drop (con, args, rhs) = (con, args, fiExpr to_drop rhs)
 
+okToFloatInside :: [Var] -> Bool
+okToFloatInside bndrs = all ok bndrs
+  where
+    ok b = not (isId b) || isOneShotBndr b
+    -- Push the floats inside there are no non-one-shot value binders
+
 noFloatIntoRhs :: AnnExpr' Var (UniqFM Var) -> Bool
-noFloatIntoRhs (AnnLam b _) = not (is_one_shot b)
+noFloatIntoRhs (AnnLam bndr e) 
+   = not (okToFloatInside (bndr:bndrs))
+     -- NB: Must line up with fiExpr (AnnLam...); see Trac #7088
+   where
+     (bndrs, _) = collectAnnBndrs e
 	-- IMPORTANT: don't say 'True' for a RHS with a one-shot lambda at the top.
 	-- This makes a big difference for things like
 	--	f x# = let x = I# x#
@@ -405,9 +418,6 @@ noFloatIntoRhs (AnnLam b _) = not (is_one_shot b)
 noFloatIntoRhs rhs = exprIsExpandable (deAnnotate' rhs)	
        -- We'd just float right back out again...
        -- Should match the test in SimplEnv.doFloatFromRhs
-
-is_one_shot :: Var -> Bool
-is_one_shot b = isId b && isOneShotBndr b
 \end{code}
 
 

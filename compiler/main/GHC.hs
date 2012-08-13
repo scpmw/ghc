@@ -10,6 +10,7 @@ module GHC (
         -- * Initialisation
         defaultErrorHandler,
         defaultCleanupHandler,
+        prettyPrintGhcErrors,
 
         -- * GHC Monad
         Ghc, GhcT, GhcMonad(..), HscEnv,
@@ -72,10 +73,12 @@ module GHC (
         modInfoIsExportedName,
         modInfoLookupName,
         modInfoIface,
+        modInfoSafe,
         lookupGlobalName,
         findGlobalAnns,
         mkPrintUnqualifiedForModule,
         ModIface(..),
+        SafeHaskellMode(..),
 
         -- * Querying the environment
         packageDbModules,
@@ -119,6 +122,11 @@ module GHC (
         BreakArray, setBreakOn, setBreakOff, getBreak,
 #endif
         lookupName,
+
+#ifdef GHCI
+        -- ** EXPERIMENTAL
+        setGHCiMonad,
+#endif
 
         -- * Abstract syntax elements
 
@@ -254,6 +262,7 @@ import HscMain
 import GhcMake
 import DriverPipeline   ( compile' )
 import GhcMonad
+import TcRnMonad        ( finalSafeMode )
 import TcRnTypes
 import Packages
 import NameSet
@@ -325,24 +334,24 @@ import Prelude hiding (init)
 -- the top level of your program.  The default handlers output the error
 -- message(s) to stderr and exit cleanly.
 defaultErrorHandler :: (ExceptionMonad m, MonadIO m)
-                    => LogAction -> FlushOut -> m a -> m a
-defaultErrorHandler la (FlushOut flushOut) inner =
+                    => FatalMessager -> FlushOut -> m a -> m a
+defaultErrorHandler fm (FlushOut flushOut) inner =
   -- top-level exception handler: any unrecognised exception is a compiler bug.
   ghandle (\exception -> liftIO $ do
            flushOut
            case fromException exception of
                 -- an IO exception probably isn't our fault, so don't panic
                 Just (ioe :: IOException) ->
-                  fatalErrorMsg' la (text (show ioe))
+                  fatalErrorMsg'' fm (show ioe)
                 _ -> case fromException exception of
                      Just UserInterrupt -> exitWith (ExitFailure 1)
                      Just StackOverflow ->
-                         fatalErrorMsg' la (text "stack overflow: use +RTS -K<size> to increase it")
+                         fatalErrorMsg'' fm "stack overflow: use +RTS -K<size> to increase it"
                      _ -> case fromException exception of
                           Just (ex :: ExitCode) -> throw ex
                           _ ->
-                              fatalErrorMsg' la
-                                  (text (show (Panic (show exception))))
+                              fatalErrorMsg'' fm
+                                  (show (Panic (show exception)))
            exitWith (ExitFailure 1)
          ) $
 
@@ -353,7 +362,7 @@ defaultErrorHandler la (FlushOut flushOut) inner =
                 case ge of
                      PhaseFailed _ code -> exitWith code
                      Signal _ -> exitWith (ExitFailure 1)
-                     _ -> do fatalErrorMsg' la (text (show ge))
+                     _ -> do fatalErrorMsg'' fm (show ge)
                              exitWith (ExitFailure 1)
             ) $
   inner
@@ -581,8 +590,9 @@ guessTarget str Nothing
         if looksLikeModuleName file
            then return (target (TargetModule (mkModuleName file)))
            else do
+        dflags <- getDynFlags
         throwGhcException
-                 (ProgramError (showSDoc $
+                 (ProgramError (showSDoc dflags $
                  text "target" <+> quotes (text file) <+> 
                  text "is not a module name or a source file"))
      where 
@@ -710,9 +720,11 @@ getModSummary :: GhcMonad m => ModuleName -> m ModSummary
 getModSummary mod = do
    mg <- liftM hsc_mod_graph getSession
    case [ ms | ms <- mg, ms_mod_name ms == mod, not (isBootSummary ms) ] of
-     [] -> throw $ mkApiErr (text "Module not part of module graph")
+     [] -> do dflags <- getDynFlags
+              throw $ mkApiErr dflags (text "Module not part of module graph")
      [ms] -> return ms
-     multiple -> throw $ mkApiErr (text "getModSummary is ambiguous: " <+> ppr multiple)
+     multiple -> do dflags <- getDynFlags
+                    throw $ mkApiErr dflags (text "getModSummary is ambiguous: " <+> ppr multiple)
 
 -- | Parse a module.
 --
@@ -737,6 +749,7 @@ typecheckModule pmod = do
                       HsParsedModule { hpm_module = parsedSource pmod,
                                        hpm_src_files = pm_extra_src_files pmod }
  details <- liftIO $ makeSimpleDetails hsc_env_tmp tc_gbl_env
+ safe    <- liftIO $ finalSafeMode (ms_hspp_opts ms) tc_gbl_env
  return $
      TypecheckedModule {
        tm_internals_          = (tc_gbl_env, details),
@@ -749,7 +762,8 @@ typecheckModule pmod = do
            minf_exports   = availsToNameSet $ md_exports details,
            minf_rdr_env   = Just (tcg_rdr_env tc_gbl_env),
            minf_instances = md_insts details,
-           minf_iface     = Nothing
+           minf_iface     = Nothing,
+           minf_safe      = safe
 #ifdef GHCI
           ,minf_modBreaks = emptyModBreaks
 #endif
@@ -823,12 +837,16 @@ data CoreModule
       -- | Type environment for types declared in this module
       cm_types    :: !TypeEnv,
       -- | Declarations
-      cm_binds    :: CoreProgram
+      cm_binds    :: CoreProgram,
+      -- | Safe Haskell mode
+      cm_safe     :: SafeHaskellMode
     }
 
 instance Outputable CoreModule where
-   ppr (CoreModule {cm_module = mn, cm_types = te, cm_binds = cb}) =
-      text "%module" <+> ppr mn <+> ppr te $$ vcat (map ppr cb)
+   ppr (CoreModule {cm_module = mn, cm_types = te, cm_binds = cb,
+                    cm_safe = sf})
+    = text "%module" <+> ppr mn <+> parens (ppr sf) <+> ppr te
+      $$ vcat (map ppr cb)
 
 -- | This is the way to get access to the Core bindings corresponding
 -- to a module. 'compileToCore' parses, typechecks, and
@@ -842,15 +860,6 @@ compileToCoreModule = compileCore False
 -- as to return simplified and tidied Core.
 compileToCoreSimplified :: GhcMonad m => FilePath -> m CoreModule
 compileToCoreSimplified = compileCore True
-{-
--- | Provided for backwards-compatibility: compileToCore returns just the Core
--- bindings, but for most purposes, you probably want to call
--- compileToCoreModule.
-compileToCore :: GhcMonad m => FilePath -> m [CoreBind]
-compileToCore fn = do
-   mod <- compileToCoreModule session fn
-   return $ cm_binds mod
--}
 -- | Takes a CoreModule and compiles the bindings therein
 -- to object code. The first argument is a bool flag indicating
 -- whether to run the simplifier.
@@ -865,7 +874,7 @@ compileCoreToObj simplify cm@(CoreModule{ cm_module = mName }) = do
   modLocation <- liftIO $ mkHiOnlyModLocation dflags (hiSuf dflags) cwd
                    ((moduleNameSlashes . moduleName) mName)
 
-  let modSummary = ModSummary { ms_mod = mName,
+  let modSum = ModSummary { ms_mod = mName,
          ms_hsc_src = ExtCoreFile,
          ms_location = modLocation,
          -- By setting the object file timestamp to Nothing,
@@ -884,7 +893,7 @@ compileCoreToObj simplify cm@(CoreModule{ cm_module = mName }) = do
       }
 
   hsc_env <- getSession
-  liftIO $ hscCompileCore hsc_env simplify modSummary (cm_binds cm)
+  liftIO $ hscCompileCore hsc_env simplify (cm_safe cm) modSum (cm_binds cm)
 
 
 compileCore :: GhcMonad m => Bool -> FilePath -> m CoreModule
@@ -902,7 +911,7 @@ compileCore simplify fn = do
        mod_guts <- coreModule `fmap`
                       -- TODO: space leaky: call hsc* directly?
                       (desugarModule =<< typecheckModule =<< parseModule modSummary)
-       liftM gutsToCoreModule $
+       liftM (gutsToCoreModule (mg_safe_haskell mod_guts)) $
          if simplify
           then do
              -- If simplify is true: simplify (hscSimplify), then tidy
@@ -919,18 +928,22 @@ compileCore simplify fn = do
   where -- two versions, based on whether we simplify (thus run tidyProgram,
         -- which returns a (CgGuts, ModDetails) pair, or not (in which case
         -- we just have a ModGuts.
-        gutsToCoreModule :: Either (CgGuts, ModDetails) ModGuts -> CoreModule
-        gutsToCoreModule (Left (cg, md))  = CoreModule {
+        gutsToCoreModule :: SafeHaskellMode
+                         -> Either (CgGuts, ModDetails) ModGuts
+                         -> CoreModule
+        gutsToCoreModule safe_mode (Left (cg, md)) = CoreModule {
           cm_module = cg_module cg,
-          cm_types = md_types md,
-          cm_binds = cg_binds cg
+          cm_types  = md_types md,
+          cm_binds  = cg_binds cg,
+          cm_safe   = safe_mode
         }
-        gutsToCoreModule (Right mg) = CoreModule {
+        gutsToCoreModule safe_mode (Right mg) = CoreModule {
           cm_module  = mg_module mg,
           cm_types   = typeEnvFromEntities (bindersOfBinds (mg_binds mg))
                                            (mg_tcs mg)
                                            (mg_fam_insts mg),
-          cm_binds   = mg_binds mg
+          cm_binds   = mg_binds mg,
+          cm_safe    = safe_mode
          }
 
 -- %************************************************************************
@@ -977,9 +990,10 @@ data ModuleInfo = ModuleInfo {
         minf_exports   :: NameSet, -- ToDo, [AvailInfo] like ModDetails?
         minf_rdr_env   :: Maybe GlobalRdrEnv,   -- Nothing for a compiled/package mod
         minf_instances :: [ClsInst],
-        minf_iface     :: Maybe ModIface
+        minf_iface     :: Maybe ModIface,
+        minf_safe      :: SafeHaskellMode
 #ifdef GHCI
-       ,minf_modBreaks :: ModBreaks 
+       ,minf_modBreaks :: ModBreaks
 #endif
   }
         -- We don't want HomeModInfo here, because a ModuleInfo applies
@@ -1020,6 +1034,7 @@ getPackageModuleInfo hsc_env mdl
                         minf_rdr_env   = Just $! availsToGlobalRdrEnv (moduleName mdl) avails,
                         minf_instances = error "getModuleInfo: instances for package module unimplemented",
                         minf_iface     = Just iface,
+                        minf_safe      = getSafeMode $ mi_trust iface,
                         minf_modBreaks = emptyModBreaks  
                 }))
 #else
@@ -1040,7 +1055,8 @@ getHomeModuleInfo hsc_env mdl =
                         minf_exports   = availsToNameSet (md_exports details),
                         minf_rdr_env   = mi_globals $! hm_iface hmi,
                         minf_instances = md_insts details,
-                        minf_iface     = Just iface
+                        minf_iface     = Just iface,
+                        minf_safe      = getSafeMode $ mi_trust iface
 #ifdef GHCI
                        ,minf_modBreaks = getModBreaks hmi
 #endif
@@ -1084,6 +1100,10 @@ modInfoLookupName minf name = withSession $ \hsc_env -> do
 
 modInfoIface :: ModuleInfo -> Maybe ModIface
 modInfoIface = minf_iface
+
+-- | Retrieve module safe haskell mode
+modInfoSafe :: ModuleInfo -> SafeHaskellMode
+modInfoSafe = minf_safe
 
 #ifdef GHCI
 modInfoModBreaks :: ModuleInfo -> ModBreaks
@@ -1165,7 +1185,8 @@ getModuleSourceAndFlags :: GhcMonad m => Module -> m (String, StringBuffer, DynF
 getModuleSourceAndFlags mod = do
   m <- getModSummary (moduleName mod)
   case ml_hs_file $ ms_location m of
-    Nothing -> throw $ mkApiErr (text "No source available for module " <+> ppr mod)
+    Nothing -> do dflags <- getDynFlags
+                  throw $ mkApiErr dflags (text "No source available for module " <+> ppr mod)
     Just sourceFile -> do
         source <- liftIO $ hGetStringBuffer sourceFile
         return (sourceFile, source, ms_hspp_opts m)
@@ -1181,7 +1202,9 @@ getTokenStream mod = do
   let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts  -> return ts
-    PFailed span err -> throw $ mkSrcErr (unitBag $ mkPlainErrMsg span err)
+    PFailed span err ->
+        do dflags <- getDynFlags
+           throw $ mkSrcErr (unitBag $ mkPlainErrMsg dflags span err)
 
 -- | Give even more information on the source than 'getTokenStream'
 -- This function allows reconstructing the source completely with
@@ -1192,7 +1215,9 @@ getRichTokenStream mod = do
   let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts -> return $ addSourceToTokens startLoc source ts
-    PFailed span err -> throw $ mkSrcErr (unitBag $ mkPlainErrMsg span err)
+    PFailed span err ->
+        do dflags <- getDynFlags
+           throw $ mkSrcErr (unitBag $ mkPlainErrMsg dflags span err)
 
 -- | Given a source location and a StringBuffer corresponding to this
 -- location, return a rich token stream with the source associated to the
@@ -1267,11 +1292,11 @@ findModule mod_name maybe_pkg = withSession $ \hsc_env -> do
            res <- findImportedModule hsc_env mod_name maybe_pkg
            case res of
              Found loc m | modulePackageId m /= this_pkg -> return m
-                         | otherwise -> modNotLoadedError m loc
+                         | otherwise -> modNotLoadedError dflags m loc
              err -> noModError dflags noSrcSpan mod_name err
 
-modNotLoadedError :: Module -> ModLocation -> IO a
-modNotLoadedError m loc = ghcError $ CmdLineError $ showSDoc $
+modNotLoadedError :: DynFlags -> Module -> ModLocation -> IO a
+modNotLoadedError dflags m loc = ghcError $ CmdLineError $ showSDoc dflags $
    text "module is not loaded:" <+> 
    quotes (ppr (moduleName m)) <+>
    parens (text (expectJust "modNotLoadedError" (ml_hs_file loc)))
@@ -1309,6 +1334,21 @@ lookupLoadedHomeModule mod_name = withSession $ \hsc_env ->
 isModuleTrusted :: GhcMonad m => Module -> m Bool
 isModuleTrusted m = withSession $ \hsc_env ->
     liftIO $ hscCheckSafe hsc_env m noSrcSpan
+
+-- | EXPERIMENTAL: DO NOT USE.
+-- 
+-- Set the monad GHCi lifts user statements into.
+--
+-- Checks that a type (in string form) is an instance of the
+-- @GHC.GHCi.GHCiSandboxIO@ type class. Sets it to be the GHCi monad if it is,
+-- throws an error otherwise.
+{-# WARNING setGHCiMonad "This is experimental! Don't use." #-}
+setGHCiMonad :: GhcMonad m => String -> m ()
+setGHCiMonad name = withSession $ \hsc_env -> do
+    ty <- liftIO $ hscIsGHCiMonad hsc_env name
+    modifySession $ \s ->
+        let ic = (hsc_IC s) { ic_monad = ty }
+        in s { hsc_IC = ic }
 
 getHistorySpan :: GhcMonad m => History -> m SrcSpan
 getHistorySpan h = withSession $ \hsc_env ->
@@ -1349,7 +1389,7 @@ parser str dflags filename =
    case unP Parser.parseModule (mkPState dflags buf loc) of
 
      PFailed span err   -> 
-         Left (unitBag (mkPlainErrMsg span err))
+         Left (unitBag (mkPlainErrMsg dflags span err))
 
      POk pst rdr_module ->
          let (warns,_) = getMessages pst in

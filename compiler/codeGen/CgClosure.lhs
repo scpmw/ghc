@@ -49,7 +49,6 @@ import Module
 import ListSetOps
 import Util
 import BasicTypes
-import StaticFlags
 import DynFlags
 import Outputable
 import FastString
@@ -81,11 +80,12 @@ cgTopRhsClosure id ccs binder_info upd_flag args body = do
   ; lf_info  <- mkClosureLFInfo id TopLevel [] upd_flag args
   ; srt_info <- getSRTInfo
   ; mod_name <- getModuleName
-  ; let descr         = closureDescription mod_name name
-	closure_info  = mkClosureInfo True id lf_info 0 0 srt_info descr
+  ; dflags   <- getDynFlags
+  ; let descr         = closureDescription dflags mod_name name
+	closure_info  = mkClosureInfo dflags True id lf_info 0 0 srt_info descr
 	closure_label = mkLocalClosureLabel name $ idCafInfo id
     	cg_id_info    = stableIdInfo id (mkLblExpr closure_label) lf_info
-	closure_rep   = mkStaticClosureFields closure_info ccs True []
+	closure_rep   = mkStaticClosureFields dflags closure_info ccs True []
 
   	 -- BUILD THE OBJECT, AND GENERATE INFO TABLE (IF NECESSARY)
   ; emitDataLits closure_label closure_rep
@@ -120,11 +120,12 @@ cgStdRhsClosure bndr _cc _bndr_info _fvs _args _body lf_info payload
   {	-- LAY OUT THE OBJECT
     amodes <- getArgAmodes payload
   ; mod_name <- getModuleName
+  ; dflags <- getDynFlags
   ; let (tot_wds, ptr_wds, amodes_w_offsets) 
-	    = mkVirtHeapOffsets (isLFThunk lf_info) amodes
+	    = mkVirtHeapOffsets dflags (isLFThunk lf_info) amodes
 
-	descr	     = closureDescription mod_name (idName bndr)
-	closure_info = mkClosureInfo False 	-- Not static
+	descr	     = closureDescription dflags mod_name (idName bndr)
+	closure_info = mkClosureInfo dflags False 	-- Not static
 				     bndr lf_info tot_wds ptr_wds 
 				     NoC_SRT	-- No SRT for a std-form closure
 				     descr
@@ -169,14 +170,15 @@ cgRhsClosure bndr cc bndr_info fvs upd_flag args body = do
   ; fv_infos <- mapFCs getCgIdInfo reduced_fvs
   ; srt_info <- getSRTInfo
   ; mod_name <- getModuleName
+  ; dflags <- getDynFlags
   ; let	bind_details :: [(CgIdInfo, VirtualHpOffset)]
 	(tot_wds, ptr_wds, bind_details) 
-	   = mkVirtHeapOffsets (isLFThunk lf_info) (map add_rep fv_infos)
+	   = mkVirtHeapOffsets dflags (isLFThunk lf_info) (map add_rep fv_infos)
 
 	add_rep info = (cgIdInfoArgRep info, info)
 
-	descr	     = closureDescription mod_name name
-	closure_info = mkClosureInfo False	-- Not static
+	descr	     = closureDescription dflags mod_name name
+	closure_info = mkClosureInfo dflags False	-- Not static
 				     bndr lf_info tot_wds ptr_wds
 				     srt_info descr
 
@@ -200,7 +202,7 @@ cgRhsClosure bndr cc bndr_info fvs upd_flag args body = do
 		-- Compile the body
 	; closureCodeBody bndr_info closure_info cc args body })
 
-  ; saveContext (entryLabelFromCI closure_info)
+  ; saveContext (entryLabelFromCI dflags closure_info)
 
 	-- BUILD THE OBJECT
   ; let
@@ -273,10 +275,12 @@ Node points to closure is available. -- HWL
 \begin{code}
 closureCodeBody _binder_info cl_info cc args body 
   = ASSERT( length args > 0 )
-  do { 	-- Get the current virtual Sp (it might not be zero, 
+  do {
+    dflags <- getDynFlags
+        -- Get the current virtual Sp (it might not be zero, 
 	-- eg. if we're compiling a let-no-escape).
-    vSp <- getVirtSp
-  ; let (reg_args, other_args) = assignCallRegs (addIdReps args)
+  ; vSp <- getVirtSp
+  ; let (reg_args, other_args) = assignCallRegs dflags (addIdReps args)
 	(sp_top, stk_args)     = mkVirtStkOffsets vSp other_args
 
 	-- Allocate the global ticky counter
@@ -288,7 +292,8 @@ closureCodeBody _binder_info cl_info cc args body
   ; setTickyCtrLabel ticky_ctr_lbl $ do
 
     	-- Emit the slow-entry code
-  { reg_save_code <- mkSlowEntryCode cl_info reg_args
+  { dflags <- getDynFlags
+  ; reg_save_code <- mkSlowEntryCode dflags cl_info reg_args
 
 	-- Emit the main entry code
   ; blks <- forkProc $
@@ -339,13 +344,13 @@ The slow entry point is used in two places:
  (b) returning from a heap-check failure
 
 \begin{code}
-mkSlowEntryCode :: ClosureInfo -> [(Id,GlobalReg)] -> FCode CmmStmts
+mkSlowEntryCode :: DynFlags -> ClosureInfo -> [(Id,GlobalReg)] -> FCode CmmStmts
 -- If this function doesn't have a specialised ArgDescr, we need
 -- to generate the function's arg bitmap, slow-entry code, and
 -- register-save code for the heap-check failure
 -- Here, we emit the slow-entry code, and 
 -- return the register-save assignments
-mkSlowEntryCode cl_info reg_args
+mkSlowEntryCode dflags cl_info reg_args
   | Just (_, ArgGen _) <- closureFunInfo cl_info
   = do 	{ emitSimpleProc slow_lbl (emitStmts load_stmts)
 	; return save_stmts }
@@ -378,7 +383,7 @@ mkSlowEntryCode cl_info reg_args
      stk_adj_pop   = CmmAssign spReg (cmmRegOffW spReg final_stk_offset)
      stk_adj_push  = CmmAssign spReg (cmmRegOffW spReg (- final_stk_offset))
      live_regs     = Just $ map snd reps_w_regs
-     jump_to_entry = CmmJump (mkLblExpr (entryLabelFromCI cl_info)) live_regs
+     jump_to_entry = CmmJump (mkLblExpr (entryLabelFromCI dflags cl_info)) live_regs
 \end{code}
 
 
@@ -391,7 +396,8 @@ mkSlowEntryCode cl_info reg_args
 \begin{code}
 thunkWrapper:: ClosureInfo -> Code -> Code
 thunkWrapper closure_info thunk_code = do
-  { let node_points = nodeMustPointToIt (closureLFInfo closure_info)
+  { dflags <- getDynFlags
+  ; let node_points = nodeMustPointToIt dflags (closureLFInfo closure_info)
 
     -- HWL: insert macros for GrAnSim; 2 versions depending on liveness of node
     -- (we prefer fetchAndReschedule-style context switches to yield ones)
@@ -415,7 +421,8 @@ funWrapper :: ClosureInfo 	-- Closure whose code body this is
 	   -> Code		-- Body of function being compiled
 	   -> Code
 funWrapper closure_info arg_regs reg_save_code fun_body = do
-  { let node_points = nodeMustPointToIt (closureLFInfo closure_info)
+  { dflags <- getDynFlags
+  ; let node_points = nodeMustPointToIt dflags (closureLFInfo closure_info)
         live        = Just $ map snd arg_regs
 
   {-
@@ -476,7 +483,7 @@ emitBlackHoleCode is_single_entry = do
   -- Note the eager-blackholing check is here rather than in blackHoleOnEntry,
   -- because emitBlackHoleCode is called from CmmParse.
 
-  let  eager_blackholing =  not opt_SccProfilingOn
+  let  eager_blackholing =  not (dopt Opt_SccProfilingOn dflags)
                          && dopt Opt_EagerBlackHoling dflags
              -- Profiling needs slop filling (to support LDV
              -- profiling), so currently eager blackholing doesn't
@@ -485,7 +492,7 @@ emitBlackHoleCode is_single_entry = do
   whenC eager_blackholing $ do
     tickyBlackHole (not is_single_entry)
     stmtsC [
-       CmmStore (cmmOffsetW (CmmReg nodeReg) fixedHdrSize)
+       CmmStore (cmmOffsetW (CmmReg nodeReg) (fixedHdrSize dflags))
                 (CmmReg (CmmGlobal CurrentTSO)),
        CmmCall (CmmPrim MO_WriteBarrier Nothing) [] [] CmmMayReturn,
        CmmStore (CmmReg nodeReg) (CmmReg (CmmGlobal EagerBlackholeInfo))
@@ -508,9 +515,11 @@ setupUpdate closure_info code
       else do
           tickyPushUpdateFrame
           dflags <- getDynFlags
-          if not opt_SccProfilingOn && dopt Opt_EagerBlackHoling dflags
-              then pushBHUpdateFrame (CmmReg nodeReg) code
-              else pushUpdateFrame   (CmmReg nodeReg) code
+          if blackHoleOnEntry closure_info &&
+             not (dopt Opt_SccProfilingOn dflags) &&
+             dopt Opt_EagerBlackHoling dflags
+               then pushBHUpdateFrame (CmmReg nodeReg) code
+               else pushUpdateFrame   (CmmReg nodeReg) code
   
   | otherwise	-- A static closure
   = do 	{ tickyUpdateBhCaf closure_info
@@ -573,7 +582,9 @@ link_caf cl_info _is_upd = do
   ; let	use_cc   = costCentreFrom (CmmReg nodeReg)
         blame_cc = use_cc
         tso      = CmmReg (CmmGlobal CurrentTSO)
-  ; hp_offset <- allocDynClosure bh_cl_info use_cc blame_cc [(tso,fixedHdrSize)]
+  ; dflags    <- getDynFlags
+  ; hp_offset <- allocDynClosure bh_cl_info use_cc blame_cc
+                                 [(tso, fixedHdrSize dflags)]
   ; hp_rel    <- getHpRelOffset hp_offset
 
 	-- Call the RTS function newCAF to add the CAF to the CafList
@@ -593,7 +604,7 @@ link_caf cl_info _is_upd = do
         -- re-enter R1.  Doing this directly is slightly dodgy; we're
         -- assuming lots of things, like the stack pointer hasn't
         -- moved since we entered the CAF.
-        let target = entryCode (closureInfoPtr (CmmReg nodeReg)) in
+        let target = entryCode dflags (closureInfoPtr (CmmReg nodeReg)) in
         stmtC (CmmJump target $ Just [node])
 
   ; returnFC hp_rel }
@@ -614,13 +625,14 @@ name of the data constructor itself.  Otherwise it is determined by
 @closureDescription@ from the let binding information.
 
 \begin{code}
-closureDescription :: Module		-- Module
-		   -> Name		-- Id of closure binding
-		   -> String
+closureDescription :: DynFlags
+                   -> Module    -- Module
+                   -> Name      -- Id of closure binding
+                   -> String
 	-- Not called for StgRhsCon which have global info tables built in
 	-- CgConTbls.lhs with a description generated from the data constructor
-closureDescription mod_name name
-  = showSDocDumpOneLine (char '<' <>
+closureDescription dflags mod_name name
+  = showSDocDumpOneLine dflags (char '<' <>
 		    (if isExternalName name
 		      then ppr name -- ppr will include the module name prefix
 		      else pprModule mod_name <> char '.' <> ppr name) <>

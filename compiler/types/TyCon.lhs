@@ -22,7 +22,6 @@ module TyCon(
         -- ** Constructing TyCons
         mkAlgTyCon,
         mkClassTyCon,
-        mkIParamTyCon,
         mkFunTyCon,
         mkPrimTyCon,
         mkKindTyCon,
@@ -30,7 +29,7 @@ module TyCon(
         mkTupleTyCon,
         mkSynTyCon,
         mkForeignTyCon,
-        mkPromotedDataTyCon,
+        mkPromotedDataCon,
         mkPromotedTyCon,
 
         -- ** Predicates on TyCons
@@ -42,7 +41,7 @@ module TyCon(
         isSynTyCon, isClosedSynTyCon,
         isDecomposableTyCon,
         isForeignTyCon, 
-        isPromotedDataTyCon, isPromotedTypeTyCon,
+        isPromotedDataCon, isPromotedTyCon,
 
         isInjectiveTyCon,
         isDataTyCon, isProductTyCon, isEnumerationTyCon,
@@ -65,13 +64,14 @@ module TyCon(
         tyConStupidTheta,
         tyConArity,
         tyConParent,
-        tyConTuple_maybe, tyConClass_maybe, tyConIP_maybe,
+        tyConTuple_maybe, tyConClass_maybe,
         tyConFamInst_maybe, tyConFamInstSig_maybe, tyConFamilyCoercion_maybe,
         synTyConDefn, synTyConRhs, synTyConType,
         tyConExtName,           -- External name for foreign types
         algTyConRhs,
         newTyConRhs, newTyConEtadRhs, unwrapNewTyCon_maybe,
         tupleTyConBoxity, tupleTyConSort, tupleTyConArity,
+        promotedDataCon, promotedTyCon,
 
         -- ** Manipulating TyCons
         tcExpandTyCon_maybe, coreExpandTyCon_maybe,
@@ -89,7 +89,6 @@ module TyCon(
 
 import {-# SOURCE #-} TypeRep ( Kind, Type, PredType )
 import {-# SOURCE #-} DataCon ( DataCon, isVanillaDataCon )
-import {-# SOURCE #-} IParam  ( ipTyConName )
 
 import Var
 import Class
@@ -154,8 +153,6 @@ See also Note [Wrappers for data instance tycons] in MkId.lhs
         data instance T Int = T1 | T2 Bool
 
   Here T is the "family TyCon".
-
-* Reply "yes" to isDataFamilyTyCon, and isFamilyTyCon
 
 * Reply "yes" to isDataFamilyTyCon, and isFamilyTyCon
 
@@ -393,7 +390,7 @@ data TyCon
     }
 
   -- | Represents promoted data constructor.
-  | PromotedDataTyCon {         -- See Note [Promoted data constructors]
+  | PromotedDataCon {         -- See Note [Promoted data constructors]
         tyConUnique :: Unique, -- ^ Same Unique as the data constructor
         tyConName   :: Name,   -- ^ Same Name as the data constructor
         tyConArity  :: Arity,
@@ -402,7 +399,7 @@ data TyCon
     }
 
   -- | Represents promoted type constructor.
-  | PromotedTypeTyCon {
+  | PromotedTyCon {
         tyConUnique :: Unique, -- ^ Same Unique as the type constructor
         tyConName   :: Name,   -- ^ Same Name as the type constructor
         tyConArity  :: Arity,  -- ^ n if ty_con :: * -> ... -> *  n times
@@ -514,10 +511,6 @@ data TyConParent
   | ClassTyCon
         Class           -- INVARIANT: the classTyCon of this Class is the current tycon
 
-  -- | Associated type of a implicit parameter.
-  | IPTyCon
-        (IPName Name)
-
   -- | An *associated* type of a class.
   | AssocFamilyTyCon
         Class           -- The class in whose declaration the family is declared
@@ -555,7 +548,6 @@ data TyConParent
 instance Outputable TyConParent where
     ppr NoParentTyCon           = text "No parent"
     ppr (ClassTyCon cls)        = text "Class parent" <+> ppr cls
-    ppr (IPTyCon n)             = text "IP parent" <+> ppr n
     ppr (AssocFamilyTyCon cls)  = text "Class parent (assoc. family)" <+> ppr cls
     ppr (FamInstTyCon _ tc tys) = text "Family parent (family instance)" <+> ppr tc <+> sep (map ppr tys)
 
@@ -564,7 +556,6 @@ okParent :: Name -> TyConParent -> Bool
 okParent _       NoParentTyCon               = True
 okParent tc_name (AssocFamilyTyCon cls)      = tc_name `elem` map tyConName (classATs cls)
 okParent tc_name (ClassTyCon cls)            = tc_name == tyConName (classTyCon cls)
-okParent tc_name (IPTyCon ip)                = tc_name == ipTyConName ip
 okParent _       (FamInstTyCon _ fam_tc tys) = tyConArity fam_tc == length tys
 
 isNoParent :: TyConParent -> Bool
@@ -588,7 +579,7 @@ data SynTyConRhs
 Note [Promoted data constructors]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 A data constructor can be promoted to become a type constructor,
-via the PromotedDataTyCon alternative in TyCon.
+via the PromotedTyCon alternative in TyCon.
 
 * Only "vanilla" data constructors are promoted; ones with no GADT
   stuff, no existentials, etc.  We might generalise this later.
@@ -602,7 +593,7 @@ via the PromotedDataTyCon alternative in TyCon.
     kind of (promoted) tycon  Just :: forall (a:box). a -> Maybe a
   The kind is not identical to the type, because of the */box
   kind signature on the forall'd variable; so the tc_kind field of
-  PromotedDataTyCon is not identical to the dataConUserType of the
+  PromotedTyCon is not identical to the dataConUserType of the
   DataCon.  But it's the same modulo changing the variable kinds,
   done by Kind.promoteType.
 
@@ -859,11 +850,6 @@ mkClassTyCon :: Name -> Kind -> [TyVar] -> AlgTyConRhs -> Class -> RecFlag -> Ty
 mkClassTyCon name kind tyvars rhs clas is_rec =
   mkAlgTyCon name kind tyvars Nothing [] rhs (ClassTyCon clas) is_rec False
 
--- | Simpler specialization of 'mkAlgTyCon' for implicit paramaters
-mkIParamTyCon :: Name -> Kind -> TyVar -> AlgTyConRhs -> RecFlag -> TyCon
-mkIParamTyCon name kind tyvar rhs is_rec =
-  mkAlgTyCon name kind [tyvar] Nothing [] rhs NoParentTyCon is_rec False
-
 mkTupleTyCon :: Name
              -> Kind    -- ^ Kind of the resulting 'TyCon'
              -> Arity   -- ^ Arity of the tuple
@@ -945,10 +931,11 @@ mkSynTyCon name kind tyvars rhs parent
 
 -- | Create a promoted data constructor 'TyCon'
 -- Somewhat dodgily, we give it the same Name
--- as the data constructor itself
-mkPromotedDataTyCon :: DataCon -> Name -> Unique -> Kind -> Arity -> TyCon
-mkPromotedDataTyCon con name unique kind arity
-  = PromotedDataTyCon {
+-- as the data constructor itself; when we pretty-print
+-- the TyCon we add a quote; see the Outputable TyCon instance
+mkPromotedDataCon :: DataCon -> Name -> Unique -> Kind -> Arity -> TyCon
+mkPromotedDataCon con name unique kind arity
+  = PromotedDataCon {
         tyConName   = name,
         tyConUnique = unique,
         tyConArity  = arity,
@@ -961,7 +948,7 @@ mkPromotedDataTyCon con name unique kind arity
 -- as the type constructor itself
 mkPromotedTyCon :: TyCon -> Kind -> TyCon
 mkPromotedTyCon tc kind
-  = PromotedTypeTyCon {
+  = PromotedTyCon {
         tyConName   = getName tc,
         tyConUnique = getUnique tc,
         tyConArity  = tyConArity tc,
@@ -1018,9 +1005,9 @@ isDataTyCon :: TyCon -> Bool
 --     get an info table.  The family declaration 'TyCon' does not
 isDataTyCon (AlgTyCon {algTcRhs = rhs})
   = case rhs of
-        DataFamilyTyCon {} -> False
         DataTyCon {}       -> True
         NewTyCon {}        -> False
+        DataFamilyTyCon {} -> False
         AbstractTyCon {}   -> False      -- We don't know, so return False
 isDataTyCon (TupleTyCon {tyConTupleSort = sort}) = isBoxed (tupleSortBoxity sort)
 isDataTyCon _ = False
@@ -1038,7 +1025,7 @@ isDistinctTyCon (AlgTyCon {algTcRhs = rhs}) = isDistinctAlgRhs rhs
 isDistinctTyCon (FunTyCon {})               = True
 isDistinctTyCon (TupleTyCon {})             = True
 isDistinctTyCon (PrimTyCon {})              = True
-isDistinctTyCon (PromotedDataTyCon {})      = True
+isDistinctTyCon (PromotedDataCon {})        = True
 isDistinctTyCon _                           = False
 
 isDistinctAlgRhs :: AlgTyConRhs -> Bool
@@ -1196,15 +1183,25 @@ isForeignTyCon :: TyCon -> Bool
 isForeignTyCon (PrimTyCon {tyConExtName = Just _}) = True
 isForeignTyCon _                                   = False
 
--- | Is this a PromotedDataTyCon?
-isPromotedDataTyCon :: TyCon -> Bool
-isPromotedDataTyCon (PromotedDataTyCon {}) = True
-isPromotedDataTyCon _                      = False
+-- | Is this a PromotedDataCon?
+isPromotedDataCon :: TyCon -> Bool
+isPromotedDataCon (PromotedDataCon {}) = True
+isPromotedDataCon _                    = False
 
--- | Is this a PromotedTypeTyCon?
-isPromotedTypeTyCon :: TyCon -> Bool
-isPromotedTypeTyCon (PromotedTypeTyCon {}) = True
-isPromotedTypeTyCon _                      = False
+-- | Is this a PromotedTyCon?
+isPromotedTyCon :: TyCon -> Bool
+isPromotedTyCon (PromotedTyCon {}) = True
+isPromotedTyCon _                  = False
+
+-- | Retrieves the promoted DataCon if this is a PromotedDataTyCon;
+-- Panics otherwise
+promotedDataCon :: TyCon -> DataCon
+promotedDataCon = dataCon
+
+-- | Retrieves the promoted TypeCon if this is a PromotedTypeTyCon;
+-- Panics otherwise
+promotedTyCon :: TyCon -> TyCon
+promotedTyCon = ty_con
 
 -- | Identifies implicit tycons that, in particular, do not go into interface
 -- files (because they are implicitly reconstructed when the interface is
@@ -1403,12 +1400,6 @@ tyConTuple_maybe :: TyCon -> Maybe TupleSort
 tyConTuple_maybe (TupleTyCon {tyConTupleSort = sort}) = Just sort
 tyConTuple_maybe _                                    = Nothing
 
--- | If this 'TyCon' is that for implicit parameter, return the IP it is for.
--- Otherwise returns @Nothing@
-tyConIP_maybe :: TyCon -> Maybe (IPName Name)
-tyConIP_maybe (AlgTyCon {algTcParent = IPTyCon ip}) = Just ip
-tyConIP_maybe _                                     = Nothing
-
 ----------------------------------------------------------------------------
 tyConParent :: TyCon -> TyConParent
 tyConParent (AlgTyCon {algTcParent = parent}) = parent
@@ -1480,9 +1471,11 @@ instance Outputable TyCon where
   ppr tc = pprPromotionQuote tc <> ppr (tyConName tc)
 
 pprPromotionQuote :: TyCon -> SDoc
-pprPromotionQuote (PromotedTypeTyCon {}) = char '\''
-pprPromotionQuote (PromotedDataTyCon {}) = char '\''
-pprPromotionQuote _                      = empty
+pprPromotionQuote (PromotedDataCon {}) = char '\''   -- Quote promoted DataCons in types
+pprPromotionQuote (PromotedTyCon {})   = ifPprDebug (char '\'') 
+pprPromotionQuote _                    = empty       -- However, we don't quote TyCons in kinds
+                                                     -- e.g.   type family T a :: Bool -> *
+                                                     -- cf Trac #5952.  Except with -dppr-debug
 
 instance NamedThing TyCon where
     getName = tyConName

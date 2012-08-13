@@ -328,7 +328,12 @@ discardTasksExcept (Task *keep)
     for (task = all_tasks; task != NULL; task=next) {
         next = task->all_next;
         if (task != keep) {
-            debugTrace(DEBUG_sched, "discarding task %ld", (long)TASK_ID(task));
+            debugTrace(DEBUG_sched, "discarding task %" FMT_SizeT "", (size_t)TASK_ID(task));
+            // Note that we do not traceTaskDelete here because
+            // we are not really deleting a task.
+            // The OS threads for all these tasks do not exist in
+            // this process (since we're currently
+            // in the child of a forkProcess).
             freeTask(task);
         }
     }
@@ -391,20 +396,9 @@ workerTaskStop (Task *task)
 
     RELEASE_LOCK(&all_tasks_mutex);
 
+    traceTaskDelete(task);
+
     freeTask(task);
-}
-
-#endif
-
-#ifdef DEBUG
-
-static void *taskId(Task *task)
-{
-#ifdef THREADED_RTS
-    return (void *)task->id;
-#else
-    return (void *)task;
-#endif
 }
 
 #endif
@@ -438,6 +432,9 @@ workerStart(Task *task)
 
     newInCall(task);
 
+    // Everything set up; emit the event before the worker starts working.
+    traceTaskCreate(task, cap);
+
     scheduleWorker(cap,task);
 }
 
@@ -456,6 +453,8 @@ startWorkerTask (Capability *cap)
   // worker thread reads it.
   ACQUIRE_LOCK(&task->lock);
 
+  // We don't emit a task creation event here, but in workerStart,
+  // where the kernel thread id is known.
   task->cap = cap;
 
   // Give the capability directly to the worker; we can't let anyone
@@ -484,7 +483,8 @@ interruptWorkerTask (Task *task)
   ASSERT(osThreadId() != task->id);    // seppuku not allowed
   ASSERT(task->incall->suspended_tso); // use this only for FFI calls
   interruptOSThread(task->id);
-  debugTrace(DEBUG_sched, "interrupted worker task %p", taskId(task));
+  debugTrace(DEBUG_sched, "interrupted worker task %#" FMT_HexWord64,
+             serialisableTaskId(task));
 }
 
 #endif /* THREADED_RTS */
@@ -498,7 +498,8 @@ printAllTasks(void)
 {
     Task *task;
     for (task = all_tasks; task != NULL; task = task->all_next) {
-	debugBelch("task %p is %s, ", taskId(task), task->stopped ? "stopped" : "alive");
+	debugBelch("task %#" FMT_HexWord64 " is %s, ", serialisableTaskId(task),
+                   task->stopped ? "stopped" : "alive");
 	if (!task->stopped) {
 	    if (task->cap) {
 		debugBelch("on capability %d, ", task->cap->no);

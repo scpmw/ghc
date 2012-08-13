@@ -1,11 +1,6 @@
 -- Cmm representations using Hoopl's Graph CmmNode e x.
 {-# LANGUAGE GADTs #-}
 {-# OPTIONS_GHC -fno-warn-warnings-deprecations #-}
-{-# OPTIONS_GHC -fno-warn-incomplete-patterns #-}
-#if __GLASGOW_HASKELL__ >= 703
--- GHC 7.0.1 improved incomplete pattern warnings with GADTs
-{-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
-#endif
 
 module Cmm (
      -- * Cmm top-level datatypes
@@ -19,7 +14,7 @@ module Cmm (
      CmmReplGraph, GenCmmReplGraph, CmmFwdRewrite, CmmBwdRewrite,
    
      -- * Info Tables
-     CmmTopInfo(..), CmmStackInfo(..), CmmInfoTable(..),
+     CmmTopInfo(..), CmmStackInfo(..), CmmInfoTable(..), topInfoTable,
      ClosureTypeInfo(..), 
      C_SRT(..), needsSRT,
      ProfilingInfo(..), ConstrDescription, 
@@ -32,9 +27,9 @@ module Cmm (
 import CLabel
 import BlockId
 import CmmNode
-import OptimizationFuel as F
 import SMRep
 import CmmExpr
+import UniqSupply
 import Compiler.Hoopl
 
 import Data.Word        ( Word8 )
@@ -69,8 +64,6 @@ type CmmGroup = GenCmmGroup CmmStatics CmmTopInfo CmmGraph
 --   (a) C--, i.e. populated with various C-- constructs
 --       (Cmm and RawCmm in OldCmm.hs)
 --   (b) Native code, populated with data/instructions
---
--- A second family of instances based on Hoopl is in Cmm.hs.
 
 -- | A top-level chunk, abstracted over the type of the contents of
 -- the basic blocks (Cmm or instructions are the likely instantiations).
@@ -95,21 +88,31 @@ data GenCmmGraph n = CmmGraph { g_entry :: BlockId, g_graph :: Graph n C C }
 type CmmBlock = Block CmmNode C C
 
 type CmmReplGraph e x = GenCmmReplGraph CmmNode e x
-type GenCmmReplGraph n e x = FuelUniqSM (Maybe (Graph n e x))
-type CmmFwdRewrite f = FwdRewrite FuelUniqSM CmmNode f
-type CmmBwdRewrite f = BwdRewrite FuelUniqSM CmmNode f
+type GenCmmReplGraph n e x = UniqSM (Maybe (Graph n e x))
+type CmmFwdRewrite f = FwdRewrite UniqSM CmmNode f
+type CmmBwdRewrite f = BwdRewrite UniqSM CmmNode f
 
 -----------------------------------------------------------------------------
 --     Info Tables
 -----------------------------------------------------------------------------
 
-data CmmTopInfo   = TopInfo {info_tbl :: CmmInfoTable, stack_info :: CmmStackInfo}
+data CmmTopInfo   = TopInfo { info_tbls  :: BlockEnv CmmInfoTable
+                            , stack_info :: CmmStackInfo }
+
+topInfoTable :: GenCmmDecl a CmmTopInfo (GenCmmGraph n) -> Maybe CmmInfoTable
+topInfoTable (CmmProc infos _ g) = mapLookup (g_entry g) (info_tbls infos)
+topInfoTable _                   = Nothing
 
 data CmmStackInfo
    = StackInfo {
-       arg_space :: ByteOff,            -- XXX: comment?
-       updfr_space :: Maybe ByteOff     -- XXX: comment?
-   }
+       arg_space :: ByteOff,
+               -- number of bytes of arguments on the stack on entry to the
+               -- the proc.  This is filled in by StgCmm.codeGen, and used
+               -- by the stack allocator later.
+       updfr_space :: Maybe ByteOff
+               -- XXX: this never contains anything useful, but it should.
+               -- See comment in CmmLayoutStack.
+  }
 
 -- | Info table as a haskell data type
 data CmmInfoTable
@@ -119,7 +122,6 @@ data CmmInfoTable
       cit_prof :: ProfilingInfo,
       cit_srt  :: C_SRT
     }
-  | CmmNonInfoTable   -- Procedure doesn't need an info table
 
 data ProfilingInfo
   = NoProfilingInfo

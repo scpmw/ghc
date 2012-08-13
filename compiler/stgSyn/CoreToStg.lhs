@@ -278,7 +278,7 @@ mkTopStgRhs :: DynFlags -> FreeVarsInfo
             -> StgExpr
             -> StgRhs
 
-mkTopStgRhs _ rhs_fvs srt binder_info annot (StgLam _ bndrs body)
+mkTopStgRhs _ rhs_fvs srt binder_info annot (StgLam bndrs body)
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   ReEntrant
@@ -344,7 +344,7 @@ coreToStgExpr expr@(Lam _ _)
         fvs             = args' `minusFVBinders` body_fvs
         escs            = body_escs `delVarSetList` args'
         result_expr | null args' = body
-                    | otherwise  = StgLam (exprType expr) args' body
+                    | otherwise  = StgLam args' body
 
     return (result_expr, fvs, escs)
 
@@ -363,6 +363,18 @@ coreToStgExpr (Cast expr _)
   = coreToStgExpr expr
 
 -- Cases require a little more real work.
+
+coreToStgExpr (Case scrut _ _ []) 
+  = coreToStgExpr scrut   
+    -- See Note [Empty case alternatives] in CoreSyn If the case
+    -- alternatives are empty, the scrutinee must diverge or raise an
+    -- exception, so we can just dive into it.
+    --
+    -- Of course this may seg-fault if the scrutinee *does* return.  A
+    -- belt-and-braces approach would be to move this case into the
+    -- code generator, and put a return point anyway that calls a
+    -- runtime system error function.
+        
 
 coreToStgExpr (Case scrut bndr _ alts) = do
     (alts2, alts_fvs, alts_escs)
@@ -445,15 +457,15 @@ coreToStgExpr e = pprPanic "coreToStgExpr" (ppr e)
 
 \begin{code}
 mkStgAltType :: Id -> [CoreAlt] -> AltType
-mkStgAltType bndr alts
-  = case tyConAppTyCon_maybe (repType (idType bndr)) of
-        Just tc | isUnboxedTupleTyCon tc -> UbxTupAlt tc
-                | isUnLiftedTyCon tc     -> PrimAlt tc
-                | isAbstractTyCon tc     -> look_for_better_tycon
-                | isAlgTyCon tc          -> AlgAlt tc
-                | otherwise              -> ASSERT2( _is_poly_alt_tycon tc, ppr tc )
-                                            PolyAlt
-        Nothing                          -> PolyAlt
+mkStgAltType bndr alts = case repType (idType bndr) of
+    UnaryRep rep_ty -> case tyConAppTyCon_maybe rep_ty of
+        Just tc | isUnLiftedTyCon tc -> PrimAlt tc
+                | isAbstractTyCon tc -> look_for_better_tycon
+                | isAlgTyCon tc      -> AlgAlt tc
+                | otherwise          -> ASSERT2( _is_poly_alt_tycon tc, ppr tc )
+                                        PolyAlt
+        Nothing                      -> PolyAlt
+    UbxTupleRep rep_tys -> UbxTupAlt (length rep_tys)
 
   where
    _is_poly_alt_tycon tc
@@ -619,7 +631,8 @@ coreToStgArgs (arg : args) = do         -- Non-type argument
         arg_ty = exprType arg
         stg_arg_ty = stgArgType stg_arg
         bad_args = (isUnLiftedType arg_ty && not (isUnLiftedType stg_arg_ty))
-                || (typePrimRep arg_ty /= typePrimRep stg_arg_ty)
+                || (map typePrimRep (flattenRepType (repType arg_ty))
+                        /= map typePrimRep (flattenRepType (repType stg_arg_ty)))
         -- In GHCi we coerce an argument of type BCO# (unlifted) to HValue (lifted),
         -- and pass it to a function expecting an HValue (arg_ty).  This is ok because
         -- we can treat an unlifted value as lifted.  But the other way round
@@ -779,7 +792,7 @@ mkStgRhs :: FreeVarsInfo -> SRT -> StgBinderInfo -> (StgExpr -> StgExpr) -> StgE
 
 mkStgRhs _ _ _ _ (StgConApp con args) = StgRhsCon noCCS con args
 
-mkStgRhs rhs_fvs srt binder_info annot (StgLam _ bndrs body)
+mkStgRhs rhs_fvs srt binder_info annot (StgLam bndrs body)
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   ReEntrant

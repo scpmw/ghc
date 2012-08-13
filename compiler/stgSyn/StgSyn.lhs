@@ -35,7 +35,7 @@ module StgSyn (
 
         -- utils
         stgBindHasCafRefs, stgArgHasCafRefs, stgRhsArity,
-        isDllConApp, isStgTypeArg,
+        isDllConApp,
         stgArgType,
 
         pprStgBinding, pprStgBindings, pprStgBindingsWithSRTs,
@@ -59,13 +59,13 @@ import Packages    ( isDllName )
 import Platform
 import PprCore     ( {- instances -} )
 import PrimOp      ( PrimOp, PrimCall )
-import StaticFlags ( opt_SccProfilingOn )
 import TyCon       ( PrimRep(..) )
 import TyCon       ( TyCon )
 import Type        ( Type )
 import Type        ( typePrimRep )
 import UniqSet
 import Unique      ( Unique )
+import Util
 import VarSet      ( IdSet, isEmptyVarSet )
 \end{code}
 
@@ -98,11 +98,6 @@ data GenStgBinding bndr occ
 data GenStgArg occ
   = StgVarArg  occ
   | StgLitArg  Literal
-  | StgTypeArg Type     -- For when we want to preserve all type info
-
-isStgTypeArg :: StgArg -> Bool
-isStgTypeArg (StgTypeArg _) = True
-isStgTypeArg _              = False
 
 -- | Does this constructor application refer to
 -- anything in a different *Windows* DLL?
@@ -113,6 +108,8 @@ isDllConApp dflags con args
     = isDllName this_pkg (dataConName con) || any is_dll_arg args
  | otherwise = False
   where
+    -- NB: typePrimRep is legit because any free variables won't have
+    -- unlifted type (there are no unlifted things at top level)
     is_dll_arg :: StgArg -> Bool
     is_dll_arg (StgVarArg v) =  isAddrRep (typePrimRep (idType v))
                              && isDllName this_pkg (idName v)
@@ -143,7 +140,6 @@ isAddrRep _       = False
 stgArgType :: StgArg -> Type
 stgArgType (StgVarArg v)   = idType v
 stgArgType (StgLitArg lit) = literalType lit
-stgArgType (StgTypeArg _)  = panic "stgArgType called on stgTypeArg"
 \end{code}
 
 %************************************************************************
@@ -211,8 +207,6 @@ finished it encodes (\x -> e) as (let f = \x -> e in f)
 
 \begin{code}
   | StgLam
-        Type       -- Type of whole lambda (useful when
-                   -- making a binder for it)
         [bndr]
         StgExpr    -- Body of lambda
 \end{code}
@@ -506,7 +500,7 @@ type GenStgAlt bndr occ
 
 data AltType
   = PolyAlt             -- Polymorphic (a type variable)
-  | UbxTupAlt TyCon     -- Unboxed tuple
+  | UbxTupAlt Int       -- Unboxed tuple of this arity
   | AlgAlt    TyCon     -- Algebraic data type; the AltCons will be DataAlts
   | PrimAlt   TyCon     -- Primitive data type; the AltCons will be LitAlts
 \end{code}
@@ -622,20 +616,20 @@ Robin Popplestone asked for semi-colon separators on STG binds; here's
 hoping he likes terminators instead...  Ditto for case alternatives.
 
 \begin{code}
-pprGenStgBinding :: (Outputable bndr, Outputable bdee, Ord bdee)
+pprGenStgBinding :: (OutputableBndr bndr, Outputable bdee, Ord bdee)
                  => GenStgBinding bndr bdee -> SDoc
 
 pprGenStgBinding (StgNonRec bndr rhs)
-  = hang (hsep [ppr bndr, equals])
-        4 ((<>) (ppr rhs) semi)
+  = hang (hsep [pprBndr LetBind bndr, equals])
+        4 (ppr rhs <> semi)
 
 pprGenStgBinding (StgRec pairs)
   = vcat $ ifPprDebug (ptext $ sLit "{- StgRec (begin) -}") :
            map (ppr_bind) pairs ++ [ifPprDebug $ ptext $ sLit "{- StgRec (end) -}"]
   where
     ppr_bind (bndr, expr)
-      = hang (hsep [ppr bndr, equals])
-             4 ((<>) (ppr expr) semi)
+      = hang (hsep [pprBndr LetBind bndr, equals])
+             4 (ppr expr <> semi)
 
 pprStgBinding :: StgBinding -> SDoc
 pprStgBinding  bind  = pprGenStgBinding bind
@@ -643,7 +637,7 @@ pprStgBinding  bind  = pprGenStgBinding bind
 pprStgBindings :: [StgBinding] -> SDoc
 pprStgBindings binds = vcat (map pprGenStgBinding binds)
 
-pprGenStgBindingWithSRT :: (Outputable bndr, Outputable bdee, Ord bdee)
+pprGenStgBindingWithSRT :: (OutputableBndr bndr, Outputable bdee, Ord bdee)
                         => (GenStgBinding bndr bdee,[(Id,[Id])]) -> SDoc
 pprGenStgBindingWithSRT (bind,srts)
   = vcat $ pprGenStgBinding bind : map pprSRT srts
@@ -656,24 +650,23 @@ pprStgBindingsWithSRTs binds = vcat (map pprGenStgBindingWithSRT binds)
 instance (Outputable bdee) => Outputable (GenStgArg bdee) where
     ppr = pprStgArg
 
-instance (Outputable bndr, Outputable bdee, Ord bdee)
+instance (OutputableBndr bndr, Outputable bdee, Ord bdee)
                 => Outputable (GenStgBinding bndr bdee) where
     ppr = pprGenStgBinding
 
-instance (Outputable bndr, Outputable bdee, Ord bdee)
+instance (OutputableBndr bndr, Outputable bdee, Ord bdee)
                 => Outputable (GenStgExpr bndr bdee) where
     ppr = pprStgExpr
 
-instance (Outputable bndr, Outputable bdee, Ord bdee)
+instance (OutputableBndr bndr, Outputable bdee, Ord bdee)
                 => Outputable (GenStgRhs bndr bdee) where
     ppr rhs = pprStgRhs rhs
 
 pprStgArg :: (Outputable bdee) => GenStgArg bdee -> SDoc
 pprStgArg (StgVarArg var) = ppr var
 pprStgArg (StgLitArg con) = ppr con
-pprStgArg (StgTypeArg ty) = char '@' <+> ppr ty
 
-pprStgExpr :: (Outputable bndr, Outputable bdee, Ord bdee)
+pprStgExpr :: (OutputableBndr bndr, Outputable bdee, Ord bdee)
            => GenStgExpr bndr bdee -> SDoc
 -- special case
 pprStgExpr (StgLit lit)     = ppr lit
@@ -688,9 +681,11 @@ pprStgExpr (StgConApp con args)
 pprStgExpr (StgOpApp op args _)
   = hsep [ pprStgOp op, brackets (interppSP args)]
 
-pprStgExpr (StgLam _ bndrs body)
-  =sep [ char '\\' <+> ppr bndrs <+> ptext (sLit "->"),
+pprStgExpr (StgLam bndrs body)
+  = sep [ char '\\' <+> ppr_list (map (pprBndr LambdaBind) bndrs)
+            <+> ptext (sLit "->"),
          pprStgExpr body ]
+  where ppr_list = brackets . fsep . punctuate comma
 
 -- special case: let v = <very specific thing>
 --               in
@@ -730,12 +725,12 @@ pprStgExpr (StgLet bind expr)
 pprStgExpr (StgLetNoEscape lvs_whole lvs_rhss bind expr)
   = sep [hang (ptext (sLit "let-no-escape {"))
                 2 (pprGenStgBinding bind),
-           hang ((<>) (ptext (sLit "} in "))
-                   (ifPprDebug (
+           hang (ptext (sLit "} in ") <>
+                   ifPprDebug (
                     nest 4 (
                       hcat [ptext  (sLit "-- lvs: ["), interppSP (uniqSetToList lvs_whole),
                              ptext (sLit "]; rhs lvs: ["), interppSP (uniqSetToList lvs_rhss),
-                             char ']']))))
+                             char ']'])))
                 2 (ppr expr)]
 
 pprStgExpr (StgTick tickish expr)
@@ -745,7 +740,7 @@ pprStgExpr (StgCase expr lvs_whole lvs_rhss bndr srt alt_type alts)
   = sep [sep [ptext (sLit "case"),
            nest 4 (hsep [pprStgExpr expr,
              ifPprDebug (dcolon <+> ppr alt_type)]),
-           ptext (sLit "of"), ppr bndr, char '{'],
+           ptext (sLit "of"), pprBndr CaseBind bndr, char '{'],
            ifPprDebug (
            nest 4 (
              hcat [ptext  (sLit "-- lvs: ["), interppSP (uniqSetToList lvs_whole),
@@ -755,10 +750,10 @@ pprStgExpr (StgCase expr lvs_whole lvs_rhss bndr srt alt_type alts)
            nest 2 (vcat (map pprStgAlt alts)),
            char '}']
 
-pprStgAlt :: (Outputable bndr, Outputable occ, Ord occ)
+pprStgAlt :: (OutputableBndr bndr, Outputable occ, Ord occ)
           => GenStgAlt bndr occ -> SDoc
 pprStgAlt (con, params, _use_mask, expr)
-  = hang (hsep [ppr con, interppSP params, ptext (sLit "->")])
+  = hang (hsep [ppr con, sep (map (pprBndr CaseBind) params), ptext (sLit "->")])
          4 (ppr expr <> semi)
 
 pprStgOp :: StgOp -> SDoc
@@ -768,7 +763,7 @@ pprStgOp (StgFCallOp op _) = ppr op
 
 instance Outputable AltType where
   ppr PolyAlt        = ptext (sLit "Polymorphic")
-  ppr (UbxTupAlt tc) = ptext (sLit "UbxTup") <+> ppr tc
+  ppr (UbxTupAlt n)  = ptext (sLit "UbxTup") <+> ppr n
   ppr (AlgAlt tc)    = ptext (sLit "Alg")    <+> ppr tc
   ppr (PrimAlt tc)   = ptext (sLit "Prim")   <+> ppr tc
 
@@ -780,7 +775,7 @@ pprStgLVs lvs
     else
         hcat [text "{-lvs:", interpp'SP (uniqSetToList lvs), text "-}"]
 
-pprStgRhs :: (Outputable bndr, Outputable bdee, Ord bdee)
+pprStgRhs :: (OutputableBndr bndr, Outputable bdee, Ord bdee)
           => GenStgRhs bndr bdee -> SDoc
 
 -- special case
@@ -792,7 +787,8 @@ pprStgRhs (StgRhsClosure cc bi [free_var] upd_flag srt [{-no args-}] (StgApp fun
 
 -- general case
 pprStgRhs (StgRhsClosure cc bi free_vars upd_flag srt args body)
-  = hang (hsep [if opt_SccProfilingOn then ppr cc else empty,
+  = sdocWithDynFlags $ \dflags ->
+    hang (hsep [if dopt Opt_SccProfilingOn dflags then ppr cc else empty,
                 pp_binder_info bi,
                 ifPprDebug (brackets (interppSP free_vars)),
                 char '\\' <> ppr upd_flag, pprMaybeSRT srt, brackets (interppSP args)])

@@ -55,7 +55,7 @@ where
 
 #include "nativeGen/NCG.h"
 #include "HsVersions.h"
-#include "../includes/stg/MachRegs.h"
+#include "../includes/stg/HaskellMachRegs.h"
 
 import Reg
 import RegClass
@@ -66,9 +66,7 @@ import OldCmm
 import CLabel           ( CLabel )
 import Unique
 
-import Pretty
-import Outputable       ( panic, SDoc )	
-import qualified Outputable
+import Outputable
 import Constants
 import FastBool
 import FastTypes
@@ -136,10 +134,10 @@ mkVirtualReg u size
 regDotColor :: RealReg -> SDoc
 regDotColor reg
  = case classOfRealReg reg of
-        RcInteger       -> Outputable.text "blue"
-        RcFloat         -> Outputable.text "red"
-        RcDouble        -> Outputable.text "green"
-        RcDoubleSSE     -> Outputable.text "yellow"
+        RcInteger       -> text "blue"
+        RcFloat         -> text "red"
+        RcDouble        -> text "green"
+        RcDoubleSSE     -> text "yellow"
 
 
 -- immediates ------------------------------------------------------------------
@@ -147,7 +145,7 @@ data Imm
 	= ImmInt	Int
 	| ImmInteger	Integer	    -- Sigh.
 	| ImmCLbl	CLabel	    -- AbstractC Label (with baggage)
-	| ImmLit	Doc	    -- Simple string
+	| ImmLit	SDoc	    -- Simple string
 	| ImmIndex    CLabel Int
 	| ImmFloat	Rational
 	| ImmDouble	Rational

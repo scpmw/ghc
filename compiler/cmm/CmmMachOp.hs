@@ -198,6 +198,8 @@ isCommutableMachOp mop =
         MO_And _                -> True
         MO_Or _                 -> True
         MO_Xor _                -> True
+        MO_F_Add _              -> True
+        MO_F_Mul _              -> True
         _other                  -> False
 
 -- ----------------------------------------------------------------------------
@@ -272,12 +274,6 @@ maybeInvertComparison op
         MO_S_Gt r -> Just (MO_S_Le r)
         MO_S_Le r -> Just (MO_S_Gt r)
         MO_S_Ge r -> Just (MO_S_Lt r)
-        MO_F_Eq r -> Just (MO_F_Ne r)
-        MO_F_Ne r -> Just (MO_F_Eq r)
-        MO_F_Ge r -> Just (MO_F_Le r)
-        MO_F_Le r -> Just (MO_F_Ge r)
-        MO_F_Gt r -> Just (MO_F_Lt r)
-        MO_F_Lt r -> Just (MO_F_Gt r)
         _other    -> Nothing
 
 -- ----------------------------------------------------------------------------
@@ -442,6 +438,7 @@ data CallishMachOp
 
   | MO_S_QuotRem Width
   | MO_U_QuotRem Width
+  | MO_U_QuotRem2 Width
   | MO_Add2      Width
   | MO_U_Mul2    Width
 

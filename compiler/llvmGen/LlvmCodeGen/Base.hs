@@ -9,7 +9,8 @@ module LlvmCodeGen.Base (
         LlvmCmmDecl, LlvmBasicBlock,
         LlvmUnresData, LlvmData, UnresLabel, UnresStatic,
 
-        LlvmVersion, defaultLlvmVersion,
+        LlvmVersion, defaultLlvmVersion, minSupportLlvmVersion,
+        maxSupportLlvmVersion,
 
         LlvmM,
         runLlvm, withClearVars, varLookup, varInsert,
@@ -39,7 +40,6 @@ import LlvmCodeGen.Regs
 
 import CLabel
 import CgUtils ( activeStgRegs )
-import Config
 import Constants
 import FastString
 import OldCmm
@@ -99,33 +99,36 @@ widthToLlvmInt :: Width -> LlvmType
 widthToLlvmInt w = LMInt $ widthInBits w
 
 -- | GHC Call Convention for LLVM
-llvmGhcCC :: LlvmCallConvention
-llvmGhcCC | cGhcUnregisterised == "NO" = CC_Ncc 10
-          | otherwise                  = CC_Ccc
+llvmGhcCC :: DynFlags -> LlvmCallConvention
+llvmGhcCC dflags
+ | platformUnregisterised (targetPlatform dflags) = CC_Ncc 10
+ | otherwise                                      = CC_Ccc
 
 -- | Llvm Function type for Cmm function
-llvmFunTy :: LlvmType
-llvmFunTy = LMFunction $ llvmFunSig' (fsLit "a") ExternallyVisible
+llvmFunTy :: LlvmM LlvmType
+llvmFunTy = return . LMFunction =<< llvmFunSig' (fsLit "a") ExternallyVisible
 
 -- | Llvm Function signature
 llvmFunSig :: CLabel -> LlvmLinkageType -> LlvmM LlvmFunctionDecl
 llvmFunSig lbl link = do
   lbl' <- strCLabel_llvm lbl
-  return $ llvmFunSig' lbl' link
+  llvmFunSig' lbl' link
 
-llvmFunSig' :: LMString -> LlvmLinkageType -> LlvmFunctionDecl
+llvmFunSig' :: LMString -> LlvmLinkageType -> LlvmM LlvmFunctionDecl
 llvmFunSig' lbl link
-  = let toParams x | isPointer x = (x, [NoAlias, NoCapture])
-                   | otherwise   = (x, [])
-    in LlvmFunctionDecl lbl link llvmGhcCC LMVoid FixedArgs
-                        (map (toParams . getVarType) llvmFunArgs) llvmFunAlign
+  = do let toParams x | isPointer x = (x, [NoAlias, NoCapture])
+                      | otherwise   = (x, [])
+       dflags <- getDynFlags
+       return $ LlvmFunctionDecl lbl link (llvmGhcCC dflags) LMVoid FixedArgs
+                                 (map (toParams . getVarType) llvmFunArgs) llvmFunAlign
 
 -- | Create a Haskell function in LLVM.
 mkLlvmFunc :: CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
            -> LlvmM LlvmFunction
 mkLlvmFunc lbl link sec blks
   = do funDec <- llvmFunSig lbl link
-       let funArgs = map (fsLit . Outp.showSDoc . ppPlainName) llvmFunArgs
+       dflags <- getDynFlags
+       let funArgs = map (fsLit . Outp.showSDoc dflags . ppPlainName) llvmFunArgs
        return $ LlvmFunction funDec funArgs llvmStdFunAttrs sec blks
 
 -- | Alignment to use for functions
@@ -166,7 +169,13 @@ type LlvmVersion = Int
 
 -- | The LLVM Version we assume if we don't know
 defaultLlvmVersion :: LlvmVersion
-defaultLlvmVersion = 28
+defaultLlvmVersion = 30
+
+minSupportLlvmVersion :: LlvmVersion
+minSupportLlvmVersion = 28
+
+maxSupportLlvmVersion :: LlvmVersion
+maxSupportLlvmVersion = 31
 
 -- ----------------------------------------------------------------------------
 -- * Environment Handling
@@ -202,6 +211,9 @@ instance Functor LlvmM where
 instance MonadIO LlvmM where
     liftIO m = LlvmM $ \env -> do x <- m
                                   return (x, env)
+
+instance HasDynFlags LlvmM where
+    getDynFlags = LlvmM $ \env -> return (envDynFlags env, env)
 
 -- | Get initial Llvm environment.
 runLlvm :: DynFlags -> LlvmVersion -> BufHandle -> UniqSupply -> LlvmM () -> IO ()
@@ -287,7 +299,7 @@ renderLlvm :: Outp.SDoc -> LlvmM ()
 renderLlvm sdoc = LlvmM $ \env -> do
 
     -- Write to output
-    let doc = Outp.withPprStyleDoc (Outp.mkCodeStyle Outp.CStyle) sdoc
+    let doc = Outp.withPprStyleDoc (envDynFlags env) (Outp.mkCodeStyle Outp.CStyle) sdoc
     Prt.bufLeftRender (envOutput env) doc
 
     -- Dump, if requested
@@ -344,17 +356,19 @@ getProcMetaIds = getLlvmEnv (reverse . envProcMeta)
 strCLabel_llvm :: CLabel -> LlvmM LMString
 strCLabel_llvm lbl = do
     platform <- getLlvmPlatform
+    dflags <- getDynFlags
     let sdoc = pprCLabel platform lbl
-        str = Outp.renderWithStyle sdoc (Outp.mkCodeStyle Outp.CStyle)
+        str = Outp.renderWithStyle dflags sdoc (Outp.mkCodeStyle Outp.CStyle)
     return (fsLit str)
 
 strDisplayName_llvm :: CLabel -> LlvmM LMString
 strDisplayName_llvm lbl = do
     platform <- getLlvmPlatform
+    dflags <- getDynFlags
     let sdoc = pprCLabel platform lbl
         depth = Outp.PartWay 1
         style = Outp.mkUserStyle (const Outp.NameNotInScope2, const True) depth
-        str = Outp.renderWithStyle sdoc style
+        str = Outp.renderWithStyle dflags sdoc style
     return (fsLit (dropInfoSuffix str))
 
 dropInfoSuffix :: String -> String
@@ -368,10 +382,11 @@ dropInfoSuffix = go
 strProcedureName_llvm :: CLabel -> LlvmM LMString
 strProcedureName_llvm lbl = do
     platform <- getLlvmPlatform
+    dflags <- getDynFlags
     let sdoc = pprCLabel platform lbl
         depth = Outp.PartWay 1
         style = Outp.mkUserStyle (const Outp.NameUnqual, const False) depth
-        str = Outp.renderWithStyle sdoc style
+        str = Outp.renderWithStyle dflags sdoc style
     return (fsLit str)
 
 -- | Create an external definition for a 'CLabel' defined in another module.

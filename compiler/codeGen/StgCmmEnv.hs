@@ -27,7 +27,7 @@ module StgCmmEnv (
 
 	bindArgsToRegs, bindToReg, rebindToReg,
 	bindArgToReg, idToReg,
-	getArgAmode, getNonVoidArgAmodes, 
+        getArgAmode, getNonVoidArgAmodes,
 	getCgIdInfo, 
 	maybeLetNoEscape, 
     ) where
@@ -44,14 +44,13 @@ import CLabel
 import BlockId
 import CmmExpr
 import CmmUtils
-import MkGraph (CmmAGraph, mkAssign, (<*>))
+import MkGraph (CmmAGraph, mkAssign)
 import FastString
 import Id
 import VarEnv
 import Control.Monad
 import Name
 import StgSyn
-import DynFlags
 import Outputable
 
 -------------------------------------
@@ -104,13 +103,12 @@ lneIdInfo id regs
 -- register, and store a plain register in the CgIdInfo.  We allocate
 -- a new register in order to keep single-assignment and help out the
 -- inliner. -- EZY
-regIdInfo :: Id -> LambdaFormInfo -> LocalReg -> CmmAGraph -> FCode (CgIdInfo, CmmAGraph)
-regIdInfo id lf_info reg init 
-  = do { reg' <- newTemp (localRegType reg)
-       ; let init' = init <*> mkAssign (CmmLocal reg') 
-                                       (addDynTag (CmmReg (CmmLocal reg)) 
-                                                  (lfDynTag lf_info))
-       ; return (mkCgIdInfo id lf_info (CmmReg (CmmLocal reg')), init') }
+regIdInfo :: Id -> LambdaFormInfo -> CmmExpr -> FCode (CgIdInfo, CmmAGraph)
+regIdInfo id lf_info expr
+  = do { reg <- newTemp (cmmExprType expr)
+       ; let init = mkAssign (CmmLocal reg)
+                             (addDynTag expr (lfDynTag lf_info))
+       ; return (mkCgIdInfo id lf_info (CmmReg (CmmLocal reg)), init) }
 
 idInfoToAmode :: CgIdInfo -> CmmExpr
 -- Returns a CmmExpr for the *tagged* pointer
@@ -182,8 +180,7 @@ getCgIdInfo id
     
 cgLookupPanic :: Id -> FCode a
 cgLookupPanic id
-  = do	dflags <- getDynFlags
-      	static_binds <- getStaticBinds
+  = do	static_binds <- getStaticBinds
 	local_binds <- getBinds
 	srt <- getSRTLabel
 	pprPanic "StgCmmEnv: variable not found"
@@ -192,7 +189,7 @@ cgLookupPanic id
 		vcat [ ppr (cg_id info) | info <- varEnvElts static_binds ],
 		ptext (sLit "local binds for:"),
 		vcat [ ppr (cg_id info) | info <- varEnvElts local_binds ],
-	        ptext (sLit "SRT label") <+> pprCLabel (targetPlatform dflags) srt
+	        ptext (sLit "SRT label") <+> ppr srt
 	      ])
 
 
@@ -201,7 +198,6 @@ getArgAmode :: NonVoid StgArg -> FCode CmmExpr
 getArgAmode (NonVoid (StgVarArg var))  =
   do { info  <- getCgIdInfo var; return (idInfoToAmode info) }
 getArgAmode (NonVoid (StgLitArg lit))  = liftM CmmLit $ cgLit lit
-getArgAmode (NonVoid (StgTypeArg _))   = panic "getArgAmode: type arg"
 
 getNonVoidArgAmodes :: [StgArg] -> FCode [CmmExpr]
 -- NB: Filters out void args, 
@@ -212,7 +208,6 @@ getNonVoidArgAmodes (arg:args)
   | otherwise = do { amode  <- getArgAmode (NonVoid arg)
 	 	   ; amodes <- getNonVoidArgAmodes args
 	 	   ; return ( amode : amodes ) }
-
 
 ------------------------------------------------------------------------
 --	Interface functions for binding and re-binding names

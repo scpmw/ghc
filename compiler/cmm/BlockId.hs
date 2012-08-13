@@ -1,4 +1,5 @@
 {- BlockId module should probably go away completely, being superseded by Label -}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module BlockId
   ( BlockId, mkBlockId -- ToDo: BlockId should be abstract, but it isn't yet
   , BlockSet, BlockEnv
@@ -15,7 +16,7 @@ import Outputable
 import Unique
 
 import Compiler.Hoopl as Hoopl hiding (Unique)
-import Compiler.Hoopl.GHC (uniqueToInt, uniqueToLbl, lblToUnique)
+import Compiler.Hoopl.Internals (uniqueToLbl, lblToUnique)
 
 ----------------------------------------------------------------
 --- Block Ids, their environments, and their sets
@@ -32,13 +33,13 @@ compilation unit in which it appears.
 type BlockId = Hoopl.Label
 
 instance Uniquable BlockId where
-  getUnique label = getUnique (uniqueToInt $ lblToUnique label)
-
-mkBlockId :: Unique -> BlockId
-mkBlockId unique = uniqueToLbl $ intToUnique $ getKey unique
+  getUnique label = getUnique (lblToUnique label)
 
 instance Outputable BlockId where
   ppr label = ppr (getUnique label)
+
+mkBlockId :: Unique -> BlockId
+mkBlockId unique = uniqueToLbl $ intToUnique $ getKey unique
 
 retPtLbl :: BlockId -> CLabel
 retPtLbl label = mkReturnPtLabel $ getUnique label

@@ -38,11 +38,13 @@ import OldCmm
 import OldCmmUtils
 import CLabel
 import Constants
+import DynFlags
 import Util
 import OrdList
 import Outputable
 
 import Control.Monad
+import Data.List
 \end{code}
 
 %************************************************************************
@@ -285,7 +287,8 @@ pushSpecUpdateFrame lbl updatee code
       when debugIsOn $ do
     	{ EndOfBlockInfo _ sequel <- getEndOfBlockInfo ;
     	; MASSERT(case sequel of { OnStack -> True; _ -> False}) }
-	; allocStackTop (fixedHdrSize + 
+	; dflags <- getDynFlags
+	; allocStackTop (fixedHdrSize dflags + 
 			   sIZEOF_StgUpdateFrame_NoHdr `quot` wORD_SIZE)
 	; vsp <- getVirtSp
 	; setStackFrame vsp
@@ -310,14 +313,16 @@ emitPushUpdateFrame = emitSpecPushUpdateFrame mkUpdInfoLabel
 
 emitSpecPushUpdateFrame :: CLabel -> CmmExpr -> CmmExpr -> Code
 emitSpecPushUpdateFrame lbl frame_addr updatee = do
+	dflags <- getDynFlags
 	stmtsC [  -- Set the info word
 		  CmmStore frame_addr (mkLblExpr lbl)
 		, -- And the updatee
-		  CmmStore (cmmOffsetB frame_addr off_updatee) updatee ]
+		  CmmStore (cmmOffsetB frame_addr (off_updatee dflags)) updatee ]
 	initUpdFrameProf frame_addr
 
-off_updatee :: ByteOff
-off_updatee = fixedHdrSize*wORD_SIZE + oFFSET_StgUpdateFrame_updatee
+off_updatee :: DynFlags -> ByteOff
+off_updatee dflags
+    = fixedHdrSize dflags * wORD_SIZE + oFFSET_StgUpdateFrame_updatee
 \end{code}
 
 
@@ -333,7 +338,7 @@ Explicitly free some stack space.
 freeStackSlots :: [VirtualSpOffset] -> Code
 freeStackSlots extra_free
   = do	{ stk_usg <- getStkUsage
-	; let all_free = addFreeSlots (freeStk stk_usg) (sortLe (<=) extra_free)
+	; let all_free = addFreeSlots (freeStk stk_usg) (sort extra_free)
 	; let (new_vsp, new_free) = trim (virtSp stk_usg) all_free
 	; setStkUsage (stk_usg { virtSp = new_vsp, freeStk = new_free }) }
 

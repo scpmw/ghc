@@ -32,6 +32,7 @@ import SysTools ( figureLlvmVersion )
 import MonadUtils
 
 import Data.Maybe ( fromMaybe, catMaybes )
+import Control.Monad ( when )
 import Data.IORef ( writeIORef )
 import System.IO
 
@@ -43,24 +44,51 @@ llvmCodeGen dflags location h us cmms tick_map
   = do bufh <- newBufHandle h
 
        -- get llvm version, cache for later use
-       ver  <- (fromMaybe defaultLlvmVersion) `fmap` figureLlvmVersion dflags
-       writeIORef (llvmVersion dflags) ver
+       ver <- getLlvmVersion
 
+       -- warn if unsupported
+       when (ver < minSupportLlvmVersion) $
+           errorMsg dflags (text "You are using an old version of LLVM that"
+                            <> text " isn't supported anymore!"
+                            $+$ text "We will try though...")
+       when (ver > maxSupportLlvmVersion) $
+           putMsg dflags (text "You are using a new version of LLVM that"
+                          <> text " hasn't been tested yet!"
+                          $+$ text "We will try though...")
+
+       -- run code generation
        runLlvm dflags ver bufh us $
          llvmCodeGen' location cmms tick_map
 
        bFlush bufh
+  where
+    -- | Handle setting up the LLVM version.
+    getLlvmVersion = do
+        ver <- (fromMaybe defaultLlvmVersion) `fmap` figureLlvmVersion dflags
+        -- cache llvm version for later use
+        writeIORef (llvmVersion dflags) ver
+        when (ver < minSupportLlvmVersion) $
+            errorMsg dflags (text "You are using an old version of LLVM that"
+                             <> text "isn't supported anymore!"
+                             $+$ text "We will try though...")
+        when (ver > maxSupportLlvmVersion) $
+            putMsg dflags (text "You are using a new version of LLVM that"
+                           <> text "hasn't been tested yet!"
+                           $+$ text "We will try though...")
+        return ver
+
+
 
 llvmCodeGen' :: ModLocation -> [RawCmmGroup] -> TickMap -> LlvmM ()
 llvmCodeGen' location cmms tick_map
   = do
         -- Insert functions into map, collect data
-        let split (CmmData s d' ) = return $ Just (s, d')
-            split (CmmProc i l _) = do
-              lbl <- strCLabel_llvm $ case i of
+        let split (CmmData s d' )   = return $ Just (s, d')
+            split p@(CmmProc _ l _) = do
+              lbl <- strCLabel_llvm $ case topInfoTable p of
                          Nothing                   -> l
                          Just (Statics info_lbl _) -> info_lbl
-              funInsert lbl llvmFunTy
+              funInsert lbl =<< llvmFunTy
               return Nothing
         let cmm = concat cmms
         cdata <- fmap catMaybes $ mapM split cmm
@@ -121,18 +149,17 @@ cmmProcLlvmGens mod_loc (cmm : cmms) tick_map count
 
 -- | Complete LLVM code generation phase for a single top-level chunk of Cmm.
 cmmLlvmGen :: ModLocation -> TickMap -> Int -> RawCmmDecl -> LlvmM ()
-cmmLlvmGen mod_loc tick_map count cmm@(CmmProc nfo lbl (ListGraph blocks)) = do
+cmmLlvmGen mod_loc tick_map count cmm@(CmmProc _ lbl (ListGraph blocks)) = do
 
     -- rewrite assignments to global regs
     let fixed_cmm = fixStgRegisters cmm
 
-    platform <- getLlvmPlatform
     dflags <- getDynFlag id
     liftIO $ dumpIfSet_dyn dflags Opt_D_dump_opt_cmm "Optimised Cmm"
-        (pprCmmGroup platform [fixed_cmm])
+        (pprCmmGroup [fixed_cmm])
 
     -- Find and emit debug info for procedure
-    let entryLbl = case nfo of
+    let entryLbl = case topInfoTable cmm of
           Nothing                   -> lbl
           Just (Statics info_lbl _) -> info_lbl
     let blockLbls = map (\(BasicBlock id _) -> blockLbl id) blocks

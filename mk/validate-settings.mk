@@ -1,20 +1,22 @@
 # DO NOT EDIT!  Instead, create a file mk/validate.mk, whose settings will
 # override these.  See also mk/custom-settings.mk.
 
-WERROR          = -Werror
+WERROR              = -Werror
+SRC_CC_WARNING_OPTS =
+SRC_HC_WARNING_OPTS =
 
 HADDOCK_DOCS    = YES
 
-SRC_CC_OPTS     += -Wall $(WERROR)
 # Debian doesn't turn -Werror=unused-but-set-variable on by default, so
 # we turn it on explicitly for consistency with other users
 ifeq "$(GccLT46)" "NO"
-SRC_CC_OPTS     += -Werror=unused-but-set-variable
+SRC_CC_WARNING_OPTS += -Werror=unused-but-set-variable
 # gcc 4.6 gives 3 warning for giveCapabilityToTask not being inlined
-SRC_CC_OPTS     += -Wno-error=inline
+SRC_CC_WARNING_OPTS += -Wno-error=inline
 endif
 
-SRC_HC_OPTS     += -Wall $(WERROR) -H64m -O0
+SRC_CC_OPTS     += $(WERROR) -Wall
+SRC_HC_OPTS     += $(WERROR) -Wall -H64m -O0
 
 GhcStage1HcOpts += -O -fwarn-tabs
 
@@ -84,17 +86,14 @@ libraries/haskeline_dist-install_EXTRA_HC_OPTS += -fno-warn-unused-imports
 libraries/binary_dist-boot_EXTRA_HC_OPTS += -fno-warn-unused-imports
 libraries/binary_dist-install_EXTRA_HC_OPTS += -fno-warn-unused-imports -fno-warn-identities
 
-# Temporarily turn off -Werror for some Hoopl modules that have
-# non-exhaustive pattern-match warnings
-libraries/hoopl/src/Compiler/Hoopl/Util_HC_OPTS += -Wwarn
-libraries/hoopl/src/Compiler/Hoopl/GraphUtil_HC_OPTS += -Wwarn
-libraries/hoopl/src/Compiler/Hoopl/MkGraph_HC_OPTS += -Wwarn
-libraries/hoopl/src/Compiler/Hoopl/XUtil_HC_OPTS += -Wwarn
-libraries/hoopl/src/Compiler/Hoopl/Pointed_HC_OPTS += -Wwarn
-libraries/hoopl/src/Compiler/Hoopl/Passes/Dominator_HC_OPTS += -Wwarn
+# temporarily turn off -Werror for mtl
+libraries/mtl_dist-install_EXTRA_HC_OPTS += -Wwarn
 
 # primitive has a warning about deprecated use of GHC.IOBase
 libraries/primitive_dist-install_EXTRA_HC_OPTS += -Wwarn
+
+# temporarily turn off -Werror for transformers
+libraries/transformers_dist-install_EXTRA_HC_OPTS += -Wwarn
 
 # vector has some unused match warnings
 libraries/vector_dist-install_EXTRA_HC_OPTS += -Wwarn
@@ -111,7 +110,10 @@ libraries/binary_dist-install_EXTRA_HC_OPTS += -fno-warn-warnings-deprecations
 libraries/binary/src/Data/Binary/Builder/Base_HC_OPTS += -fno-warn-warnings-deprecations
 libraries/binary/src/Data/Binary/Get_HC_OPTS += -fno-warn-warnings-deprecations
 
+# Temporarely disable inline rule shadowing warning
+libraries/bytestring_dist-install_EXTRA_HC_OPTS += -fno-warn-inline-rule-shadowing
+libraries/template-haskell_dist-install_EXTRA_HC_OPTS += -fno-warn-inline-rule-shadowing
+
 # We need -fno-warn-deprecated-flags to avoid failure with -Werror
 GhcLibHcOpts += -fno-warn-deprecated-flags
 GhcBootLibHcOpts += -fno-warn-deprecated-flags
-

@@ -20,6 +20,8 @@ the STG paper.
 -- for details
 
 module ClosureInfo (
+        idRepArity,
+
 	ClosureInfo(..), LambdaFormInfo(..),	-- would be abstract but
 	StandardFormInfo(..),			-- mkCmmInfo looks inside
         SMRep,
@@ -81,7 +83,6 @@ import SMRep
 import CLabel
 import Cmm
 import Unique
-import StaticFlags
 import Var
 import Id
 import IdInfo
@@ -96,6 +97,7 @@ import Outputable
 import FastString
 import Constants
 import DynFlags
+import Util
 \end{code}
 
 
@@ -156,7 +158,7 @@ ClosureInfo contains a LambdaFormInfo.
 data LambdaFormInfo
   = LFReEntrant		-- Reentrant closure (a function)
 	TopLevelFlag	-- True if top level
-	!Int		-- Arity. Invariant: always > 0
+	!RepArity	-- Arity. Invariant: always > 0
 	!Bool		-- True <=> no fvs
 	ArgDescr	-- Argument descriptor (should reall be in ClosureInfo)
 
@@ -180,7 +182,7 @@ data LambdaFormInfo
 
   | LFLetNoEscape	-- See LetNoEscape module for precise description of
 			-- these "lets".
-	!Int		-- arity;
+	!RepArity	-- arity;
 
   | LFBlackHole		-- Used for the closures allocated to hold the result
 			-- of a CAF.  We want the target of the update frame to
@@ -211,7 +213,7 @@ data StandardFormInfo
 	-- The code for the thunk just pushes x2..xn on the stack and enters x1.
 	-- There are a few of these (for 1 <= n <= MAX_SPEC_AP_SIZE) pre-compiled
 	-- in the RTS to save space.
-	Int		-- Arity, n
+	RepArity	-- Arity, n
 \end{code}
 
 
@@ -288,7 +290,7 @@ idCgRep x = typeCgRep . idType $ x
 tyConCgRep :: TyCon -> CgRep
 tyConCgRep = primRepToCgRep . tyConPrimRep
 
-typeCgRep :: Type -> CgRep
+typeCgRep :: UnaryType -> CgRep
 typeCgRep = primRepToCgRep . typePrimRep 
 \end{code}
 
@@ -384,9 +386,12 @@ might_be_a_function :: Type -> Bool
 -- Return False only if we are *sure* it's a data type
 -- Look through newtypes etc as much as poss
 might_be_a_function ty
-  = case tyConAppTyCon_maybe (repType ty) of
-	Just tc -> not (isDataTyCon tc)
-	Nothing -> True
+  | UnaryRep rep <- repType ty
+  , Just tc <- tyConAppTyCon_maybe rep
+  , isDataTyCon tc
+  = False
+  | otherwise
+  = True
 \end{code}
 
 @mkConLFInfo@ is similar, for constructors.
@@ -404,7 +409,7 @@ mkSelectorLFInfo id offset updatable
   = LFThunk NotTopLevel False updatable (SelectorThunk offset) 
 	(might_be_a_function (idType id))
 
-mkApLFInfo :: Id -> UpdateFlag -> Int -> LambdaFormInfo
+mkApLFInfo :: Id -> UpdateFlag -> RepArity -> LambdaFormInfo
 mkApLFInfo id upd_flag arity
   = LFThunk NotTopLevel (arity == 0) (isUpdatable upd_flag) (ApThunk arity)
 	(might_be_a_function (idType id))
@@ -416,12 +421,12 @@ Miscellaneous LF-infos.
 mkLFArgument :: Id -> LambdaFormInfo
 mkLFArgument id = LFUnknown (might_be_a_function (idType id))
 
-mkLFLetNoEscape :: Int -> LambdaFormInfo
+mkLFLetNoEscape :: RepArity -> LambdaFormInfo
 mkLFLetNoEscape = LFLetNoEscape
 
 mkLFImported :: Id -> LambdaFormInfo
 mkLFImported id
-  = case idArity id of
+  = case idRepArity id of
       n | n > 0 -> LFReEntrant TopLevel n True (panic "arg_descr")  -- n > 0
       _ -> mkLFArgument id -- Not sure of exact arity
 \end{code}
@@ -453,14 +458,15 @@ dataConTagZ con = dataConTag con - fIRST_TAG
 %************************************************************************
 
 \begin{code}
-mkClosureInfo :: Bool		-- Is static
+mkClosureInfo :: DynFlags
+              -> Bool		-- Is static
 	      -> Id
 	      -> LambdaFormInfo 
 	      -> Int -> Int	-- Total and pointer words
 	      -> C_SRT
 	      -> String		-- String descriptor
 	      -> ClosureInfo
-mkClosureInfo is_static id lf_info tot_wds ptr_wds srt_info descr
+mkClosureInfo dflags is_static id lf_info tot_wds ptr_wds srt_info descr
   = ClosureInfo { closureName = name, 
 		  closureLFInfo = lf_info,
 		  closureSMRep = sm_rep, 
@@ -474,18 +480,19 @@ mkClosureInfo is_static id lf_info tot_wds ptr_wds srt_info descr
 		    -- anything else gets eta expanded.
   where
     name   = idName id
-    sm_rep = mkHeapRep is_static ptr_wds nonptr_wds (lfClosureType lf_info)
+    sm_rep = mkHeapRep dflags is_static ptr_wds nonptr_wds (lfClosureType lf_info)
     nonptr_wds = tot_wds - ptr_wds
 
-mkConInfo :: Bool	-- Is static
+mkConInfo :: DynFlags
+          -> Bool	-- Is static
 	  -> DataCon	
 	  -> Int -> Int	-- Total and pointer words
 	  -> ClosureInfo
-mkConInfo is_static data_con tot_wds ptr_wds
+mkConInfo dflags is_static data_con tot_wds ptr_wds
    = ConInfo {	closureSMRep = sm_rep,
 		closureCon = data_con }
   where
-    sm_rep  = mkHeapRep is_static ptr_wds nonptr_wds (lfClosureType lf_info)
+    sm_rep  = mkHeapRep dflags is_static ptr_wds nonptr_wds (lfClosureType lf_info)
     lf_info = mkConLFInfo data_con
     nonptr_wds = tot_wds - ptr_wds
 \end{code}
@@ -497,8 +504,8 @@ mkConInfo is_static data_con tot_wds ptr_wds
 %************************************************************************
 
 \begin{code}
-closureSize :: ClosureInfo -> WordOff
-closureSize cl_info = heapClosureSize (closureSMRep cl_info)
+closureSize :: DynFlags -> ClosureInfo -> WordOff
+closureSize dflags cl_info = heapClosureSize dflags (closureSMRep cl_info)
 \end{code}
 
 \begin{code}
@@ -545,8 +552,8 @@ thunkClosureType _                   = Thunk
 Be sure to see the stg-details notes about these...
 
 \begin{code}
-nodeMustPointToIt :: LambdaFormInfo -> Bool
-nodeMustPointToIt (LFReEntrant top _ no_fvs _)
+nodeMustPointToIt :: DynFlags -> LambdaFormInfo -> Bool
+nodeMustPointToIt _ (LFReEntrant top _ no_fvs _)
   = not no_fvs ||   -- Certainly if it has fvs we need to point to it
     isNotTopLevel top
 		    -- If it is not top level we will point to it
@@ -558,7 +565,7 @@ nodeMustPointToIt (LFReEntrant top _ no_fvs _)
 		-- non-inherited function i.e. not top level
 		-- the  not top  case above ensures this is ok.
 
-nodeMustPointToIt (LFCon _) = True
+nodeMustPointToIt _ (LFCon _) = True
 
 	-- Strictly speaking, the above two don't need Node to point
 	-- to it if the arity = 0.  But this is a *really* unlikely
@@ -571,8 +578,8 @@ nodeMustPointToIt (LFCon _) = True
 	-- having Node point to the result of an update.  SLPJ
 	-- 27/11/92.
 
-nodeMustPointToIt (LFThunk _ no_fvs updatable NonStandardThunk _)
-  = updatable || not no_fvs || opt_SccProfilingOn
+nodeMustPointToIt dflags (LFThunk _ no_fvs updatable NonStandardThunk _)
+  = updatable || not no_fvs || dopt Opt_SccProfilingOn dflags
 	  -- For the non-updatable (single-entry case):
 	  --
 	  -- True if has fvs (in which case we need access to them, and we
@@ -580,12 +587,12 @@ nodeMustPointToIt (LFThunk _ no_fvs updatable NonStandardThunk _)
 	  -- or profiling (in which case we need to recover the cost centre
 	  --		 from inside it)
 
-nodeMustPointToIt (LFThunk _ _ _ _ _)
+nodeMustPointToIt _ (LFThunk _ _ _ _ _)
   = True  -- Node must point to any standard-form thunk
 
-nodeMustPointToIt (LFUnknown _)     = True
-nodeMustPointToIt LFBlackHole       = True    -- BH entry may require Node to point
-nodeMustPointToIt (LFLetNoEscape _) = False 
+nodeMustPointToIt _ (LFUnknown _)     = True
+nodeMustPointToIt _ LFBlackHole       = True    -- BH entry may require Node to point
+nodeMustPointToIt _ (LFLetNoEscape _) = False 
 \end{code}
 
 The entry conventions depend on the type of closure being entered,
@@ -634,32 +641,33 @@ data CallMethod
 
   | DirectEntry 			-- Jump directly, with args in regs
 	CLabel 				--   The code label
-	Int 				--   Its arity
+	RepArity			--   Its arity
 
 getCallMethod :: DynFlags
               -> Name		-- Function being applied
               -> CafInfo        -- Can it refer to CAF's?
 	      -> LambdaFormInfo	-- Its info
-	      -> Int		-- Number of available arguments
+	      -> RepArity	-- Number of available arguments
 	      -> CallMethod
 
-getCallMethod _ _ _ lf_info _
-  | nodeMustPointToIt lf_info && opt_Parallel
+getCallMethod dflags _ _ lf_info _
+  | nodeMustPointToIt dflags lf_info && dopt Opt_Parallel dflags
   =	-- If we're parallel, then we must always enter via node.  
 	-- The reason is that the closure may have been 	
 	-- fetched since we allocated it.
     EnterIt
 
-getCallMethod _ name caf (LFReEntrant _ arity _ _) n_args
+getCallMethod dflags name caf (LFReEntrant _ arity _ _) n_args
   | n_args == 0    = ASSERT( arity /= 0 )
 		     ReturnIt	-- No args at all
   | n_args < arity = SlowCall	-- Not enough args
-  | otherwise      = DirectEntry (enterIdLabel name caf) arity
+  | otherwise      = DirectEntry (enterIdLabel dflags name caf) arity
 
-getCallMethod _ _ _ (LFCon con) n_args
-  | opt_SccProfilingOn     -- when profiling, we must always enter
-  = EnterIt                -- a closure when we use it, so that the closure
-                           -- can be recorded as used for LDV profiling.
+getCallMethod dflags _ _ (LFCon con) n_args
+  -- when profiling, we must always enter a closure when we use it, so
+  -- that the closure can be recorded as used for LDV profiling.
+  | dopt Opt_SccProfilingOn dflags
+  = EnterIt
   | otherwise
   = ASSERT( n_args == 0 )
     ReturnCon con
@@ -707,11 +715,11 @@ getCallMethod _ _ _ LFBlackHole _
 		-- been updated, but we don't know with
 		-- what, so we slow call it
 
-getCallMethod _ name _ (LFLetNoEscape 0) _
-  = JumpToIt (enterReturnPtLabel (nameUnique name))
+getCallMethod dflags name _ (LFLetNoEscape 0) _
+  = JumpToIt (enterReturnPtLabel dflags (nameUnique name))
 
-getCallMethod _ name _ (LFLetNoEscape arity) n_args
-  | n_args == arity = DirectEntry (enterReturnPtLabel (nameUnique name)) arity
+getCallMethod dflags name _ (LFLetNoEscape arity) n_args
+  | n_args == arity = DirectEntry (enterReturnPtLabel dflags (nameUnique name)) arity
   | otherwise = pprPanic "let-no-escape: " (ppr name <+> ppr arity)
 
 
@@ -725,7 +733,7 @@ blackHoleOnEntry cl_info
   = case closureLFInfo cl_info of
 	LFReEntrant _ _ _ _	  -> False
         LFLetNoEscape _           -> False
-        LFThunk _ no_fvs _updatable _ _ -> not no_fvs -- to plug space-leaks.
+        LFThunk _ _no_fvs _updatable _ _ -> True
         _other -> panic "blackHoleOnEntry"      -- Should never happen
 
 isKnownFun :: LambdaFormInfo -> Bool
@@ -911,11 +919,11 @@ isConstrClosure_maybe :: ClosureInfo -> Maybe DataCon
 isConstrClosure_maybe (ConInfo { closureCon = data_con }) = Just data_con
 isConstrClosure_maybe _ 				  = Nothing
 
-closureFunInfo :: ClosureInfo -> Maybe (Int, ArgDescr)
+closureFunInfo :: ClosureInfo -> Maybe (RepArity, ArgDescr)
 closureFunInfo (ClosureInfo { closureLFInfo = lf_info }) = lfFunInfo lf_info
 closureFunInfo _ = Nothing
 
-lfFunInfo :: LambdaFormInfo ->  Maybe (Int, ArgDescr)
+lfFunInfo :: LambdaFormInfo ->  Maybe (RepArity, ArgDescr)
 lfFunInfo (LFReEntrant _ arity _ arg_desc)  = Just (arity, arg_desc)
 lfFunInfo _                                 = Nothing
 
@@ -935,7 +943,7 @@ funTagLFInfo lf
   | otherwise
   = 0
 
-tagForArity :: Int -> Maybe Int
+tagForArity :: RepArity -> Maybe Int
 tagForArity i | i <= mAX_PTR_TAG = Just i
               | otherwise        = Nothing
 
@@ -962,10 +970,10 @@ Label generation.
 infoTableLabelFromCI :: ClosureInfo -> CLabel
 infoTableLabelFromCI = fst . labelsFromCI
 
-entryLabelFromCI :: ClosureInfo -> CLabel
-entryLabelFromCI ci
-  | tablesNextToCode = info_lbl
-  | otherwise        = entry_lbl
+entryLabelFromCI :: DynFlags -> ClosureInfo -> CLabel
+entryLabelFromCI dflags ci
+  | tablesNextToCode dflags = info_lbl
+  | otherwise               = entry_lbl
   where (info_lbl, entry_lbl) = labelsFromCI ci
 
 labelsFromCI :: ClosureInfo -> (CLabel, CLabel) -- (Info, Entry)
@@ -1030,15 +1038,15 @@ enterSelectorLabel upd_flag offset
   | otherwise        = mkSelectorEntryLabel upd_flag offset
 -}
 
-enterIdLabel :: Name -> CafInfo -> CLabel
-enterIdLabel id
-  | tablesNextToCode = mkInfoTableLabel id
-  | otherwise        = mkEntryLabel id
+enterIdLabel :: DynFlags -> Name -> CafInfo -> CLabel
+enterIdLabel dflags id
+  | tablesNextToCode dflags = mkInfoTableLabel id
+  | otherwise               = mkEntryLabel id
 
-enterReturnPtLabel :: Unique -> CLabel
-enterReturnPtLabel name
-  | tablesNextToCode = mkReturnInfoLabel name
-  | otherwise        = mkReturnPtLabel name
+enterReturnPtLabel :: DynFlags -> Unique -> CLabel
+enterReturnPtLabel dflags name
+  | tablesNextToCode dflags = mkReturnInfoLabel name
+  | otherwise               = mkReturnPtLabel name
 \end{code}
 
 

@@ -60,17 +60,26 @@ char *EventDesc[] = {
   [EVENT_STOP_THREAD]         = "Stop thread",
   [EVENT_THREAD_RUNNABLE]     = "Thread runnable",
   [EVENT_MIGRATE_THREAD]      = "Migrate thread",
-  [EVENT_SHUTDOWN]            = "Shutdown",
   [EVENT_THREAD_WAKEUP]       = "Wakeup thread",
   [EVENT_THREAD_LABEL]        = "Thread label",
+  [EVENT_STARTUP]             = "Create capabilities",
+  [EVENT_CAP_CREATE]          = "Create capability",
+  [EVENT_CAP_DELETE]          = "Delete capability",
+  [EVENT_CAP_DISABLE]         = "Disable capability",
+  [EVENT_CAP_ENABLE]          = "Enable capability",
   [EVENT_GC_START]            = "Starting GC",
   [EVENT_GC_END]              = "Finished GC",
   [EVENT_REQUEST_SEQ_GC]      = "Request sequential GC",
   [EVENT_REQUEST_PAR_GC]      = "Request parallel GC",
+  [EVENT_GC_GLOBAL_SYNC]      = "Synchronise stop-the-world GC",
+  [EVENT_GC_STATS_GHC]        = "GC statistics",
+  [EVENT_HEAP_INFO_GHC]       = "Heap static parameters",
+  [EVENT_HEAP_ALLOCATED]      = "Total heap mem ever allocated",
+  [EVENT_HEAP_SIZE]           = "Current heap size",
+  [EVENT_HEAP_LIVE]           = "Current heap live data",
   [EVENT_CREATE_SPARK_THREAD] = "Create spark thread",
   [EVENT_LOG_MSG]             = "Log message",
   [EVENT_USER_MSG]            = "User message",
-  [EVENT_STARTUP]             = "Startup",
   [EVENT_GC_IDLE]             = "GC idle",
   [EVENT_GC_WORK]             = "GC working",
   [EVENT_GC_DONE]             = "GC done",
@@ -93,6 +102,9 @@ char *EventDesc[] = {
   [EVENT_SPARK_STEAL]         = "Spark steal",
   [EVENT_SPARK_FIZZLE]        = "Spark fizzle",
   [EVENT_SPARK_GC]            = "Spark GC",
+  [EVENT_TASK_CREATE]         = "Task create",
+  [EVENT_TASK_MIGRATE]        = "Task migrate",
+  [EVENT_TASK_DELETE]         = "Task delete",
   [EVENT_INSTR_PTR_SAMPLE]    = "Instruction pointer sample",
   [EVENT_DEBUG_MODULE]        = "Debug module data",
   [EVENT_DEBUG_PROCEDURE]     = "Debug procedure data",
@@ -178,6 +190,15 @@ static inline void postCapsetID(EventsBuf *eb, EventCapsetID id)
 static inline void postCapsetType(EventsBuf *eb, EventCapsetType type)
 { postWord16(eb,type); }
 
+static inline void postOSProcessId(EventsBuf *eb, pid_t pid)
+{ postWord32(eb, pid); }
+
+static inline void postKernelThreadId(EventsBuf *eb, EventKernelThreadId tid)
+{ postWord64(eb, tid); }
+
+static inline void postTaskId(EventsBuf *eb, EventTaskId tUniq)
+{ postWord64(eb, tUniq); }
+
 static inline void postPayloadSize(EventsBuf *eb, EventPayloadSize size)
 { postWord16(eb,size); }
 
@@ -239,7 +260,6 @@ static StgWord16 getEventSize(EventTypeNum t)
     case EVENT_SPARK_STEAL:     // (cap, victim_cap)
         return sizeof(EventCapNo);
 
-    case EVENT_SHUTDOWN:        // (cap)
     case EVENT_REQUEST_SEQ_GC:  // (cap)
     case EVENT_REQUEST_PAR_GC:  // (cap)
     case EVENT_GC_START:        // (cap)
@@ -270,6 +290,37 @@ static StgWord16 getEventSize(EventTypeNum t)
 
     case EVENT_SPARK_COUNTERS:   // (cap, 7*counter)
         return 7 * sizeof(StgWord64);
+
+    case EVENT_HEAP_ALLOCATED:    // (heap_capset, alloc_bytes)
+    case EVENT_HEAP_SIZE:         // (heap_capset, size_bytes)
+    case EVENT_HEAP_LIVE:         // (heap_capset, live_bytes)
+        return sizeof(EventCapsetID) + sizeof(StgWord64);
+
+    case EVENT_HEAP_INFO_GHC:     // (heap_capset, n_generations,
+                                  //  max_heap_size, alloc_area_size,
+                                  //  mblock_size, block_size)
+        return sizeof(EventCapsetID)
+                           + sizeof(StgWord16)
+                           + sizeof(StgWord64) * 4;
+
+    case EVENT_GC_STATS_GHC:      // (heap_capset, generation,
+                                  //  copied_bytes, slop_bytes, frag_bytes,
+                                  //  par_n_threads,
+                                  //  par_max_copied, par_tot_copied)
+        return sizeof(EventCapsetID)
+                           + sizeof(StgWord16)
+                           + sizeof(StgWord64) * 3
+                           + sizeof(StgWord32)
+                           + sizeof(StgWord64) * 2;
+
+    case EVENT_TASK_CREATE:   // (taskId, cap, tid)
+        return sizeof(EventTaskId) + sizeof(EventCapNo) + sizeof(EventKernelThreadId);
+
+    case EVENT_TASK_MIGRATE:   // (taskId, cap, new_cap)
+        return sizeof(EventTaskId) + sizeof(EventCapNo) + sizeof(EventCapNo);
+
+    case EVENT_TASK_DELETE:   // (taskId)
+        return sizeof(EventTaskId);
 
     case EVENT_BLOCK_MARKER:
         return sizeof(StgWord32) + sizeof(EventTimestamp) + 
@@ -324,7 +375,10 @@ initEventLogging(void)
         // Forked process, eventlog already started by the parent
         // before fork
         event_log_pid = getpid();
-        sprintf(event_log_filename, "%s.%d.eventlog", prog, event_log_pid);
+        // We don't have a FMT* symbol for pid_t, so we go via Word64
+        // to be sure of not losing range. It would be nicer to have a
+        // FMT* symbol or similar, though.
+        sprintf(event_log_filename, "%s.%" FMT_Word64 ".eventlog", prog, (StgWord64)event_log_pid);
     }
     stgFree(prog);
 
@@ -525,11 +579,6 @@ postSchedEvent (Capability *cap,
         break;
     }
 
-    case EVENT_SHUTDOWN:        // (cap)
-    {
-        break;
-    }
-
     default:
         barf("postSchedEvent: unknown event tag %d", tag);
     }
@@ -544,9 +593,8 @@ postSparkEvent (Capability *cap,
 
     eb = &capEventBuf[cap->no];
 
-    if (!hasRoomForEvent(eb, tag)) {
-        // Flush event buffer to make room for new event.
-        printAndClearEventBuf(eb);
+    if (!ensureRoomForEvent(&eventBuf, tag)) {
+        return;
     }
 
     postEventHeader(eb, tag);
@@ -588,12 +636,12 @@ postSparkCountersEvent (Capability *cap,
 
     eb = &capEventBuf[cap->no];
 
-    if (!hasRoomForEvent(eb, EVENT_SPARK_COUNTERS)) {
-        // Flush event buffer to make room for new event.
-        printAndClearEventBuf(eb);
+    if (!ensureRoomForEvent(&eventBuf, EVENT_SPARK_COUNTERS)) {
+        return;
     }
     
     postEventHeader(eb, EVENT_SPARK_COUNTERS);
+    /* EVENT_SPARK_COUNTERS (crt,dud,ovf,cnv,gcd,fiz,rem) */
     postWord64(eb,counters.created);
     postWord64(eb,counters.dud);
     postWord64(eb,counters.overflowed);
@@ -603,15 +651,43 @@ postSparkCountersEvent (Capability *cap,
     postWord64(eb,remaining);
 }
 
+void
+postCapEvent (EventTypeNum  tag,
+              EventCapNo    capno)
+{
+    ACQUIRE_LOCK(&eventBufMutex);
+
+    if (!ensureRoomForEvent(&eventBuf, tag)) {
+        return;
+    }
+    
+    postEventHeader(&eventBuf, tag);
+
+    switch (tag) {
+    case EVENT_CAP_CREATE:   // (cap)
+    case EVENT_CAP_DELETE:   // (cap)
+    case EVENT_CAP_ENABLE:   // (cap)
+    case EVENT_CAP_DISABLE:  // (cap)
+    {
+        postCapNo(&eventBuf,capno);
+        break;
+    }
+
+    default:
+        barf("postCapEvent: unknown event tag %d", tag);
+    }
+
+    RELEASE_LOCK(&eventBufMutex);
+}
+
 void postCapsetEvent (EventTypeNum tag,
                       EventCapsetID capset,
                       StgWord info)
 {
     ACQUIRE_LOCK(&eventBufMutex);
 
-    if (!hasRoomForEvent(&eventBuf, tag)) {
-        // Flush event buffer to make room for new event.
-        printAndClearEventBuf(&eventBuf);
+    if (!ensureRoomForEvent(&eventBuf, tag)) {
+        return;
     }
 
     postEventHeader(&eventBuf, tag);
@@ -638,7 +714,7 @@ void postCapsetEvent (EventTypeNum tag,
     case EVENT_OSPROCESS_PID:   // (capset, pid)
     case EVENT_OSPROCESS_PPID:  // (capset, parent_pid)
     {
-        postWord32(&eventBuf, info);
+        postOSProcessId(&eventBuf, info);
         break;
     }
     default:
@@ -757,6 +833,151 @@ void postWallClockTime (EventCapsetID capset)
     RELEASE_LOCK(&eventBufMutex);
 }
 
+/*
+ * Various GC and heap events
+ */
+void postHeapEvent (Capability    *cap,
+                    EventTypeNum   tag,
+                    EventCapsetID  heap_capset,
+                    lnat           info1)
+{
+    EventsBuf *eb;
+
+    eb = &capEventBuf[cap->no];
+
+    if (!ensureRoomForEvent(&eventBuf, tag)) {
+        return;
+    }
+    
+    postEventHeader(eb, tag);
+
+    switch (tag) {
+    case EVENT_HEAP_ALLOCATED:     // (heap_capset, alloc_bytes)
+    case EVENT_HEAP_SIZE:          // (heap_capset, size_bytes)
+    case EVENT_HEAP_LIVE:          // (heap_capset, live_bytes)
+    {
+        postCapsetID(eb, heap_capset);
+        postWord64(eb, info1 /* alloc/size/live_bytes */);
+        break;
+    }
+
+    default:
+        barf("postHeapEvent: unknown event tag %d", tag);
+    }
+}
+
+void postEventHeapInfo (EventCapsetID heap_capset,
+                        nat           gens,
+                        lnat          maxHeapSize,
+                        lnat          allocAreaSize,
+                        lnat          mblockSize,
+                        lnat          blockSize)
+{
+    ACQUIRE_LOCK(&eventBufMutex);
+
+    if (!ensureRoomForEvent(&eventBuf, EVENT_HEAP_INFO_GHC)) {
+        return;
+    }
+
+    postEventHeader(&eventBuf, EVENT_HEAP_INFO_GHC);
+    /* EVENT_HEAP_INFO_GHC (heap_capset, n_generations,
+                            max_heap_size, alloc_area_size,
+                            mblock_size, block_size) */
+    postCapsetID(&eventBuf, heap_capset);
+    postWord16(&eventBuf, gens);
+    postWord64(&eventBuf, maxHeapSize);
+    postWord64(&eventBuf, allocAreaSize);
+    postWord64(&eventBuf, mblockSize);
+    postWord64(&eventBuf, blockSize);
+
+    RELEASE_LOCK(&eventBufMutex);
+}
+
+void postEventGcStats  (Capability    *cap,
+                        EventCapsetID  heap_capset,
+                        nat            gen,
+                        lnat           copied,
+                        lnat           slop,
+                        lnat           fragmentation,
+                        nat            par_n_threads,
+                        lnat           par_max_copied,
+                        lnat           par_tot_copied)
+{
+    EventsBuf *eb;
+
+    eb = &capEventBuf[cap->no];
+
+    if (!ensureRoomForEvent(&eventBuf, EVENT_GC_STATS_GHC)) {
+        return;
+    }
+    
+    postEventHeader(eb, EVENT_GC_STATS_GHC);
+    /* EVENT_GC_STATS_GHC (heap_capset, generation,
+                           copied_bytes, slop_bytes, frag_bytes,
+                           par_n_threads, par_max_copied, par_tot_copied) */
+    postCapsetID(eb, heap_capset);
+    postWord16(eb, gen);
+    postWord64(eb, copied);
+    postWord64(eb, slop);
+    postWord64(eb, fragmentation);
+    postWord32(eb, par_n_threads);
+    postWord64(eb, par_max_copied);
+    postWord64(eb, par_tot_copied);
+}
+
+void postTaskCreateEvent (EventTaskId taskId,
+                          EventCapNo capno,
+                          EventKernelThreadId tid)
+{
+    ACQUIRE_LOCK(&eventBufMutex);
+
+    if (!ensureRoomForEvent(&eventBuf, EVENT_TASK_CREATE)) {
+        return;
+    }
+
+    postEventHeader(&eventBuf, EVENT_TASK_CREATE);
+    /* EVENT_TASK_CREATE (taskID, cap, tid) */
+    postTaskId(&eventBuf, taskId);
+    postCapNo(&eventBuf, capno);
+    postKernelThreadId(&eventBuf, tid);
+
+    RELEASE_LOCK(&eventBufMutex);
+}
+
+void postTaskMigrateEvent (EventTaskId taskId,
+                           EventCapNo capno,
+                           EventCapNo new_capno)
+{
+    ACQUIRE_LOCK(&eventBufMutex);
+
+    if (!ensureRoomForEvent(&eventBuf, EVENT_TASK_MIGRATE)) {
+        return;
+    }
+
+    postEventHeader(&eventBuf, EVENT_TASK_MIGRATE);
+    /* EVENT_TASK_MIGRATE (taskID, cap, new_cap) */
+    postTaskId(&eventBuf, taskId);
+    postCapNo(&eventBuf, capno);
+    postCapNo(&eventBuf, new_capno);
+
+    RELEASE_LOCK(&eventBufMutex);
+}
+
+void postTaskDeleteEvent (EventTaskId taskId)
+{
+    ACQUIRE_LOCK(&eventBufMutex);
+
+    if (!ensureRoomForEvent(&eventBuf, EVENT_TASK_DELETE)) {
+        return;
+    }
+
+    postEventHeader(&eventBuf, EVENT_TASK_DELETE);
+    /* EVENT_TASK_DELETE (taskID) */
+    postTaskId(&eventBuf, taskId);
+
+    RELEASE_LOCK(&eventBufMutex);
+}
+
 void
 postEvent (Capability *cap, EventTypeNum tag)
 {
@@ -769,6 +990,24 @@ postEvent (Capability *cap, EventTypeNum tag)
     }
 
     postEventHeader(eb, tag);
+}
+
+void
+postEventAtTimestamp (Capability *cap, EventTimestamp ts, EventTypeNum tag)
+{
+    EventsBuf *eb;
+
+    eb = &capEventBuf[cap->no];
+
+    if (!ensureRoomForEvent(&eventBuf, tag)) {
+        return;
+    }
+
+    /* Normally we'd call postEventHeader(), but that generates its own
+       timestamp, so we go one level lower so we can write out
+       the timestamp we received as an argument. */
+    postEventTypeNum(eb, tag);
+    postWord64(eb, ts);
 }
 
 #define BUF 512

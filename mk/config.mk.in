@@ -119,7 +119,7 @@ SharedLibsPlatformList =                        \
     i386-unknown-freebsd x86_64-unknown-freebsd \
     i386-unknown-openbsd x86_64-unknown-openbsd \
     i386-unknown-netbsd  x86_64-unknown-netbsd  \
-    i386-unknown-mingw32                        \
+    i386-unknown-mingw32 x86_64-unknown-mingw32 \
     i386-apple-darwin    x86_64-apple-darwin    powerpc-apple-darwin
 
 ifeq "$(SOLARIS_BROKEN_SHLD)" "NO"
@@ -139,11 +139,7 @@ PlatformSupportsSharedLibs = $(if $(filter $(TARGETPLATFORM),\
 # the compiler you build with is generating registerised binaries), but
 # the stage2 compiler will be an unregisterised binary.
 #
-ifneq "$(findstring $(TargetArch_CPP), i386 x86_64 powerpc arm)" ""
-GhcUnregisterised=NO
-else
-GhcUnregisterised=YES
-endif
+GhcUnregisterised=@Unregisterised@
 
 # Build a compiler with a native code generator backend
 # (as well as a C backend)
@@ -154,8 +150,7 @@ endif
 ArchSupportsNCG=$(strip $(patsubst $(TargetArch_CPP), YES, $(findstring $(TargetArch_CPP), i386 x86_64 powerpc sparc)))
 OsSupportsNCG=$(strip $(patsubst $(TargetOS_CPP), YES, $(patsubst aix,,$(TargetOS_CPP))))
 
-# lazy test, because $(GhcUnregisterised) might be set in build.mk later.
-GhcWithNativeCodeGen=$(strip\
+GhcWithNativeCodeGen := $(strip\
     $(if $(filter YESYESNO,\
 		  $(OsSupportsNCG)$(ArchSupportsNCG)$(GhcUnregisterised)),YES,NO))
 
@@ -165,8 +160,7 @@ HaveLibDL = @HaveLibDL@
 # includes/stg/SMP.h
 ArchSupportsSMP=$(strip $(patsubst $(TargetArch_CPP), YES, $(findstring $(TargetArch_CPP), i386 x86_64 sparc powerpc arm)))
 
-# lazy test, because $(GhcUnregisterised) might be set in build.mk later.
-GhcWithSMP=$(strip $(if $(filter YESNO, $(ArchSupportsSMP)$(GhcUnregisterised)),YES,NO))
+GhcWithSMP := $(strip $(if $(filter YESNO, $(ArchSupportsSMP)$(GhcUnregisterised)),YES,NO))
 
 # Whether to include GHCi in the compiler.  Depends on whether the RTS linker
 # has support for this OS/ARCH combination.
@@ -304,8 +298,7 @@ ArchSupportsSplitObjs=$(strip $(if $(filter $(TargetArch_CPP),i386 x86_64 powerp
 OsSupportsSplitObjs=$(strip $(if $(filter $(TargetOS_CPP),mingw32 cygwin32 linux darwin solaris2 freebsd dragonfly netbsd openbsd),YES,NO))
 SplitObjsBroken = @SplitObjsBroken@
 
-# lazy test, so that $(GhcUnregisterised) can be set in build.mk
-SupportsSplitObjs=$(strip \
+SupportsSplitObjs := $(strip \
                     $(if $(and $(filter YES,$(ArchSupportsSplitObjs)),\
                                $(filter YES,$(OsSupportsSplitObjs)),\
                                $(filter NO,$(SplitObjsBroken)),\
@@ -549,6 +542,8 @@ compiler/cmm/Bitmap_HC_OPTS += -ffull-laziness
 # for some unknown reason, so turn full-laziness back on for this module.
 endif
 
+GHC_PACKAGE_DB_FLAG = @GHC_PACKAGE_DB_FLAG@
+
 #-----------------------------------------------------------------------------
 # C compiler
 #
@@ -631,14 +626,18 @@ endif
 ifeq "$(TARGETPLATFORM)" "i386-unknown-mingw32"
 WINDRES = $(INPLACE_MINGW)/bin/windres
 else ifeq "$(TARGETPLATFORM)" "x86_64-unknown-mingw32"
-WINDRES = $(INPLACE_MINGW)/bin/x86_64-w64-mingw32-windres
+WINDRES = $(INPLACE_MINGW)/bin/windres
 endif
 
 #-----------------------------------------------------------------------------
 # Mingwex Library
 #
 HaveLibMingwEx	= @HaveLibMingwEx@
+ifeq "$(TARGETPLATFORM)" "i386-unknown-mingw32"
 DLLTOOL			= inplace/mingw/bin/dlltool.exe
+else ifeq "$(TARGETPLATFORM)" "x86_64-unknown-mingw32"
+DLLTOOL			= inplace/mingw/bin/dlltool.exe
+endif
 
 #-----------------------------------------------------------------------------
 # Flex (currently unused, could be moved to glafp-utils)
@@ -714,14 +713,10 @@ DTRACE			= @DtraceCmd@
 
 LD = @LdCmd@
 NM = @NmCmd@
+OBJDUMP = @ObjdumpCmd@
 
 LLC = @LlcCmd@
 OPT = @OptCmd@
-
-# Some ld's support the -x flag and some don't, so the configure
-# script detects which we have and sets LdXFlag to "-x" or ""
-# respectively.
-LD_X			= @LdXFlag@
 
 # GNU ld supports input via a linker script, which is useful to avoid
 # overflowing command-line length limits.
@@ -770,7 +765,11 @@ endif
 #
 REAL_SHELL     = $(SHELL)
 
+ifeq "$(TARGETPLATFORM)" "x86_64-unknown-mingw32"
+STRIP_CMD      = $(TOP)/inplace/mingw/bin/strip.exe
+else
 STRIP_CMD      = strip
+endif
 PATCH_CMD      = @PatchCmd@
 TAR_CMD        = @TarCmd@
 BZIP2_CMD      = bzip2

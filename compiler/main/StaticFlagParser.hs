@@ -9,15 +9,18 @@
 --
 -----------------------------------------------------------------------------
 
-module StaticFlagParser (parseStaticFlags) where
+module StaticFlagParser (
+        parseStaticFlags,
+        parseStaticFlagsFull,
+        flagsStatic
+    ) where
 
 #include "HsVersions.h"
 
 import qualified StaticFlags as SF
-import StaticFlags ( v_opt_C_ready, getWayFlags, tablesNextToCode, WayName(..)
+import StaticFlags ( v_opt_C_ready, getWayFlags, WayName(..)
                    , opt_SimplExcessPrecision )
 import CmdLineParser
-import Config
 import SrcLoc
 import Util
 import Panic
@@ -46,11 +49,18 @@ import Data.List
 -- XXX: can we add an auto-generated list of static flags here?
 --
 parseStaticFlags :: [Located String] -> IO ([Located String], [Located String])
-parseStaticFlags args = do
+parseStaticFlags = parseStaticFlagsFull flagsStatic
+
+-- | Parse GHC's static flags as @parseStaticFlags@ does. However it also
+-- takes a list of available static flags, such that certain flags can be
+-- enabled or disabled through this argument.
+parseStaticFlagsFull :: [Flag IO] -> [Located String]
+                     -> IO ([Located String], [Located String])
+parseStaticFlagsFull flagsAvailable args = do
   ready <- readIORef v_opt_C_ready
   when ready $ ghcError (ProgramError "Too late for parseStaticFlags: call it before newSession")
 
-  (leftover, errs, warns1) <- processArgs static_flags args
+  (leftover, errs, warns1) <- processArgs flagsAvailable args
   when (not (null errs)) $ ghcError $ errorsToGhcException errs
 
     -- deal with the way flags: the way (eg. prof) gives rise to
@@ -58,23 +68,12 @@ parseStaticFlags args = do
   way_flags <- getWayFlags
   let way_flags' = map (mkGeneralLocated "in way flags") way_flags
 
-    -- if we're unregisterised, add some more flags
-  let unreg_flags | cGhcUnregisterised == "YES" = unregFlags
-                  | otherwise = []
-
-  (more_leftover, errs, warns2) <-
-      processArgs static_flags (unreg_flags ++ way_flags')
+    -- as these are GHC generated flags, we parse them with all static flags
+    -- in scope, regardless of what availableFlags are passed in.
+  (more_leftover, errs, warns2) <- processArgs flagsStatic way_flags'
 
     -- see sanity code in staticOpts
   writeIORef v_opt_C_ready True
-
-    -- TABLES_NEXT_TO_CODE affects the info table layout.
-    -- Be careful to do this *after* all processArgs,
-    -- because evaluating tablesNextToCode involves looking at the global
-    -- static flags.  Those pesky global variables...
-  let cg_flags | tablesNextToCode = map (mkGeneralLocated "in cg_flags")
-                                        ["-optc-DTABLES_NEXT_TO_CODE"]
-               | otherwise        = []
 
     -- HACK: -fexcess-precision is both a static and a dynamic flag.  If
     -- the static flag parser has slurped it, we must return it as a
@@ -85,10 +84,10 @@ parseStaticFlags args = do
        | otherwise                = []
 
   when (not (null errs)) $ ghcError $ errorsToGhcException errs
-  return (excess_prec ++ cg_flags ++ more_leftover ++ leftover,
+  return (excess_prec ++ more_leftover ++ leftover,
           warns1 ++ warns2)
 
-static_flags :: [Flag IO]
+flagsStatic :: [Flag IO]
 -- All the static flags should appear in this list.  It describes how each
 -- static flag should be processed.  Two main purposes:
 -- (a) if a command-line flag doesn't appear in the list, GHC can complain
@@ -102,13 +101,9 @@ static_flags :: [Flag IO]
 -- is a prefix flag (i.e. HasArg, Prefix, OptPrefix, AnySuffix) will override
 -- flags further down the list with the same prefix.
 
-static_flags = [
-        ------- GHCi -------------------------------------------------------
-    Flag "ignore-dot-ghci" (PassFlag addOpt)
-  , Flag "read-dot-ghci"   (NoArg (removeOpt "-ignore-dot-ghci"))
-
+flagsStatic = [
         ------- ways --------------------------------------------------------
-  , Flag "prof"           (NoArg (addWay WayProf))
+    Flag "prof"           (NoArg (addWay WayProf))
   , Flag "eventlog"       (NoArg (addWay WayEventLog))
   , Flag "parallel"       (NoArg (addWay WayPar))
   , Flag "gransim"        (NoArg (addWay WayGran))
@@ -123,9 +118,6 @@ static_flags = [
 
         ------ Debugging ----------------------------------------------------
   , Flag "dppr-debug"                  (PassFlag addOpt)
-  , Flag "dppr-cols"                   (AnySuffix addOpt)
-  , Flag "dppr-user-length"            (AnySuffix addOpt)
-  , Flag "dppr-case-as-let"            (PassFlag addOpt)
   , Flag "dsuppress-all"               (PassFlag addOpt)
   , Flag "dsuppress-uniques"           (PassFlag addOpt)
   , Flag "dsuppress-coercions"         (PassFlag addOpt)
@@ -135,7 +127,6 @@ static_flags = [
   , Flag "dsuppress-var-kinds"         (PassFlag addOpt)
   , Flag "dsuppress-type-signatures"   (PassFlag addOpt)
   , Flag "dopt-fuel"                   (AnySuffix addOpt)
-  , Flag "dtrace-level"                (AnySuffix addOpt)
   , Flag "dno-debug-output"            (PassFlag addOpt)
   , Flag "dstub-dead-values"           (PassFlag addOpt)
       -- rest of the debugging flags are dynamic
@@ -153,10 +144,6 @@ static_flags = [
 
         ------ Compiler flags -----------------------------------------------
 
-        -- -fPIC requires extra checking: only the NCG supports it.
-        -- See also DynFlags.parseDynamicFlags.
-  , Flag "fPIC" (PassFlag setPIC)
-
         -- All other "-fno-<blah>" options cancel out "-f<blah>" on the hsc cmdline
   , Flag "fno-"
          (PrefixPred (\s -> isStaticFlag ("f"++s)) (\s -> removeOpt ("-f"++s)))
@@ -166,21 +153,11 @@ static_flags = [
   , Flag "f" (AnySuffixPred isStaticFlag addOpt)
   ]
 
-setPIC :: String -> StaticP ()
-setPIC | cGhcWithNativeCodeGen == "YES" || cGhcUnregisterised == "YES"
-       = addOpt
-       | otherwise
-       = ghcError $ CmdLineError "-fPIC is not supported on this platform"
-
 isStaticFlag :: String -> Bool
 isStaticFlag f =
   f `elem` [
-    "fscc-profiling",
     "fdicts-strict",
     "fspec-inline-join-points",
-    "firrefutable-tuples",
-    "fparallel",
-    "fgransim",
     "fno-hi-version-check",
     "dno-black-holing",
     "fno-state-hack",
@@ -191,10 +168,8 @@ isStaticFlag f =
     "fexcess-precision",
     "static",
     "fhardwire-lib-paths",
-    "funregisterised",
     "fcpr-off",
     "ferror-spans",
-    "fPIC",
     "fhpc"
     ]
   || any (`isPrefixOf` f) [
@@ -207,12 +182,6 @@ isStaticFlag f =
     "funfolding-fun-discount",
     "funfolding-keeness-factor"
      ]
-
-unregFlags :: [Located String]
-unregFlags = map (mkGeneralLocated "in unregFlags")
-   [ "-optc-DNO_REGS"
-   , "-optc-DUSE_MINIINTERPRETER"
-   , "-funregisterised" ]
 
 -----------------------------------------------------------------------------
 -- convert sizes like "3.5M" into integers

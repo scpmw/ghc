@@ -39,7 +39,7 @@ import Module
 import UniqFM           ( eltsUFM )
 import ErrUtils
 import DynFlags
-import StaticFlags      ( v_Ld_inputs, opt_PIC, opt_Static, WayName(..) )
+import StaticFlags      ( v_Ld_inputs, opt_Static, WayName(..) )
 import Config
 import Panic
 import Util
@@ -326,8 +326,7 @@ link' dflags batch_attempt_linking hpt
                    return Succeeded
            else do
 
-        compilationProgressMsg dflags $ showSDoc $
-            (ptext (sLit "Linking") <+> text exe_file <+> text "...")
+        compilationProgressMsg dflags ("Linking " ++ exe_file ++ " ...")
 
         -- Don't showPass in Batch mode; doLink will do that for us.
         let link = case ghcLink dflags of
@@ -774,7 +773,7 @@ runPhase (Cpp sf) input_fn dflags0
        (dflags1, unhandled_flags, warns)
            <- io $ parseDynamicFilePragma dflags0 src_opts
        setDynFlags dflags1
-       io $ checkProcessArgsResult unhandled_flags
+       io $ checkProcessArgsResult dflags1 unhandled_flags
 
        if not (xopt Opt_Cpp dflags1) then do
            -- we have to be careful to emit warnings only once.
@@ -791,7 +790,7 @@ runPhase (Cpp sf) input_fn dflags0
             src_opts <- io $ getOptionsFromFile dflags0 output_fn
             (dflags2, unhandled_flags, warns)
                 <- io $ parseDynamicFilePragma dflags0 src_opts
-            io $ checkProcessArgsResult unhandled_flags
+            io $ checkProcessArgsResult dflags2 unhandled_flags
             unless (dopt Opt_Pp dflags2) $ io $ handleFlagWarnings dflags2 warns
             -- the HsPp pass below will emit warnings
 
@@ -826,7 +825,7 @@ runPhase (HsPp sf) input_fn dflags
             (dflags1, unhandled_flags, warns)
                 <- io $ parseDynamicFilePragma dflags src_opts
             setDynFlags dflags1
-            io $ checkProcessArgsResult unhandled_flags
+            io $ checkProcessArgsResult dflags1 unhandled_flags
             io $ handleFlagWarnings dflags1 warns
 
             return (Hsc sf, output_fn)
@@ -1176,10 +1175,8 @@ runPhase As input_fn dflags
                         = do
                             llvmVer <- io $ figureLlvmVersion dflags
                             return $ case llvmVer of
-                                -- using cGccLinkerOpts here but not clear if
-                                -- opt_c isn't a better choice
                                 Just n | n >= 30 ->
-                                    (SysTools.runClang, cGccLinkerOpts)
+                                    (SysTools.runClang, getOpts dflags opt_c)
 
                                 _ -> (SysTools.runAs, getOpts dflags opt_a)
 
@@ -1350,7 +1347,7 @@ runPhase LlvmLlc input_fn dflags
 
     let lc_opts = getOpts dflags opt_lc
         opt_lvl = max 0 (min 2 $ optLevel dflags)
-        rmodel | opt_PIC        = "pic"
+        rmodel | dopt Opt_PIC dflags = "pic"
                | not opt_Static = "dynamic-no-pic"
                | otherwise      = "static"
         tbaa | ver < 29                 = "" -- no tbaa in 2.8 and earlier
@@ -1372,7 +1369,8 @@ runPhase LlvmLlc input_fn dflags
                     SysTools.Option "-o", SysTools.FileOption "" output_fn]
                 ++ map SysTools.Option lc_opts
                 ++ [SysTools.Option tbaa]
-                ++ map SysTools.Option fpOpts)
+                ++ map SysTools.Option fpOpts
+                ++ map SysTools.Option abiOpts)
 
     return (next_phase, output_fn)
   where
@@ -1384,12 +1382,19 @@ runPhase LlvmLlc input_fn dflags
         -- while compiling GHC source code. It's probably due to fact that it
         -- does not enable VFP by default. Let's do this manually here
         fpOpts = case platformArch (targetPlatform dflags) of 
-                   ArchARM ARMv7 ext -> if (elem VFPv3 ext)
+                   ArchARM ARMv7 ext _ -> if (elem VFPv3 ext)
                                       then ["-mattr=+v7,+vfp3"]
                                       else if (elem VFPv3D16 ext)
                                            then ["-mattr=+v7,+vfp3,+d16"]
                                            else []
                    _                 -> []
+        -- On Ubuntu/Debian with ARM hard float ABI, LLVM's llc still
+        -- compiles into soft-float ABI. We need to explicitly set abi
+        -- to hard
+        abiOpts = case platformArch (targetPlatform dflags) of
+                    ArchARM ARMv7 _ HARD -> ["-float-abi=hard"]
+                    ArchARM ARMv7 _ _    -> []
+                    _                    -> []
 
 -----------------------------------------------------------------------------
 -- LlvmMangle phase
@@ -1484,10 +1489,11 @@ mkExtraObjToLinkIntoBinary dflags = do
                                         _ -> True
 
    when (dopt Opt_NoHsMain dflags && have_rts_opts_flags) $ do
-      hPutStrLn stderr $ "Warning: -rtsopts and -with-rtsopts have no effect with -no-hs-main.\n" ++
-                         "    Call hs_init_ghc() from your main() function to set these options."
+      log_action dflags dflags SevInfo noSrcSpan defaultUserStyle
+          (text "Warning: -rtsopts and -with-rtsopts have no effect with -no-hs-main." $$
+           text "    Call hs_init_ghc() from your main() function to set these options.")
 
-   mkExtraObj dflags "c" (showSDoc main)
+   mkExtraObj dflags "c" (showSDoc dflags main)
 
   where
     main
@@ -1518,7 +1524,7 @@ mkNoteObjsToLinkIntoBinary dflags dep_packages = do
    link_info <- getLinkInfo dflags dep_packages
 
    if (platformSupportsSavingLinkOpts (platformOS (targetPlatform dflags)))
-     then fmap (:[]) $ mkExtraObj dflags "s" (showSDoc (link_opts link_info))
+     then fmap (:[]) $ mkExtraObj dflags "s" (showSDoc dflags (link_opts link_info))
      else return []
 
   where
@@ -1537,8 +1543,8 @@ mkNoteObjsToLinkIntoBinary dflags dep_packages = do
 
             elfSectionNote :: String
             elfSectionNote = case platformArch (targetPlatform dflags) of
-                               ArchARM _ _ -> "%note"
-                               _           -> "@note"
+                               ArchARM _ _ _ -> "%note"
+                               _             -> "@note"
 
 -- The "link info" is a string representing the parameters of the
 -- link.  We save this information in the binary, and the next time we
@@ -1648,6 +1654,7 @@ getHCFilePackages filename =
 linkBinary :: DynFlags -> [FilePath] -> [PackageId] -> IO ()
 linkBinary dflags o_files dep_packages = do
     let platform = targetPlatform dflags
+        mySettings = settings dflags
         verbFlags = getVerbFlags dflags
         output_fn = exeFileName dflags
 
@@ -1760,7 +1767,7 @@ linkBinary dflags o_files dep_packages = do
                       -- like
                       --     ld: warning: could not create compact unwind for .LFB3: non-standard register 5 being saved in prolog
                       -- on x86.
-                      ++ (if cLdHasNoCompactUnwind == "YES"    &&
+                      ++ (if sLdSupportsCompactUnwind mySettings &&
                              platformOS   platform == OSDarwin &&
                              platformArch platform `elem` [ArchX86, ArchX86_64]
                           then ["-Wl,-no_compact_unwind"]
@@ -1791,7 +1798,6 @@ linkBinary dflags o_files dep_packages = do
                       ++ pkg_framework_opts
                       ++ debug_opts
                       ++ thread_opts
-                      ++ cGccLinkerOpts
                     ))
 
     -- parallel only: move binary to another dir -- HWL
@@ -2028,7 +2034,7 @@ linkDynLib dflags o_files dep_packages = do
 
 doCpp :: DynFlags -> Bool -> Bool -> FilePath -> FilePath -> IO ()
 doCpp dflags raw include_cc_opts input_fn output_fn = do
-    let hscpp_opts = getOpts dflags opt_P
+    let hscpp_opts = getOpts dflags opt_P ++ picPOpts dflags
     let cmdline_include_paths = includePaths dflags
 
     pkg_include_dirs <- getPackageIncludePath dflags []
@@ -2083,7 +2089,8 @@ hsSourceCppOpts =
 
 joinObjectFiles :: DynFlags -> [FilePath] -> FilePath -> IO ()
 joinObjectFiles dflags o_files output_fn = do
-  let ld_r args = SysTools.runLink dflags ([
+  let mySettings = settings dflags
+      ld_r args = SysTools.runLink dflags ([
                             SysTools.Option "-nostdlib",
                             SysTools.Option "-nodefaultlibs",
                             SysTools.Option "-Wl,-r"
@@ -2094,28 +2101,18 @@ joinObjectFiles dflags o_files output_fn = do
                          ++ (if platformArch (targetPlatform dflags) == ArchSPARC
                                 then [SysTools.Option "-Wl,-no-relax"]
                                 else [])
-                         ++ [
-                            SysTools.Option ld_build_id,
-                            -- SysTools.Option ld_x_flag,
-                            SysTools.Option "-o",
-                            SysTools.FileOption "" output_fn ]
+                         ++ map SysTools.Option ld_build_id
+                         ++ [ SysTools.Option "-o",
+                              SysTools.FileOption "" output_fn ]
                          ++ args)
-
-      -- Do *not* add the -x flag to ld, because we want to keep those
-      -- local symbols around for the benefit of external tools. e.g.
-      -- the 'perf report' output is much less useful if all the local
-      -- symbols have been stripped out.
-      --
-      -- ld_x_flag | null cLD_X = ""
-      --           | otherwise  = "-Wl,-x"
 
       -- suppress the generation of the .note.gnu.build-id section,
       -- which we don't need and sometimes causes ld to emit a
       -- warning:
-      ld_build_id | cLdHasBuildId == "YES"  = "-Wl,--build-id=none"
-                  | otherwise               = ""
+      ld_build_id | sLdSupportsBuildId mySettings = ["-Wl,--build-id=none"]
+                  | otherwise                     = []
 
-  if cLdIsGNULd == "YES"
+  if sLdIsGnuLd mySettings
      then do
           script <- newTempName dflags "ldscript"
           writeFile script $ "INPUT(" ++ unwords o_files ++ ")"

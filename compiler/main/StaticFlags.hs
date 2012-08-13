@@ -27,10 +27,7 @@ module StaticFlags (
 	WayName(..), Way(..), v_Ways, isRTSWay, mkBuildTag,
 
 	-- Output style options
-	opt_PprUserLength,
-	opt_PprCols,
-	opt_PprCaseAsLet,
-	opt_PprStyle_Debug, opt_TraceLevel,
+	opt_PprStyle_Debug,
         opt_NoDebugOutput,
 
 	-- Suppressing boring aspects of core dumps
@@ -43,16 +40,11 @@ module StaticFlags (
 	opt_SuppressTypeSignatures,
         opt_SuppressVarKinds,
 
-	-- profiling opts
-	opt_SccProfilingOn,
-
         -- Hpc opts
 	opt_Hpc,
 
 	-- language opts
 	opt_DictsStrict,
-	opt_IrrefutableTuples,
-	opt_Parallel,
 
 	-- optimisation opts
 	opt_NoStateHack,
@@ -75,19 +67,12 @@ module StaticFlags (
 	opt_Fuel,
 
 	-- Related to linking
-	opt_PIC,
 	opt_Static,
 
 	-- misc opts
-	opt_IgnoreDotGhci,
-	opt_GhciScripts,
 	opt_ErrorSpans,
-	opt_GranMacros,
-	opt_HiVersion,
 	opt_HistorySize,
-        opt_Unregisterised,
 	v_Ld_inputs,
-	tablesNextToCode,
         opt_StubDeadValues,
         opt_Ticky,
 
@@ -100,13 +85,13 @@ module StaticFlags (
 
 #include "HsVersions.h"
 
-import Config
 import FastString
 import Util
-import Maybes		( firstJusts, catMaybes )
+import Maybes		( firstJusts )
 import Panic
 
 import Control.Monad    ( liftM3 )
+import Data.Function
 import Data.Maybe       ( listToMaybe )
 import Data.IORef
 import System.IO.Unsafe	( unsafePerformIO )
@@ -133,7 +118,6 @@ lookUp	       	 :: FastString -> Bool
 lookup_def_int   :: String -> Int -> Int
 lookup_def_float :: String -> Float -> Float
 lookup_str       :: String -> Maybe String
-lookup_all_str   :: String -> [String]
 
 -- holds the static opts while they're being collected, before
 -- being unsafely read by unpacked_static_opts below.
@@ -163,10 +147,6 @@ lookup_str sw
 	Just ('=' : str) -> Just str
 	Just str         -> Just str
 	Nothing		 -> Nothing
-
-lookup_all_str sw = map f $ catMaybes (map (stripPrefix sw) staticFlags) where
-   f ('=' : str) = str
-   f str = str
 
 lookup_def_int sw def = case (lookup_str sw) of
 			    Nothing -> def		-- Use default
@@ -203,12 +183,6 @@ unpacked_opts =
    expandAts ('@':fname) = words (unsafePerformIO (readFile fname))
    expandAts l = [l]
 -}
-
-opt_IgnoreDotGhci :: Bool
-opt_IgnoreDotGhci		= lookUp (fsLit "-ignore-dot-ghci")
-
-opt_GhciScripts :: [String]
-opt_GhciScripts = lookup_all_str "-ghci-script"
 
 -- debugging options
 -- | Suppress all that is suppressable in core dumps.
@@ -260,43 +234,15 @@ opt_SuppressUniques :: Bool
 opt_SuppressUniques
 	=  lookUp  (fsLit "-dsuppress-uniques")
 
--- | Display case expressions with a single alternative as strict let bindings
-opt_PprCaseAsLet :: Bool
-opt_PprCaseAsLet	= lookUp   (fsLit "-dppr-case-as-let")
-
--- | Set the maximum width of the dumps
---   If GHC's command line options are bad then the options parser uses the
---   pretty printer display the error message. In this case the staticFlags
---   won't be initialized yet, so we must check for this case explicitly
---   and return the default value.
-opt_PprCols :: Int
-opt_PprCols
- = unsafePerformIO
- $ do	ready <- readIORef v_opt_C_ready
-	if (not ready)
-		then return 100
-		else return $ lookup_def_int "-dppr-cols" 100
-
 
 opt_PprStyle_Debug  :: Bool
 opt_PprStyle_Debug              = lookUp  (fsLit "-dppr-debug")
-
-opt_TraceLevel :: Int
-opt_TraceLevel = lookup_def_int "-dtrace-level" 1  	-- Standard level is 1
-	       	 			    	        -- Less verbose is 0
-
-opt_PprUserLength   :: Int
-opt_PprUserLength	        = lookup_def_int "-dppr-user-length" 5 --ToDo: give this a name
 
 opt_Fuel            :: Int
 opt_Fuel                        = lookup_def_int "-dopt-fuel" maxBound
 
 opt_NoDebugOutput   :: Bool
 opt_NoDebugOutput               = lookUp  (fsLit "-dno-debug-output")
-
--- profiling opts
-opt_SccProfilingOn :: Bool
-opt_SccProfilingOn		= lookUp  (fsLit "-fscc-profiling")
 
 -- Hpc opts
 opt_Hpc :: Bool
@@ -305,12 +251,6 @@ opt_Hpc				= lookUp (fsLit "-fhpc")
 -- language opts
 opt_DictsStrict :: Bool
 opt_DictsStrict			= lookUp  (fsLit "-fdicts-strict")
-
-opt_IrrefutableTuples :: Bool
-opt_IrrefutableTuples		= lookUp  (fsLit "-firrefutable-tuples")
-
-opt_Parallel :: Bool
-opt_Parallel			= lookUp  (fsLit "-fparallel")
 
 opt_SimpleListLiterals :: Bool
 opt_SimpleListLiterals	        = lookUp  (fsLit "-fsimple-list-literals")
@@ -323,12 +263,6 @@ opt_CprOff			= lookUp  (fsLit "-fcpr-off")
 	-- Switch off CPR analysis in the new demand analyser
 opt_MaxWorkerArgs :: Int
 opt_MaxWorkerArgs		= lookup_def_int "-fmax-worker-args" (10::Int)
-
-opt_GranMacros :: Bool
-opt_GranMacros			= lookUp  (fsLit "-fgransim")
-
-opt_HiVersion :: Integer
-opt_HiVersion			= read (cProjectVersionInt ++ cProjectPatchLevel) :: Integer
 
 opt_HistorySize :: Int
 opt_HistorySize			= lookup_def_int "-fhistory-size" 20
@@ -354,7 +288,12 @@ opt_UF_CreationThreshold, opt_UF_UseThreshold :: Int
 opt_UF_DearOp, opt_UF_FunAppDiscount, opt_UF_DictDiscount :: Int
 opt_UF_KeenessFactor :: Float
 
-opt_UF_CreationThreshold = lookup_def_int "-funfolding-creation-threshold" (450::Int)
+opt_UF_CreationThreshold = lookup_def_int "-funfolding-creation-threshold" (750::Int)
+  -- This threshold must be reasonably high to take 
+  -- account of possible discounts.  
+  -- E.g. 450 is not enough in 'fulsom' for Interval.sqr to inline into Csg.calc
+  --      (The unfolding for sqr never makes it into the interface file.)
+
 opt_UF_UseThreshold      = lookup_def_int "-funfolding-use-threshold"      (60::Int)
 opt_UF_FunAppDiscount    = lookup_def_int "-funfolding-fun-discount"       (60::Int)
 
@@ -367,26 +306,8 @@ opt_UF_DearOp            = ( 40 :: Int)
 
 
 -- Related to linking
-opt_PIC :: Bool
-#if darwin_TARGET_OS && x86_64_TARGET_ARCH
-opt_PIC                         = True
-#elif darwin_TARGET_OS
-opt_PIC                         = lookUp (fsLit "-fPIC") || not opt_Static
-#else
-opt_PIC                         = lookUp (fsLit "-fPIC")
-#endif
 opt_Static :: Bool
 opt_Static			= lookUp  (fsLit "-static")
-opt_Unregisterised :: Bool
-opt_Unregisterised		= lookUp  (fsLit "-funregisterised")
-
--- Derived, not a real option.  Determines whether we will be compiling
--- info tables that reside just before the entry code, or with an
--- indirection to the entry code.  See TABLES_NEXT_TO_CODE in
--- includes/rts/storage/InfoTables.h.
-tablesNextToCode :: Bool
-tablesNextToCode 		= not opt_Unregisterised
-		 		  && cGhcEnableTablesNextToCode == "YES"
 
 -- Include full span info in error messages, instead of just the start position.
 opt_ErrorSpans :: Bool

@@ -34,7 +34,6 @@ import OldCmm
 
 import CLabel         ( toEntryLbl )
 import StgSyn
-import StaticFlags
 import Id
 import ForeignCall
 import VarSet
@@ -45,6 +44,7 @@ import TyCon
 import Util
 import Outputable
 import FastString
+import DynFlags      ( dopt, DynFlag(Opt_SccProfilingOn) )
 
 import Control.Monad (when)
 \end{code}
@@ -431,7 +431,7 @@ cgEvalAlts cc_slot bndr alt_type@(PrimAlt tycon) alts
                 ; cgPrimAlts GCMayHappen alt_type reg alts }
 
         ; lbl <- emitReturnTarget (idName bndr) abs_c
-        ; saveContext (toEntryLbl undefined lbl)
+        ; saveContext (toEntryLbl lbl)
         ; returnFC (CaseAlts lbl Nothing bndr) }
 
 cgEvalAlts cc_slot bndr (UbxTupAlt _) [(con,args,_,rhs)]
@@ -454,7 +454,7 @@ cgEvalAlts cc_slot bndr (UbxTupAlt _) [(con,args,_,rhs)]
                 ; unbxTupleHeapCheck live_regs ptrs nptrs noStmts
                                      (cgExpr rhs) }
         ; lbl <- emitReturnTarget (idName bndr) abs_c
-        ; saveContext (toEntryLbl undefined lbl)
+        ; saveContext (toEntryLbl lbl)
         ; returnFC (CaseAlts lbl Nothing bndr) }
 
 cgEvalAlts cc_slot bndr alt_type alts
@@ -523,7 +523,6 @@ cgAlgAlts gc_flag cc_slot alt_type alts
 
             branches = [(dataConTagZ con, blks)
                        | (DataAlt con, blks) <- alts]
-       -- in
        return (branches, mb_deflt)
 
 
@@ -654,13 +653,13 @@ saveCurrentCostCentre ::
                CmmStmts)                -- Assignment to save it
 
 saveCurrentCostCentre
-  | not opt_SccProfilingOn
-  = returnFC (Nothing, noStmts)
-  | otherwise
-  = do  { slot <- allocPrimStack PtrArg
-        ; sp_rel <- getSpRelOffset slot
-        ; returnFC (Just slot,
-                    oneStmt (CmmStore sp_rel curCCS)) }
+  = do dflags <- getDynFlags
+       if not (dopt Opt_SccProfilingOn dflags)
+           then returnFC (Nothing, noStmts)
+           else do slot <- allocPrimStack PtrArg
+                   sp_rel <- getSpRelOffset slot
+                   returnFC (Just slot,
+                             oneStmt (CmmStore sp_rel curCCS))
 
 -- Sometimes we don't free the slot containing the cost centre after restoring it
 -- (see CgLetNoEscape.cgLetNoEscapeBody).

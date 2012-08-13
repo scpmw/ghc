@@ -35,6 +35,8 @@ import DynFlags
 import CoreSyn          ( Tickish(..) )
 import SrcLoc
 import FastString
+import Util
+
 
 stgMassageForProfiling
         :: DynFlags

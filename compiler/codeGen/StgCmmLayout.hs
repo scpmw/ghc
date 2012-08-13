@@ -15,7 +15,7 @@
 
 module StgCmmLayout (
 	mkArgDescr, 
-	emitCall, emitReturn,
+        emitCall, emitReturn, adjustHpBackwards,
 
 	emitClosureProcAndInfoTable,
 	emitClosureAndInfoTable,
@@ -41,61 +41,93 @@ import StgCmmEnv
 import StgCmmTicky
 import StgCmmMonad
 import StgCmmUtils
+import StgCmmProf
 
 import MkGraph
 import SMRep
 import Cmm
+import CmmUtils
 import CLabel
 import StgSyn
 import Id
 import Name
 import TyCon		( PrimRep(..) )
-import BasicTypes	( Arity )
+import BasicTypes	( RepArity )
 import DynFlags
-import StaticFlags
+import Module
 
 import Constants
 import Util
 import Data.List
 import Outputable
-import FastString	( mkFastString, FastString, fsLit )
+import FastString
 
 ------------------------------------------------------------------------
 --		Call and return sequences
 ------------------------------------------------------------------------
 
-emitReturn :: [CmmExpr] -> FCode ()
--- Return multiple values to the sequel
+-- | Return multiple values to the sequel
 --
--- If the sequel is Return
---	return (x,y)
--- If the sequel is AssignTo [p,q]
---	p=x; q=y; 
+-- If the sequel is @Return@
+--
+-- >     return (x,y)
+--
+-- If the sequel is @AssignTo [p,q]@
+--
+-- >    p=x; q=y;
+--
+emitReturn :: [CmmExpr] -> FCode ReturnKind
 emitReturn results
-  = do { sequel    <- getSequel;
+  = do { dflags    <- getDynFlags
+       ; sequel    <- getSequel
        ; updfr_off <- getUpdFrameOff
-       ; emit $ mkComment $ mkFastString ("emitReturn: " ++ show sequel)
        ; case sequel of
            Return _ ->
              do { adjustHpBackwards
-                ; emit (mkReturnSimple results updfr_off) }
+                ; emit (mkReturnSimple dflags results updfr_off) }
            AssignTo regs adjust ->
              do { if adjust then adjustHpBackwards else return ()
-                ; emit (mkMultiAssign  regs results) }
+                ; emitMultiAssign  regs results }
+       ; return AssignedDirectly
        }
 
-emitCall :: (Convention, Convention) -> CmmExpr -> [CmmExpr] -> FCode ()
--- (cgCall fun args) makes a call to the entry-code of 'fun', 
--- passing 'args', and returning the results to the current sequel
-emitCall convs@(callConv, _) fun args
-  = do	{ adjustHpBackwards
+
+-- | @emitCall conv fun args@ makes a call to the entry-code of @fun@,
+-- using the call/return convention @conv@, passing @args@, and
+-- returning the results to the current sequel.
+--
+emitCall :: (Convention, Convention) -> CmmExpr -> [CmmExpr] -> FCode ReturnKind
+emitCall convs fun args
+  = emitCallWithExtraStack convs fun args noExtraStack
+
+
+-- | @emitCallWithExtraStack conv fun args stack@ makes a call to the
+-- entry-code of @fun@, using the call/return convention @conv@,
+-- passing @args@, pushing some extra stack frames described by
+-- @stack@, and returning the results to the current sequel.
+--
+emitCallWithExtraStack
+   :: (Convention, Convention) -> CmmExpr -> [CmmExpr]
+   -> (ByteOff, [(CmmExpr,ByteOff)]) -> FCode ReturnKind
+emitCallWithExtraStack (callConv, retConv) fun args extra_stack
+  = do	{ dflags <- getDynFlags
+        ; adjustHpBackwards
 	; sequel <- getSequel
 	; updfr_off <- getUpdFrameOff
-        ; emit $ mkComment $ mkFastString ("emitCall: " ++ show sequel)
-	; case sequel of
-	    Return _            -> emit (mkForeignJump callConv fun args updfr_off)
-	    AssignTo res_regs _ -> emit (mkCall fun convs res_regs args updfr_off)
-    }
+        ; case sequel of
+            Return _ -> do
+              emit $ mkForeignJumpExtra dflags callConv fun args updfr_off extra_stack
+              return AssignedDirectly
+            AssignTo res_regs _ -> do
+              k <- newLabelC
+              let area = Young k
+                  (off, copyin) = copyInOflow dflags retConv area res_regs
+                  copyout = mkCallReturnsTo dflags fun callConv args k off updfr_off
+                                   extra_stack
+              emit (copyout <*> mkLabel k <*> copyin)
+              return (ReturnedTo k off)
+      }
+
 
 adjustHpBackwards :: FCode ()
 -- This function adjusts and heap pointers just before a tail call or
@@ -128,65 +160,150 @@ adjustHpBackwards
 --	Making calls: directCall and slowCall
 -------------------------------------------------------------------------
 
-directCall :: CLabel -> Arity -> [StgArg] -> FCode ()
+-- General plan is:
+--   - we'll make *one* fast call, either to the function itself
+--     (directCall) or to stg_ap_<pat>_fast (slowCall)
+--     Any left-over arguments will be pushed on the stack,
+--
+--     e.g. Sp[old+8]  = arg1
+--          Sp[old+16] = arg2
+--          Sp[old+32] = stg_ap_pp_info
+--          R2 = arg3
+--          R3 = arg4
+--          call f() return to Nothing updfr_off: 32
+
+
+directCall :: Convention -> CLabel -> RepArity -> [StgArg] -> FCode ReturnKind
 -- (directCall f n args)
 -- calls f(arg1, ..., argn), and applies the result to the remaining args
 -- The function f has arity n, and there are guaranteed at least n args
 -- Both arity and args include void args
-directCall lbl arity stg_args 
-  = do	{ cmm_args <- getNonVoidArgAmodes stg_args
-	; direct_call "directCall" lbl arity cmm_args (argsReps stg_args) }
+directCall conv lbl arity stg_args
+  = do  { argreps <- getArgRepsAmodes stg_args
+        ; direct_call "directCall" conv lbl arity argreps }
 
-slowCall :: CmmExpr -> [StgArg] -> FCode ()
+
+slowCall :: CmmExpr -> [StgArg] -> FCode ReturnKind
 -- (slowCall fun args) applies fun to args, returning the results to Sequel
 slowCall fun stg_args 
-  = do	{ cmm_args <- getNonVoidArgAmodes stg_args
-	; slow_call fun cmm_args (argsReps stg_args) }
+  = do  { dflags <- getDynFlags
+        ; argsreps <- getArgRepsAmodes stg_args
+        ; let (rts_fun, arity) = slowCallPattern (map fst argsreps)
+        ; r <- direct_call "slow_call" NativeNodeCall
+                 (mkRtsApFastLabel rts_fun) arity ((P,Just fun):argsreps)
+        ; emitComment $ mkFastString ("slow_call for " ++
+                                      showSDoc dflags (ppr fun) ++
+                                      " with pat " ++ unpackFS rts_fun)
+        ; return r
+        }
+
 
 --------------
-direct_call :: String -> CLabel -> Arity -> [CmmExpr] -> [ArgRep] -> FCode ()
--- NB1: (length args) may be less than (length reps), because
---     the args exclude the void ones
--- NB2: 'arity' refers to the *reps* 
-direct_call caller lbl arity args reps
-  | debugIsOn && arity > length reps	-- Too few args
+direct_call :: String
+            -> Convention     -- e.g. NativeNodeCall or NativeDirectCall
+            -> CLabel -> RepArity
+            -> [(ArgRep,Maybe CmmExpr)] -> FCode ReturnKind
+direct_call caller call_conv lbl arity args
+  | debugIsOn && real_arity > length args  -- Too few args
   = do -- Caller should ensure that there enough args!
-       dflags <- getDynFlags
-       let platform = targetPlatform dflags
-       pprPanic "direct_call" (text caller <+> ppr arity
-                           <+> pprPlatform platform lbl <+> ppr (length reps)
-                           <+> pprPlatform platform args <+> ppr reps )
+       pprPanic "direct_call" $
+            text caller <+> ppr arity <+>
+            ppr lbl <+> ppr (length args) <+>
+            ppr (map snd args) <+> ppr (map fst args)
 
-  | null rest_reps     -- Precisely the right number of arguments
-  = emitCall (NativeDirectCall, NativeReturn) target args
+  | null rest_args  -- Precisely the right number of arguments
+  = emitCall (call_conv, NativeReturn) target (nonVArgs args)
 
-  | otherwise		-- Over-saturated call
-  = ASSERT( arity == length initial_reps )
-    do	{ pap_id <- newTemp gcWord
-	; withSequel (AssignTo [pap_id] True)
-		     (emitCall (NativeDirectCall, NativeReturn) target fast_args)
-	; slow_call (CmmReg (CmmLocal pap_id)) 
-		    rest_args rest_reps }
+  | otherwise       -- Note [over-saturated calls]
+  = do dflags <- getDynFlags
+       emitCallWithExtraStack (call_conv, NativeReturn)
+                              target
+                              (nonVArgs fast_args)
+                              (mkStkOffsets (stack_args dflags))
   where
     target = CmmLit (CmmLabel lbl)
-    (initial_reps, rest_reps) = splitAt arity reps
-    arg_arity = count isNonV initial_reps
-    (fast_args, rest_args) = splitAt arg_arity args
+    (fast_args, rest_args) = splitAt real_arity args
+    stack_args dflags = slowArgs dflags rest_args
+    real_arity = case call_conv of
+                   NativeNodeCall -> arity+1
+                   _              -> arity
 
---------------
-slow_call :: CmmExpr -> [CmmExpr] -> [ArgRep] -> FCode ()
-slow_call fun args reps
-  = do dflags <- getDynFlags
-       let platform = targetPlatform dflags
-       call <- getCode $ direct_call "slow_call" (mkRtsApFastLabel rts_fun) arity args reps
-       emit $ mkComment $ mkFastString ("slow_call for " ++ showSDoc (pprPlatform platform fun) ++
-                                        " with pat " ++ showSDoc (ftext rts_fun))
-       emit (mkAssign nodeReg fun <*> call)
+
+-- When constructing calls, it is easier to keep the ArgReps and the
+-- CmmExprs zipped together.  However, a void argument has no
+-- representation, so we need to use Maybe CmmExpr (the alternative of
+-- using zeroCLit or even undefined would work, but would be ugly).
+--
+getArgRepsAmodes :: [StgArg] -> FCode [(ArgRep, Maybe CmmExpr)]
+getArgRepsAmodes = mapM getArgRepAmode
+  where getArgRepAmode arg
+           | V <- rep  = return (V, Nothing)
+           | otherwise = do expr <- getArgAmode (NonVoid arg)
+                            return (rep, Just expr)
+           where rep = toArgRep (argPrimRep arg)
+
+nonVArgs :: [(ArgRep, Maybe CmmExpr)] -> [CmmExpr]
+nonVArgs [] = []
+nonVArgs ((_,Nothing)  : args) = nonVArgs args
+nonVArgs ((_,Just arg) : args) = arg : nonVArgs args
+
+{-
+Note [over-saturated calls]
+
+The natural thing to do for an over-saturated call would be to call
+the function with the correct number of arguments, and then apply the
+remaining arguments to the value returned, e.g.
+
+  f a b c d   (where f has arity 2)
+  -->
+  r = call f(a,b)
+  call r(c,d)
+
+but this entails
+  - saving c and d on the stack
+  - making a continuation info table
+  - at the continuation, loading c and d off the stack into regs
+  - finally, call r
+
+Note that since there are a fixed number of different r's
+(e.g.  stg_ap_pp_fast), we can also pre-compile continuations
+that correspond to each of them, rather than generating a fresh
+one for each over-saturated call.
+
+Not only does this generate much less code, it is faster too.  We will
+generate something like:
+
+Sp[old+16] = c
+Sp[old+24] = d
+Sp[old+32] = stg_ap_pp_info
+call f(a,b) -- usual calling convention
+
+For the purposes of the CmmCall node, we count this extra stack as
+just more arguments that we are passing on the stack (cml_args).
+-}
+
+-- | 'slowArgs' takes a list of function arguments and prepares them for
+-- pushing on the stack for "extra" arguments to a function which requires
+-- fewer arguments than we currently have.
+slowArgs :: DynFlags -> [(ArgRep, Maybe CmmExpr)] -> [(ArgRep, Maybe CmmExpr)]
+slowArgs _ [] = []
+slowArgs dflags args -- careful: reps contains voids (V), but args does not
+  | dopt Opt_SccProfilingOn dflags
+              = save_cccs ++ this_pat ++ slowArgs dflags rest_args
+  | otherwise =              this_pat ++ slowArgs dflags rest_args
   where
-    (rts_fun, arity) = slowCallPattern reps
+    (arg_pat, n)            = slowCallPattern (map fst args)
+    (call_args, rest_args)  = splitAt n args
+
+    stg_ap_pat = mkCmmRetInfoLabel rtsPackageId arg_pat
+    this_pat   = (N, Just (mkLblExpr stg_ap_pat)) : call_args
+    save_cccs  = [(N, Just (mkLblExpr save_cccs_lbl)), (N, Just curCCS)]
+    save_cccs_lbl = mkCmmRetInfoLabel rtsPackageId (fsLit "stg_restore_cccs")
+
+
 
 -- These cases were found to cover about 99% of all slow calls:
-slowCallPattern :: [ArgRep] -> (FastString, Arity)
+slowCallPattern :: [ArgRep] -> (FastString, RepArity)
 -- Returns the generic apply function and arity
 slowCallPattern (P: P: P: P: P: P: _) = (fsLit "stg_ap_pppppp", 6)
 slowCallPattern (P: P: P: P: P: _)    = (fsLit "stg_ap_ppppp", 5)
@@ -203,6 +320,30 @@ slowCallPattern (F: _)		      = (fsLit "stg_ap_f", 1)
 slowCallPattern (D: _)		      = (fsLit "stg_ap_d", 1)
 slowCallPattern (L: _)		      = (fsLit "stg_ap_l", 1)
 slowCallPattern []		      = (fsLit "stg_ap_0", 0)
+
+
+-------------------------------------------------------------------------
+-- Fix the byte-offsets of a bunch of things to push on the stack
+
+-- This is used for pushing slow-call continuations.
+-- See Note [over-saturated calls].
+
+mkStkOffsets
+  :: [(ArgRep, Maybe CmmExpr)]    -- things to make offsets for
+  -> ( ByteOff                    -- OUTPUTS: Topmost allocated word
+     , [(CmmExpr, ByteOff)] )     -- things with offsets (voids filtered out)
+mkStkOffsets things
+    = loop 0 [] (reverse things)
+  where
+    loop offset offs [] = (offset,offs)
+    loop offset offs ((_,Nothing):things) = loop offset offs things
+	-- ignore Void arguments
+    loop offset offs ((rep,Just thing):things)
+        = loop thing_off ((thing, thing_off):offs) things
+	where
+          thing_off = offset + argRepSizeW rep * wORD_SIZE
+	    -- offset of thing is offset+size, because we're 
+	    -- growing the stack *downwards* as the offsets increase.
 
 
 -------------------------------------------------------------------------
@@ -241,10 +382,7 @@ isNonV :: ArgRep -> Bool
 isNonV V = False
 isNonV _ = True
 
-argsReps :: [StgArg] -> [ArgRep]
-argsReps = map (toArgRep . argPrimRep)
-
-argRepSizeW :: ArgRep -> WordOff		-- Size in words
+argRepSizeW :: ArgRep -> WordOff                -- Size in words
 argRepSizeW N = 1
 argRepSizeW P = 1
 argRepSizeW F = 1
@@ -271,7 +409,8 @@ getHpRelOffset virtual_offset
 	; return (cmmRegOffW hpReg (hpRel (realHp hp_usg) virtual_offset)) }
 
 mkVirtHeapOffsets
-  :: Bool		-- True <=> is a thunk
+  :: DynFlags
+  -> Bool		-- True <=> is a thunk
   -> [(PrimRep,a)]	-- Things to make offsets for
   -> (WordOff,		-- _Total_ number of words allocated
       WordOff,		-- Number of words allocated for *pointers*
@@ -287,7 +426,7 @@ mkVirtHeapOffsets
 -- mkVirtHeapOffsets always returns boxed things with smaller offsets
 -- than the unboxed things
 
-mkVirtHeapOffsets is_thunk things
+mkVirtHeapOffsets dflags is_thunk things
   = let non_void_things		      = filterOut (isVoidRep . fst)  things
 	(ptrs, non_ptrs)    	      = partition (isGcPtrRep . fst) non_void_things
     	(wds_of_ptrs, ptrs_w_offsets) = mapAccumL computeOffset 0 ptrs
@@ -295,16 +434,16 @@ mkVirtHeapOffsets is_thunk things
     in
     (tot_wds, wds_of_ptrs, ptrs_w_offsets ++ non_ptrs_w_offsets)
   where
-    hdr_size 	| is_thunk   = thunkHdrSize
-		| otherwise  = fixedHdrSize
+    hdr_size | is_thunk   = thunkHdrSize dflags
+             | otherwise  = fixedHdrSize dflags
 
     computeOffset wds_so_far (rep, thing)
       = (wds_so_far + argRepSizeW (toArgRep rep), 
 	 (NonVoid thing, hdr_size + wds_so_far))
 
-mkVirtConstrOffsets :: [(PrimRep,a)] -> (WordOff, WordOff, [(NonVoid a, VirtualHpOffset)])
+mkVirtConstrOffsets :: DynFlags -> [(PrimRep,a)] -> (WordOff, WordOff, [(NonVoid a, VirtualHpOffset)])
 -- Just like mkVirtHeapOffsets, but for constructors
-mkVirtConstrOffsets = mkVirtHeapOffsets False
+mkVirtConstrOffsets dflags = mkVirtHeapOffsets dflags False
 
 
 -------------------------------------------------------------------------
@@ -394,12 +533,13 @@ emitClosureProcAndInfoTable top_lvl bndr lf_info info_tbl args body
         -- top-level binding, which this binding would incorrectly shadow.
         ; node <- if top_lvl then return $ idToReg (NonVoid bndr)
                   else bindToReg (NonVoid bndr) lf_info
-        ; let node_points = nodeMustPointToIt lf_info
+        ; dflags <- getDynFlags
+        ; let node_points = nodeMustPointToIt dflags lf_info
         ; arg_regs <- bindArgsToRegs args
         ; let args' = if node_points then (node : arg_regs) else arg_regs
-              conv  = if nodeMustPointToIt lf_info then NativeNodeCall
-                                                   else NativeDirectCall
-              (offset, _) = mkCallEntry conv args'
+              conv  = if nodeMustPointToIt dflags lf_info then NativeNodeCall
+                                                          else NativeDirectCall
+              (offset, _) = mkCallEntry dflags conv args'
         ; emitClosureAndInfoTable info_tbl conv args' $ body (offset, node, arg_regs)
         }
 
@@ -408,10 +548,9 @@ emitClosureProcAndInfoTable top_lvl bndr lf_info info_tbl args body
 emitClosureAndInfoTable ::
   CmmInfoTable -> Convention -> [LocalReg] -> FCode () -> FCode ()
 emitClosureAndInfoTable info_tbl conv args body
-  = do { dflags <- getDynFlags
-       ; blks <- getCode body
-       ; let entry_lbl = toEntryLbl (targetPlatform dflags) (cit_lbl info_tbl)
-       ; emitProcWithConvention conv info_tbl entry_lbl args blks
+  = do { blks <- getCode body
+       ; let entry_lbl = toEntryLbl (cit_lbl info_tbl)
+       ; emitProcWithConvention conv (Just info_tbl) entry_lbl args blks
        }
 
 -----------------------------------------------------------------------------
@@ -420,32 +559,32 @@ emitClosureAndInfoTable info_tbl conv args body
 --
 -----------------------------------------------------------------------------
 	
-stdInfoTableSizeW :: WordOff
+stdInfoTableSizeW :: DynFlags -> WordOff
 -- The size of a standard info table varies with profiling/ticky etc,
 -- so we can't get it from Constants
 -- It must vary in sync with mkStdInfoTable
-stdInfoTableSizeW
+stdInfoTableSizeW dflags
   = size_fixed + size_prof
   where
     size_fixed = 2	-- layout, type
-    size_prof | opt_SccProfilingOn = 2
+    size_prof | dopt Opt_SccProfilingOn dflags = 2
 	      | otherwise	   = 0
 
-stdInfoTableSizeB  :: ByteOff
-stdInfoTableSizeB = stdInfoTableSizeW * wORD_SIZE :: ByteOff
+stdInfoTableSizeB  :: DynFlags -> ByteOff
+stdInfoTableSizeB dflags = stdInfoTableSizeW dflags * wORD_SIZE :: ByteOff
 
-stdSrtBitmapOffset :: ByteOff
+stdSrtBitmapOffset :: DynFlags -> ByteOff
 -- Byte offset of the SRT bitmap half-word which is 
 -- in the *higher-addressed* part of the type_lit
-stdSrtBitmapOffset = stdInfoTableSizeB - hALF_WORD_SIZE
+stdSrtBitmapOffset dflags = stdInfoTableSizeB dflags - hALF_WORD_SIZE
 
-stdClosureTypeOffset :: ByteOff
+stdClosureTypeOffset :: DynFlags -> ByteOff
 -- Byte offset of the closure type half-word 
-stdClosureTypeOffset = stdInfoTableSizeB - wORD_SIZE
+stdClosureTypeOffset dflags = stdInfoTableSizeB dflags - wORD_SIZE
 
-stdPtrsOffset, stdNonPtrsOffset :: ByteOff
-stdPtrsOffset    = stdInfoTableSizeB - 2*wORD_SIZE
-stdNonPtrsOffset = stdInfoTableSizeB - 2*wORD_SIZE + hALF_WORD_SIZE
+stdPtrsOffset, stdNonPtrsOffset :: DynFlags -> ByteOff
+stdPtrsOffset    dflags = stdInfoTableSizeB dflags - 2*wORD_SIZE
+stdNonPtrsOffset dflags = stdInfoTableSizeB dflags - 2*wORD_SIZE + hALF_WORD_SIZE
 
 -------------------------------------------------------------------------
 --
@@ -457,71 +596,72 @@ closureInfoPtr :: CmmExpr -> CmmExpr
 -- Takes a closure pointer and returns the info table pointer
 closureInfoPtr e = CmmLoad e bWord
 
-entryCode :: CmmExpr -> CmmExpr
+entryCode :: DynFlags -> CmmExpr -> CmmExpr
 -- Takes an info pointer (the first word of a closure)
 -- and returns its entry code
-entryCode e | tablesNextToCode = e
-	    | otherwise	       = CmmLoad e bWord
+entryCode dflags e
+ | tablesNextToCode dflags = e
+ | otherwise               = CmmLoad e bWord
 
-getConstrTag :: CmmExpr -> CmmExpr
+getConstrTag :: DynFlags -> CmmExpr -> CmmExpr
 -- Takes a closure pointer, and return the *zero-indexed*
 -- constructor tag obtained from the info table
 -- This lives in the SRT field of the info table
 -- (constructors don't need SRTs).
-getConstrTag closure_ptr 
-  = CmmMachOp (MO_UU_Conv halfWordWidth wordWidth) [infoTableConstrTag info_table]
+getConstrTag dflags closure_ptr
+  = CmmMachOp (MO_UU_Conv halfWordWidth wordWidth) [infoTableConstrTag dflags info_table]
   where
-    info_table = infoTable (closureInfoPtr closure_ptr)
+    info_table = infoTable dflags (closureInfoPtr closure_ptr)
 
-cmmGetClosureType :: CmmExpr -> CmmExpr
+cmmGetClosureType :: DynFlags -> CmmExpr -> CmmExpr
 -- Takes a closure pointer, and return the closure type
 -- obtained from the info table
-cmmGetClosureType closure_ptr 
-  = CmmMachOp (MO_UU_Conv halfWordWidth wordWidth) [infoTableClosureType info_table]
+cmmGetClosureType dflags closure_ptr
+  = CmmMachOp (MO_UU_Conv halfWordWidth wordWidth) [infoTableClosureType dflags info_table]
   where
-    info_table = infoTable (closureInfoPtr closure_ptr)
+    info_table = infoTable dflags (closureInfoPtr closure_ptr)
 
-infoTable :: CmmExpr -> CmmExpr
+infoTable :: DynFlags -> CmmExpr -> CmmExpr
 -- Takes an info pointer (the first word of a closure)
 -- and returns a pointer to the first word of the standard-form
 -- info table, excluding the entry-code word (if present)
-infoTable info_ptr
-  | tablesNextToCode = cmmOffsetB info_ptr (- stdInfoTableSizeB)
-  | otherwise	     = cmmOffsetW info_ptr 1	-- Past the entry code pointer
+infoTable dflags info_ptr
+  | tablesNextToCode dflags = cmmOffsetB info_ptr (- stdInfoTableSizeB dflags)
+  | otherwise               = cmmOffsetW info_ptr 1 -- Past the entry code pointer
 
-infoTableConstrTag :: CmmExpr -> CmmExpr
+infoTableConstrTag :: DynFlags -> CmmExpr -> CmmExpr
 -- Takes an info table pointer (from infoTable) and returns the constr tag
 -- field of the info table (same as the srt_bitmap field)
 infoTableConstrTag = infoTableSrtBitmap
 
-infoTableSrtBitmap :: CmmExpr -> CmmExpr
+infoTableSrtBitmap :: DynFlags -> CmmExpr -> CmmExpr
 -- Takes an info table pointer (from infoTable) and returns the srt_bitmap
 -- field of the info table
-infoTableSrtBitmap info_tbl
-  = CmmLoad (cmmOffsetB info_tbl stdSrtBitmapOffset) bHalfWord
+infoTableSrtBitmap dflags info_tbl
+  = CmmLoad (cmmOffsetB info_tbl (stdSrtBitmapOffset dflags)) bHalfWord
 
-infoTableClosureType :: CmmExpr -> CmmExpr
+infoTableClosureType :: DynFlags -> CmmExpr -> CmmExpr
 -- Takes an info table pointer (from infoTable) and returns the closure type
 -- field of the info table.
-infoTableClosureType info_tbl 
-  = CmmLoad (cmmOffsetB info_tbl stdClosureTypeOffset) bHalfWord
+infoTableClosureType dflags info_tbl
+  = CmmLoad (cmmOffsetB info_tbl (stdClosureTypeOffset dflags)) bHalfWord
 
-infoTablePtrs :: CmmExpr -> CmmExpr
-infoTablePtrs info_tbl 
-  = CmmLoad (cmmOffsetB info_tbl stdPtrsOffset) bHalfWord
+infoTablePtrs :: DynFlags -> CmmExpr -> CmmExpr
+infoTablePtrs dflags info_tbl
+  = CmmLoad (cmmOffsetB info_tbl (stdPtrsOffset dflags)) bHalfWord
 
-infoTableNonPtrs :: CmmExpr -> CmmExpr
-infoTableNonPtrs info_tbl 
-  = CmmLoad (cmmOffsetB info_tbl stdNonPtrsOffset) bHalfWord
+infoTableNonPtrs :: DynFlags -> CmmExpr -> CmmExpr
+infoTableNonPtrs dflags info_tbl
+  = CmmLoad (cmmOffsetB info_tbl (stdNonPtrsOffset dflags)) bHalfWord
 
-funInfoTable :: CmmExpr -> CmmExpr
+funInfoTable :: DynFlags -> CmmExpr -> CmmExpr
 -- Takes the info pointer of a function,
 -- and returns a pointer to the first word of the StgFunInfoExtra struct
 -- in the info table.
-funInfoTable info_ptr
-  | tablesNextToCode
-  = cmmOffsetB info_ptr (- stdInfoTableSizeB - sIZEOF_StgFunInfoExtraRev)
+funInfoTable dflags info_ptr
+  | tablesNextToCode dflags
+  = cmmOffsetB info_ptr (- stdInfoTableSizeB dflags - sIZEOF_StgFunInfoExtraRev)
   | otherwise
-  = cmmOffsetW info_ptr (1 + stdInfoTableSizeW)
+  = cmmOffsetW info_ptr (1 + stdInfoTableSizeW dflags)
 				-- Past the entry code pointer
 

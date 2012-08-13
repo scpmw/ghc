@@ -13,7 +13,7 @@ dnl
 # see what flags are available. (Better yet, read the documentation!)
 #
 
-AC_INIT([The Glorious Glasgow Haskell Compilation System], [7.5], [glasgow-haskell-bugs@haskell.org], [ghc])
+AC_INIT([The Glorious Glasgow Haskell Compilation System], [7.7], [glasgow-haskell-bugs@haskell.org], [ghc])
 
 # Set this to YES for a released version, otherwise NO
 : ${RELEASE=NO}
@@ -131,10 +131,17 @@ if test "$WithGhc" != ""; then
   GhcMinVersion2=`echo "$GhcMinVersion" | sed 's/^\\(.\\)$/0\\1/'`
   GhcCanonVersion="$GhcMajVersion$GhcMinVersion2"
 
+  BOOTSTRAPPING_GHC_INFO_FIELD([OS_STAGE0],[target os],['unkown'])
   BOOTSTRAPPING_GHC_INFO_FIELD([CC_STAGE0],[C compiler command],['$(CC)'])
-  BOOTSTRAPPING_GHC_INFO_FIELD([AR_STAGE0],[ar command],['$(AR)'])
-  BOOTSTRAPPING_GHC_INFO_FIELD([AR_OPTS_STAGE0],[ar flags],['$(AR_OPTS)'])
-  BOOTSTRAPPING_GHC_INFO_FIELD([ArSupportsAtFile_STAGE0],[ar supports at file],['$(ArSupportsAtFile)'])
+  if test "x$OS_STAGE0" != "xOSDarwin"; then
+    BOOTSTRAPPING_GHC_INFO_FIELD([AR_STAGE0],[ar command],['$(AR)'])
+    BOOTSTRAPPING_GHC_INFO_FIELD([AR_OPTS_STAGE0],[ar flags],['$(AR_OPTS)'])
+    BOOTSTRAPPING_GHC_INFO_FIELD([ArSupportsAtFile_STAGE0],[ar supports at file],['$(ArSupportsAtFile)'])
+  else
+    AR_STAGE0='$(AR)'
+    AR_OPTS_STAGE0='$(AR_OPTS)'
+    ArSupportsAtFile_STAGE0='$(ArSupportsAtFile)'
+  fi
 fi
 
 dnl ** Must have GHC to build GHC, unless --enable-hc-boot is on
@@ -142,8 +149,8 @@ if test "$BootingFromHc" = "NO"; then
   if test "$WithGhc" = ""; then
      AC_MSG_ERROR([GHC is required unless bootstrapping from .hc files.])
   fi
-  FP_COMPARE_VERSIONS([$GhcVersion],[-lt],[7.0],
-    [AC_MSG_ERROR([GHC version 7.0 or later is required to compile GHC.])])dnl
+  FP_COMPARE_VERSIONS([$GhcVersion],[-lt],[7.4],
+    [AC_MSG_ERROR([GHC version 7.4 or later is required to compile GHC.])])dnl
 
   if test `expr $GhcMinVersion % 2` = "1"; then
      if test "$EnableBootstrapWithDevelSnaphost" = "NO"; then
@@ -154,6 +161,10 @@ if test "$BootingFromHc" = "NO"; then
      or --with-ghc to specify a different GHC to use.])
      fi
   fi
+
+  GHC_PACKAGE_DB_FLAG=package-db
+  FP_COMPARE_VERSIONS([$GhcVersion],[-lt],[7.5],GHC_PACKAGE_DB_FLAG=package-conf)
+  AC_SUBST(GHC_PACKAGE_DB_FLAG)
 fi;
 
 # GHC is passed to Cabal, so we need a native path
@@ -203,6 +214,20 @@ AC_CANONICAL_BUILD
 AC_CANONICAL_HOST
 AC_CANONICAL_TARGET
 
+# Testing ARM ABI
+# required for code generation (LLVM options)
+ARM_ABI=SOFT
+echo HOST: $host
+
+case $host in
+     arm*-*-linux-gnueabihf)
+     ARM_ABI=HARD
+     ;;
+     arm*-*-linux-gnueabi)
+     ARM_ABI=SOFTFP
+     ;;
+esac
+
 FPTOOLS_SET_PLATFORM_VARS
 
 # Verify that the installed (bootstrap) GHC is capable of generating
@@ -234,6 +259,29 @@ case $host in
 esac
 
 AC_SUBST(SOLARIS_BROKEN_SHLD)
+
+dnl ** Do an unregisterised build?
+dnl --------------------------------------------------------------
+case "$HostArch" in
+    i386|x86_64|powerpc|arm)
+        UnregisterisedDefault=NO
+        ;;
+    *)
+        UnregisterisedDefault=YES
+        ;;
+esac
+AC_ARG_ENABLE(unregisterised,
+[AC_HELP_STRING([--enable-unregisterised],
+[Build an unregisterised compiler (enabled by default on platforms without registerised support) [default="$UnregisterisedDefault"]])],
+[ if test x"$enableval" = x"yes"; then
+        Unregisterised=YES
+  else
+        Unregisterised=NO
+  fi
+],
+[Unregisterised="$UnregisterisedDefault"]
+)
+AC_SUBST(Unregisterised)
 
 AC_ARG_WITH(hc,
 [AC_HELP_STRING([--with-hc=ARG],
@@ -290,29 +338,29 @@ then
             PATH=`pwd`/inplace/mingw/bin:$PATH inplace/mingw/bin/realgcc.exe driver/gcc/gcc.c driver/utils/cwrapper.c driver/utils/getLocation.c -Idriver/utils -o inplace/mingw/bin/gcc.exe
             AC_MSG_NOTICE([In-tree mingw tree created])
         fi
-        mingwbin="$hardtop/inplace/mingw/bin/"
     else
         # NB. If you update the tarballs to a new version of gcc, don't
         # forget to tweak the paths in driver/gcc/gcc.c.
         if ! test -d inplace/mingw ||
-             test inplace/mingw -ot ghc-tarballs/mingw64/mingw-w64-bin_*.zip
+             test inplace/mingw -ot ghc-tarballs/mingw64/*.tar.bz2
         then
             AC_MSG_NOTICE([Making in-tree mingw tree])
             rm -rf inplace/mingw
             mkdir inplace/mingw
             (
                 cd inplace/mingw &&
-                unzip ../../ghc-tarballs/mingw64/mingw-w64-bin_*.zip
+                tar -jxf ../../ghc-tarballs/mingw64/*.tar.bz2
             )
             AC_MSG_NOTICE([In-tree mingw tree created])
         fi
-        mingwbin="$hardtop/inplace/mingw/bin/x86_64-w64-mingw32-"
     fi
 
+    mingwbin="$hardtop/inplace/mingw/bin/"
     CC="${mingwbin}gcc.exe"
     LD="${mingwbin}ld.exe"
     NM="${mingwbin}nm.exe"
-    fp_prog_ar_raw="${mingwbin}ar.exe"
+    OBJDUMP="${mingwbin}objdump.exe"
+    fp_prog_ar="${mingwbin}ar.exe"
 
     if ! test -d inplace/perl ||
          test inplace/perl -ot ghc-tarballs/perl/ghc-perl*.tar.gz
@@ -422,6 +470,17 @@ FP_ARG_WITH_PATH_GNU_PROG([NM], [nm], [nm])
 NmCmd="$NM"
 AC_SUBST([NmCmd])
 
+# Note: we may not have objdump on OS X, and we only need it on Windows (for DLL checks)
+case $HostOS_CPP in
+cygwin32|mingw32)
+    dnl ** Which objdump to use?
+    dnl --------------------------------------------------------------
+    FP_ARG_WITH_PATH_GNU_PROG([OBJDUMP], [objdump], [objdump])
+    ObjdumpCmd="$OBJDUMP"
+    AC_SUBST([ObjdumpCmd])
+    ;;
+esac
+
 dnl ** Which LLVM llc to use?
 dnl --------------------------------------------------------------
 FP_ARG_WITH_PATH_GNU_PROG_OPTIONAL([LLC], [llc])
@@ -510,6 +569,10 @@ FP_CC_LLVM_BACKEND
 
 FP_PROG_LD_HashSize31
 FP_PROG_LD_ReduceMemoryOverheads
+FP_PROG_LD_IS_GNU
+FP_PROG_LD_BUILD_ID
+FP_PROG_LD_NO_COMPACT_UNWIND
+
 
 CONF_GCC_LINKER_OPTS_STAGE1=$LDFLAGS
 CONF_GCC_LINKER_OPTS_STAGE2=$LDFLAGS
@@ -806,12 +869,6 @@ FPTOOLS_FLOAT_WORD_ORDER_BIGENDIAN
 
 dnl ** check for leading underscores in symbol names
 FP_LEADING_UNDERSCORE
-
-dnl ** check for ld, whether it has an -x option, and if it is GNU ld
-FP_PROG_LD_X
-FP_PROG_LD_IS_GNU
-FP_PROG_LD_BUILD_ID
-FP_PROG_LD_NO_COMPACT_UNWIND
 
 FP_VISIBILITY_HIDDEN
 

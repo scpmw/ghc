@@ -149,9 +149,9 @@ mkAutoCC id mod is_caf
         -- Unique.
         -- See bug #249, tests prof001, prof002,  also #2411
         str | isExternalName name = occNameFS (getOccName id)
-            | otherwise           = mkFastString $ showSDoc $
-                                      ftext (occNameFS (getOccName id))
-                                      <> char '_' <> pprUnique (getUnique name)
+            | otherwise           = occNameFS (getOccName id)
+                                    `appendFS`
+                                    mkFastString ('_' : show (getUnique name))
 mkAllCafsCC :: Module -> SrcSpan -> CostCentre
 mkAllCafsCC m loc = AllCafsCC { cc_mod = m, cc_loc = loc }
 
@@ -277,7 +277,7 @@ ppCostCentreLbl :: CostCentre -> SDoc
 ppCostCentreLbl (AllCafsCC  {cc_mod = m}) = ppr m <> text "_CAFs_cc"
 ppCostCentreLbl (NormalCC {cc_key = k, cc_name = n, cc_mod = m,
                            cc_is_caf = is_caf})
-  = ppr m <> char '_' <> ftext (zEncodeFS n) <> char '_' <>
+  = ppr m <> char '_' <> ztext (zEncodeFS n) <> char '_' <>
         case is_caf of { CafCC -> ptext (sLit "CAF"); _ -> ppr (mkUniqueGrimily k)} <> text "_cc"
 
 -- This is the name to go in the user-displayed string, 

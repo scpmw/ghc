@@ -24,12 +24,13 @@ import HscMain          ( newHscEnv )
 import DriverPipeline   ( oneShot, compileFile )
 import DriverMkDepend   ( doMkDependHS )
 #ifdef GHCI
-import InteractiveUI    ( interactiveUI, ghciWelcomeMsg )
+import InteractiveUI    ( interactiveUI, ghciWelcomeMsg, defaultGhciSettings )
 #endif
 
 
 -- Various other random stuff that we need
 import Config
+import Constants
 import HscTypes
 import Packages         ( dumpPackages )
 import DriverPhases     ( Phase(..), isSourceFilename, anyHsc,
@@ -78,7 +79,8 @@ import Data.Maybe
 main :: IO ()
 main = do
    hSetBuffering stdout NoBuffering
-   GHC.defaultErrorHandler defaultLogAction defaultFlushOut $ do
+   hSetBuffering stderr NoBuffering
+   GHC.defaultErrorHandler defaultFatalMessager defaultFlushOut $ do
     -- 1. extract the -B flag from the args
     argv0 <- getArgs
 
@@ -166,6 +168,8 @@ main' postLoadMode dflags0 args flagWarnings = do
         -- Leftover ones are presumably files
   (dflags2, fileish_args, dynamicFlagWarnings) <- GHC.parseDynamicFlags dflags1a args
 
+  GHC.prettyPrintGhcErrors dflags2 $ do
+
   let flagWarnings' = flagWarnings ++ dynamicFlagWarnings
 
   handleSourceError (\e -> do
@@ -213,16 +217,17 @@ main' postLoadMode dflags0 args flagWarnings = do
        DoMake                 -> doMake srcs
        DoMkDependHS           -> doMkDependHS (map fst srcs)
        StopBefore p           -> liftIO (oneShot hsc_env p srcs)
-       DoInteractive          -> interactiveUI srcs Nothing
-       DoEval exprs           -> interactiveUI srcs $ Just $ reverse exprs
+       DoInteractive          -> ghciUI srcs Nothing
+       DoEval exprs           -> ghciUI srcs $ Just $ reverse exprs
        DoAbiHash              -> abiHash srcs
 
   liftIO $ dumpFinalStats dflags3
 
+ghciUI :: [(FilePath, Maybe Phase)] -> Maybe [String] -> Ghc ()
 #ifndef GHCI
-interactiveUI :: b -> c -> Ghc ()
-interactiveUI _ _ =
-  ghcError (CmdLineError "not built for interactive use")
+ghciUI _ _ = ghcError (CmdLineError "not built for interactive use")
+#else
+ghciUI     = interactiveUI defaultGhciSettings
 #endif
 
 -- -----------------------------------------------------------------------------
@@ -553,12 +558,12 @@ mode_flags =
   ]
 
 setGenerateC :: String -> EwM ModeM ()
-setGenerateC f
-  | cGhcUnregisterised /= "YES" = do
-        addWarn ("Compiler not unregisterised, so ignoring " ++ f)
-  | otherwise = do
-        setMode (stopBeforeMode HCc) f
-        addFlag "-fvia-C" f
+setGenerateC f = do -- TODO: We used to warn and ignore when
+                    -- unregisterised, but we no longer know whether
+                    -- we are unregisterised at this point. Should
+                    -- we check later on?
+                    setMode (stopBeforeMode HCc) f
+                    addFlag "-fvia-C" f
 
 setMode :: Mode -> String -> EwM ModeM ()
 setMode newMode newFlag = liftEwM $ do
@@ -710,12 +715,11 @@ dumpFinalStats dflags =
 dumpFastStringStats :: DynFlags -> IO ()
 dumpFastStringStats dflags = do
   buckets <- getFastStringTable
-  let (entries, longest, is_z, has_z) = countFS 0 0 0 0 buckets
+  let (entries, longest, has_z) = countFS 0 0 0 buckets
       msg = text "FastString stats:" $$
             nest 4 (vcat [text "size:           " <+> int (length buckets),
                           text "entries:        " <+> int entries,
                           text "longest chain:  " <+> int longest,
-                          text "z-encoded:      " <+> (is_z `pcntOf` entries),
                           text "has z-encoding: " <+> (has_z `pcntOf` entries)
                          ])
         -- we usually get more "has z-encoding" than "z-encoded", because
@@ -727,17 +731,16 @@ dumpFastStringStats dflags = do
   where
    x `pcntOf` y = int ((x * 100) `quot` y) <> char '%'
 
-countFS :: Int -> Int -> Int -> Int -> [[FastString]] -> (Int, Int, Int, Int)
-countFS entries longest is_z has_z [] = (entries, longest, is_z, has_z)
-countFS entries longest is_z has_z (b:bs) =
+countFS :: Int -> Int -> Int -> [[FastString]] -> (Int, Int, Int)
+countFS entries longest has_z [] = (entries, longest, has_z)
+countFS entries longest has_z (b:bs) =
   let
         len = length b
         longest' = max len longest
         entries' = entries + len
-        is_zs = length (filter isZEncoded b)
         has_zs = length (filter hasZEncoding b)
   in
-        countFS entries' longest' (is_z + is_zs) (has_z + has_zs) bs
+        countFS entries' longest' (has_z + has_zs) bs
 
 -- -----------------------------------------------------------------------------
 -- ABI hash support
@@ -767,7 +770,7 @@ abiHash strs = do
          r <- findImportedModule hsc_env modname Nothing
          case r of
            Found _ m -> return m
-           _error    -> ghcError $ CmdLineError $ showSDoc $
+           _error    -> ghcError $ CmdLineError $ showSDoc dflags $
                           cannotFindInterface dflags modname r
 
   mods <- mapM find_it (map fst strs)
@@ -776,13 +779,13 @@ abiHash strs = do
   ifaces <- initIfaceCheck hsc_env $ mapM get_iface mods
 
   bh <- openBinMem (3*1024) -- just less than a block
-  put_ bh opt_HiVersion
+  put_ bh hiVersion
     -- package hashes change when the compiler version changes (for now)
     -- see #5328
   mapM_ (put_ bh . mi_mod_hash) ifaces
   f <- fingerprintBinMem bh
 
-  putStrLn (showSDoc (ppr f))
+  putStrLn (showPpr dflags f)
 
 -- -----------------------------------------------------------------------------
 -- Util

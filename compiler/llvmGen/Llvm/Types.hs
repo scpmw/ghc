@@ -192,8 +192,9 @@ pprStaticArith s1 s2 int_op float_op op_name =
       op  = if isFloat ty1 then float_op else int_op
   in if ty1 == getStatType s2
      then ppr ty1 <+> ptext op <+> lparen <> ppr s1 <> comma <> ppr s2 <> rparen
-     else error $ op_name ++ " with different types! s1: "
-                  ++ showSDoc (ppr s1) ++ ", s2: " ++ showSDoc (ppr s2)
+     else sdocWithDynFlags $ \dflags ->
+            error $ op_name ++ " with different types! s1: "
+                    ++ showSDoc dflags (ppr s1) ++ ", s2: " ++ showSDoc dflags (ppr s2)
 
 -- -----------------------------------------------------------------------------
 -- ** Operations on LLVM Basic Types and Variables
@@ -227,7 +228,8 @@ ppLit (LMIntLit i (LMInt 64))  = ppr (fromInteger i :: Int64)
 ppLit (LMIntLit   i _       )  = ppr ((fromInteger i)::Int)
 ppLit (LMFloatLit r LMFloat )  = ppFloat $ realToFrac r
 ppLit (LMFloatLit r LMDouble)  = ppDouble r
-ppLit f@(LMFloatLit _ _)       = error $ "Can't print this float literal!" ++ showSDoc (ppr f)
+ppLit f@(LMFloatLit _ _)       = sdocWithDynFlags (\dflags ->
+                                   error $ "Can't print this float literal!" ++ showSDoc dflags (ppr f))
 ppLit (LMNullLit _     )       = text "null"
 ppLit (LMUndefLit _    )       = text "undef"
 ppLit (LMMeta ls)              = text "!{" <> ppCommaJoin ls <> text "}"
@@ -294,7 +296,7 @@ pVarLift (LMMetaNamed _          ) = error $ "Can't lower a metadata type!"
 -- constructors can be lowered.
 pLower :: LlvmType -> LlvmType
 pLower (LMPointer x) = x
-pLower x  = error $ showSDoc (ppr x) ++ " is a unlowerable type, need a pointer"
+pLower x  = error $ showSDoc undefined (ppr x) ++ " is a unlowerable type, need a pointer"
 
 -- | Lower a variable of 'LMPointer' type.
 pVarLower :: LlvmVar -> LlvmVar

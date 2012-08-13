@@ -80,9 +80,7 @@ import Data.IORef
 import Data.Char                ( ord, chr )
 import Data.Time
 import Data.Typeable
-#if __GLASGOW_HASKELL__ >= 701
 import Data.Typeable.Internal
-#endif
 import Control.Monad            ( when )
 import System.IO as IO
 import System.IO.Unsafe         ( unsafeInterleaveIO )
@@ -279,9 +277,6 @@ expandBin (BinMem _ _ sz_r arr_r) off = do
        copyBytes new old sz 
    writeFastMutInt sz_r sz'
    writeIORef arr_r arr'
-   when False $ -- disabled
-      hPutStrLn stderr ("Binary: expanding to size: " ++ show sz')
-   return ()
 expandBin (BinIO _ _ _) _ = return ()
 -- no need to expand a file, we'll assume they expand by themselves.
 
@@ -619,22 +614,12 @@ instance Binary (Bin a) where
 -- -----------------------------------------------------------------------------
 -- Instances for Data.Typeable stuff
 
-#if __GLASGOW_HASKELL__ >= 701
 instance Binary TyCon where
     put_ bh (TyCon _ p m n) = do
         put_ bh (p,m,n)
     get bh = do
         (p,m,n) <- get bh
         return (mkTyCon3 p m n)
-#else
-instance Binary TyCon where
-    put_ bh ty_con = do
-        let s = tyConString ty_con
-        put_ bh s
-    get bh = do
-        s <- get bh
-        return (mkTyCon s)
-#endif
 
 instance Binary TypeRep where
     put_ bh type_rep = do
@@ -740,7 +725,14 @@ type SymbolTable = Array Int Name
 ---------------------------------------------------------
 
 putFS :: BinHandle -> FastString -> IO ()
-putFS bh (FastString _ l _ buf _) = do
+putFS bh fs = putFB bh $ fastStringToFastBytes fs
+
+getFS :: BinHandle -> IO FastString
+getFS bh = do fb <- getFB bh
+              mkFastStringFastBytes fb
+
+putFB :: BinHandle -> FastBytes -> IO ()
+putFB bh (FastBytes l buf) = do
   put_ bh l
   withForeignPtr buf $ \ptr ->
     let
@@ -753,25 +745,29 @@ putFS bh (FastString _ l _ buf _) = do
    go 0
 
 {- -- possible faster version, not quite there yet:
-getFS bh@BinMem{} = do
+getFB bh@BinMem{} = do
   (I# l) <- get bh
   arr <- readIORef (arr_r bh)
   off <- readFastMutInt (off_r bh)
-  return $! (mkFastSubStringBA# arr off l)
+  return $! (mkFastSubBytesBA# arr off l)
 -}
-getFS :: BinHandle -> IO FastString
-getFS bh = do
+getFB :: BinHandle -> IO FastBytes
+getFB bh = do
   l <- get bh
   fp <- mallocForeignPtrBytes l
   withForeignPtr fp $ \ptr -> do
   let
-        go n | n == l = mkFastStringForeignPtr ptr fp l
+        go n | n == l = return $ foreignPtrToFastBytes fp l
              | otherwise = do
                 b <- getByte bh
                 pokeElemOff ptr n b
                 go (n+1)
   --
   go 0
+
+instance Binary FastBytes where
+  put_ bh f = putFB bh f
+  get bh = getFB bh
 
 instance Binary FastString where
   put_ bh f =
