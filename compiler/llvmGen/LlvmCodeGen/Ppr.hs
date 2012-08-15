@@ -108,8 +108,7 @@ pprLlvmCmmDecl count (CmmProc mb_info entry_lbl (ListGraph blks))
 -- | Pretty print CmmStatic
 pprInfoTable :: Int -> CLabel -> CmmStatics -> LlvmM (SDoc, [LlvmVar])
 pprInfoTable count info_lbl stat
-  = do unres <- genLlvmData (Text, stat)
-       (ldata, ltypes) <- resolveLlvmData unres
+  = do (ldata, ltypes) <- genLlvmData (Text, stat)
 
        let setSection (LMGlobal (LMGlobalVar _ ty l _ _ c) d) = do
              lbl <- strCLabel_llvm info_lbl
@@ -117,6 +116,7 @@ pprInfoTable count info_lbl stat
                  ilabel = lbl `appendFS` fsLit iTableSuf
                  gv = LMGlobalVar ilabel ty l sec llvmInfAlign c
                  v = if l == Internal then [gv] else []
+             funInsert ilabel ty
              return (LMGlobal gv d, v)
            setSection v = return (v,[])
 
