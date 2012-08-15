@@ -117,7 +117,7 @@ llvmGroupLlvmGens location (cmm, tick_map) = do
         cdata <- fmap catMaybes $ mapM split cmm
 
         {-# SCC "llvm_datas_gen" #-}
-          cmmDataLlvmGens cdata []
+          cmmDataLlvmGens cdata
         {-# SCC "llvm_procs_gen" #-}
           cmmProcLlvmGens location cmm tick_map 1
         return tick_map
@@ -125,19 +125,19 @@ llvmGroupLlvmGens location (cmm, tick_map) = do
 -- -----------------------------------------------------------------------------
 -- | Do LLVM code generation on all these Cmms data sections.
 --
-cmmDataLlvmGens :: [(Section,CmmStatics)]
-                -> [LlvmUnresData] -> LlvmM ()
+cmmDataLlvmGens :: [(Section,CmmStatics)] -> LlvmM ()
 
-cmmDataLlvmGens [] lmdata
-  = do lmdata' <- resolveLlvmDatas (reverse lmdata)
-       let lmdoc = vcat $ map pprLlvmData lmdata'
-       renderLlvm lmdoc
+cmmDataLlvmGens statics
+  = do lmdatas <- mapM genLlvmData statics
 
-cmmDataLlvmGens (cmm:cmms) lmdata
-  = do lmdata'@(l, _, ty, _) <- genLlvmData cmm
-       l' <- strCLabel_llvm l
-       funInsert l' ty
-       cmmDataLlvmGens cmms (lmdata' : lmdata)
+       let (gss, tss) = unzip lmdatas
+
+       let regGlobal (LMGlobal (LMGlobalVar l ty _ _ _ _) _)
+                        = funInsert l ty
+           regGlobal _  = return ()
+       mapM_ regGlobal (concat gss)
+
+       renderLlvm $ pprLlvmData (concat gss, concat tss)
 
 
 -- -----------------------------------------------------------------------------
