@@ -115,13 +115,9 @@ stmtToInstrs stmt = case stmt of
     CmmReturn
         -> return (unitOL $ Return Nothing, [])
 
--- | Wrapper function to declare an instrinct function, if required
-declareInstrinct :: LMString -> LlvmType -> [LlvmType] -> LlvmM (LlvmVar, [LlvmCmmDecl])
-declareInstrinct fname retTy parTys = do
-
-    let funSig = LlvmFunctionDecl fname ExternallyVisible CC_Ccc retTy
-                    FixedArgs (tysToParams parTys) Nothing
-    let fty = LMFunction funSig
+-- | Wrapper function to declare an instrinct function by function type
+getInstrinct2 :: LMString -> LlvmType -> LlvmM ExprData
+getInstrinct2 fname fty@(LMFunction funSig) = do
 
     let fv   = LMGlobalVar fname fty (funcLinkage funSig) Nothing Nothing Constant
 
@@ -133,7 +129,15 @@ declareInstrinct fname retTy parTys = do
         funInsert fname fty
         return [CmmData Data [([],[fty])]]
 
-    return (fv, tops)
+    return (fv, nilOL, tops)
+
+-- | Declares an instrinct function by return and parameter types
+getInstrinct :: LMString -> LlvmType -> [LlvmType] -> LlvmM ExprData
+getInstrinct fname retTy parTys =
+    let funSig = LlvmFunctionDecl fname ExternallyVisible CC_Ccc retTy
+                    FixedArgs (tysToParams parTys) Nothing
+        fty = LMFunction funSig
+    in getInstrinct2 fname fty
 
 -- | Memory barrier instruction for LLVM >= 3.0
 barrier :: LlvmM StmtData
@@ -145,7 +149,7 @@ barrier = do
 oldBarrier :: LlvmM StmtData
 oldBarrier = do
 
-    (fv, tops) <- declareInstrinct (fsLit "llvm.memory.barrier") LMVoid [i1, i1, i1, i1, i1]
+    (fv, _, tops) <- getInstrinct (fsLit "llvm.memory.barrier") LMVoid [i1, i1, i1, i1, i1]
 
     let args = [lmTrue, lmTrue, lmTrue, lmTrue, lmTrue]
     let s1 = Expr $ Call StdCall fv args llvmStdFunAttrs
@@ -180,7 +184,7 @@ genCall (CmmPrim op@(MO_PopCnt w) _) [CmmHinted dst _] args _ = do
         dstTy = cmmToLlvmType $ localRegType dst
 
     fname                       <- cmmPrimOpFunctions op
-    (fptr, top3)                <- declareInstrinct fname width [width]
+    (fptr, _, top3)             <- getInstrinct fname width [width]
 
     dstV                        <- getCmmReg (CmmLocal dst)
 
@@ -356,7 +360,8 @@ getFunPtr funTy targ = case targ of
 
     CmmPrim mop _ -> do
         name <- cmmPrimOpFunctions mop
-        getHsFunc' name (funTy name)
+        let fty = funTy name
+        getInstrinct2 name fty
 
 -- | Conversion of call arguments.
 arg_vars :: [HintedCmmActual]
@@ -1289,14 +1294,14 @@ debugDeclareRegister reg rname scopeId = do
 -- | Declares a debug variable to correspond to the value at an address
 debugDeclareVariable :: LlvmLit -> LlvmVar -> LlvmM StmtData
 debugDeclareVariable varMeta addr = do
-  (declareFn, tops) <- declareInstrinct (fsLit "llvm.dbg.declare") LMVoid [LMMetaType, LMMetaType]
+  (declareFn, _, tops) <- getInstrinct (fsLit "llvm.dbg.declare") LMVoid [LMMetaType, LMMetaType]
   let pars = map LMLitVar [ LMMeta [addr], varMeta ]
   return (unitOL $ Expr $ Call StdCall declareFn pars [], tops)
 
 -- | Declares a debug variable to be a constant value
 debugDeclareValue :: LlvmLit -> LlvmVar -> LlvmM StmtData
 debugDeclareValue varMeta val = do
-  (valueFn, tops) <- declareInstrinct (fsLit "llvm.dbg.value") LMVoid [LMMetaType, i64, LMMetaType]
+  (valueFn, _, tops) <- getInstrinct (fsLit "llvm.dbg.value") LMVoid [LMMetaType, i64, LMMetaType]
   let pars = map LMLitVar [ LMMeta [val], LMIntLit 0 i64, varMeta ]
   return (unitOL $ Expr $ Call StdCall valueFn pars [], tops)
 

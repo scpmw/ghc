@@ -460,7 +460,7 @@ generateAliases = do
                      in ([LMGlobal var Nothing], ty, var)
         aliasLbl = lbl `appendFS` fsLit "_alias"
         tyLbl = lbl `appendFS` fsLit "_type"
-        aliasVar = LMGlobalVar aliasLbl (LMPointer ty) ExternallyVisible Nothing Nothing Alias
+        aliasVar = LMGlobalVar aliasLbl (LMPointer ty) Internal Nothing Nothing Alias
     return ((LMGlobal aliasVar $ Just $ LMStaticPointer var) : defs,
             LMAlias (tyLbl, ty)
             )

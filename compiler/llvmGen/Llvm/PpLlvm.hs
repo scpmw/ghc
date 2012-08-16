@@ -70,12 +70,13 @@ ppLlvmGlobal (LMGlobal var@(LMGlobalVar _ _ link x a c) dat) =
             Just stat -> ppr stat
             Nothing   -> ppr (pLower $ getVarType var)
 
-        const' = case c of
-          Global   -> text "global"
-          Constant -> text "constant"
-          Alias    -> text "alias"
+        -- Position of linkage is different for aliases. Fun.
+        const_link = case c of
+          Global   -> ppr link <+> text "global"
+          Constant -> ppr link <+> text "constant"
+          Alias    -> text "alias" <+> ppr link
 
-    in ppAssignment var $ ppr link <+> const' <+> rhs <> sect <> align
+    in ppAssignment var $ const_link <+> rhs <> sect <> align
        $+$ newLine
 
 ppLlvmGlobal (LMGlobal var@(LMMetaUnnamed _) (Just val)) =
