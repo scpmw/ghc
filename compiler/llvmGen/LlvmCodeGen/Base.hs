@@ -13,9 +13,10 @@ module LlvmCodeGen.Base (
         maxSupportLlvmVersion,
 
         LlvmM,
-        runLlvm, withClearVars, varLookup, varInsert,
+        runLlvm, liftStream, withClearVars, varLookup, varInsert,
         markStackReg, checkStackReg,
         funLookup, funInsert, getLlvmVer, getDynFlag, getLlvmPlatform,
+        labelInsert, getLabelMap,
         renderLlvm, runUs, markUsedVar, getUsedVars,
         ghcInternalFunctions,
 
@@ -29,7 +30,7 @@ module LlvmCodeGen.Base (
         llvmRegArgPos, llvmPtrBits, mkLlvmFunc, tysToParams,
 
         strCLabel_llvm, strDisplayName_llvm, strProcedureName_llvm,
-        genCmmLabelRef, genStringLabelRef
+        getGlobalPtr, generateAliases,
 
     ) where
 
@@ -52,8 +53,10 @@ import UniqFM
 import Unique
 import MonadUtils ( MonadIO(..) )
 import BufWrite   ( BufHandle )
+import UniqSet
 import UniqSupply
 import ErrUtils
+import qualified Stream
 
 import Data.List  ( elemIndex )
 
@@ -188,6 +191,8 @@ data LlvmEnv = LlvmEnv
   , envVarMap :: LlvmEnvMap
   , envStackRegs :: [GlobalReg]
   , envUsedVars :: [LlvmVar]
+  , envDelayedTypes :: UniqSet LMString
+  , envLabelMap :: [(CLabel, CLabel)]
   , envVersion :: LlvmVersion
   , envDynFlags :: DynFlags
   , envOutput :: BufHandle
@@ -225,6 +230,8 @@ runLlvm dflags ver out us m = do
                       , envVarMap = emptyUFM
                       , envStackRegs = []
                       , envUsedVars = []
+                      , envDelayedTypes = emptyUniqSet
+                      , envLabelMap = []
                       , envVersion = ver
                       , envDynFlags = dflags
                       , envOutput = out
@@ -235,11 +242,27 @@ runLlvm dflags ver out us m = do
                       , envProcMeta = []
                       }
 
+-- | Get environment (internal)
+getEnv :: LlvmM LlvmEnv
+getEnv = LlvmM $ \env -> return (env, env)
+
+-- | Modify environment (internal)
+modifyEnv :: (LlvmEnv -> LlvmEnv) -> LlvmM ()
+modifyEnv f = LlvmM $ \env -> return ((), f env)
+
+-- | Lift a stream into the LlvmM monad
+liftStream :: Stream.Stream IO a x -> Stream.Stream LlvmM a x
+liftStream s = Stream.Stream $ do
+  r <- liftIO $ Stream.runStream s
+  case r of
+    Left b        -> return (Left b)
+    Right (a, r2) -> return (Right (a, liftStream r2))
+
 -- | Clear variables from the environment.
 withClearVars :: LlvmM a -> LlvmM a
 withClearVars m = LlvmM $ \env -> do
     (x, env') <- runLlvmM m env { envVarMap = emptyUFM, envStackRegs = [] }
-    return (x, env' { envVarMap = envVarMap env, envStackRegs = envStackRegs env })
+    return (x, env' { envVarMap = emptyUFM, envStackRegs = [] })
 
 -- | Insert variables or functions into the environment.
 varInsert, funInsert :: Uniquable key => key -> LlvmType -> LlvmM ()
@@ -258,6 +281,14 @@ markStackReg r = LlvmM $ \env -> return ((), env { envStackRegs = r : envStackRe
 -- | Check whether a register is allocated on the stack
 checkStackReg :: GlobalReg -> LlvmM Bool
 checkStackReg r = LlvmM $ \env -> return (r `elem` envStackRegs env, env)
+
+-- | Register the LLVM label for a CMM label
+labelInsert :: CLabel -> CLabel -> LlvmM ()
+labelInsert cl ll = LlvmM $ \env -> return ((), env { envLabelMap = (ll,cl):envLabelMap env })
+
+-- | Lookup LLVM label of a CMM label
+getLabelMap :: LlvmM [(CLabel, CLabel)]
+getLabelMap = LlvmM $ \env -> return (envLabelMap env, env)
 
 -- | Allocate a new global unnamed metadata identifier
 getMetaUniqueId :: LlvmM LMMetaInt
@@ -321,6 +352,10 @@ markUsedVar v = LlvmM $ \env -> return ((), env { envUsedVars = v : envUsedVars 
 getUsedVars :: LlvmM [LlvmVar]
 getUsedVars = LlvmM $ \env -> return (envUsedVars env, env)
 
+-- | Saves that at some point we didn't know the type of the label and
+-- generated a reference to a type variable instead
+delayType :: LMString -> LlvmM ()
+delayType lbl = LlvmM $ \env -> return ((), env { envDelayedTypes = addOneToUniqSet (envDelayedTypes env) lbl })
 
 -- | Convenience functions for defining getters
 getLlvmEnv :: (LlvmEnv -> a) -> LlvmM a
@@ -390,16 +425,79 @@ strProcedureName_llvm lbl = do
         str = Outp.renderWithStyle dflags sdoc style
     return (fsLit str)
 
--- | Create an external definition for a 'CLabel' defined in another module.
-genCmmLabelRef :: CLabel -> LlvmM LMGlobal
-genCmmLabelRef = fmap genStringLabelRef . strCLabel_llvm
+-- ----------------------------------------------------------------------------
 
--- | As above ('genCmmLabelRef') but taking a 'LMString', not 'CLabel'.
-genStringLabelRef :: LMString -> LMGlobal
-genStringLabelRef cl
-  = let ty = LMPointer $ LMArray 0 llvmWord
-    in LMGlobal (LMGlobalVar cl ty External Nothing Nothing False) Nothing
+-- | Create/get a pointer to a static value. The value type might be
+-- an undefined forward type alias if the value in question hasn't
+-- been defined yet.
+getGlobalPtr :: LMString -> LlvmM LlvmVar
+getGlobalPtr llvmLbl = do
+  m_ty <- funLookup llvmLbl
+  let mkGlbVar lbl ty = LMGlobalVar lbl (LMPointer ty) ExternallyVisible Nothing Nothing
+  case m_ty of
+    -- Directly reference if we have seen it already
+    Just ty -> return $ mkGlbVar llvmLbl ty Global
+    -- Otherwise reference a forward alias of it
+    Nothing -> do
+      delayType llvmLbl
+      return $ mkGlbVar
+        (llvmLbl `appendFS` fsLit "_alias")
+        (LMAlias (llvmLbl `appendFS` fsLit "_type", undefined))
+        Alias
 
+-- | Generate aliases for references that were created while compiling.
+generateAliases :: LlvmM ([LMGlobal], [LlvmType])
+generateAliases = do
+  delayed <- fmap (uniqSetToList . envDelayedTypes) getEnv
+  defss <- flip mapM delayed $ \lbl -> do
+    -- Defined by now?
+    m_ty <- funLookup lbl
+    let mkVar ty link = LMGlobalVar lbl (LMPointer ty) link Nothing Nothing Global
+        (defs, ty, var) = case m_ty of
+          Just ty -> ([], ty, mkVar ty ExternallyVisible)
+          Nothing -> let ty = LMArray 0 llvmWord
+                         var = mkVar ty External
+                     in ([LMGlobal var Nothing], ty, var)
+        aliasLbl = lbl `appendFS` fsLit "_alias"
+        tyLbl = lbl `appendFS` fsLit "_type"
+        aliasVar = LMGlobalVar aliasLbl (LMPointer ty) ExternallyVisible Nothing Nothing Alias
+    return ((LMGlobal aliasVar $ Just $ LMStaticPointer var) : defs,
+            LMAlias (tyLbl, ty)
+            )
+  -- Reset forward list
+  modifyEnv $ \env -> env { envDelayedTypes = emptyUniqSet }
+  let (gss, ts) = unzip defss
+  return (concat gss, ts)
+
+-- Note [Llvm Forward References]
+--
+-- The big issue here is that we might want to refer to values that haven't
+-- been defined by this point in the compilation process - and we can't
+-- really wait or the whole streaming wouldn't make sense. And after all, LLVM
+-- plays really well with forward references, so why not use that?
+--
+-- Well, the problem is that LLVM is strongly typed, so we positively can't
+-- refer to something of which we don't know the type. Sadly, CMM also doesn't
+-- carry that kind of information (unless I'm mistaken, of course). So what
+-- we do is to define type aliases into the code so we can fill in later what
+-- the type in question is expected to be.
+--
+-- So why do we have to alias the value *itself*? This is actually mainly a
+-- workaround, as it turns out that LLVM chokes on this code:
+--
+--  @ptr = constant %typ* @fun;
+--  %typ = type i32 ();
+--  define i32 @fun() { ret i32 0; }
+--
+-- No matter what we do, opt will crash, because it doesn't expect "fun" to have
+-- been mentioned with an aliased type. So what we do here is to actually never
+-- refer to "fun" itself, but instead refer to a *value* alias of it instead,
+-- which we can later set to the proper value without any further hassle:
+--
+--  @ptr = constant %typ* @fun_alias;
+--  define i32 @fun() { ret i32 0; }
+--  %typ = type i32 ();
+--  @fun_alias = alias %typ* @fun;
 
 -- ----------------------------------------------------------------------------
 -- * Misc

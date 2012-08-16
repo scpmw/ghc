@@ -42,15 +42,15 @@ mkEmptyContInfoTable info_lbl
                  , cit_prof = NoProfilingInfo
                  , cit_srt  = NoC_SRT }
 
-cmmToRawCmm :: Platform -> Stream IO Old.CmmGroup a
-            -> IO (Stream IO Old.RawCmmGroup a)
+cmmToRawCmm :: Platform -> Stream IO (Old.CmmGroup, a) ()
+            -> IO (Stream IO (Old.RawCmmGroup, a) ())
 cmmToRawCmm platform cmms
   = do { uniqs <- mkSplitUniqSupply 'i'
-       ; let do_one uniqs cmm = do
+       ; let do_one uniqs (cmm, ticks) = do
                 case initUs uniqs $ concatMapM (mkInfoTable platform) cmm of
-                  (b,uniqs') -> return (uniqs',b)
+                  (b,uniqs') -> return (uniqs',(b, ticks))
                   -- NB. strictness fixes a space leak.  DO NOT REMOVE.
-       ; return (Stream.mapAccumL do_one uniqs cmms >>= return . snd)
+       ; return (Stream.mapAccumL do_one uniqs cmms >> return ())
        }
 
 -- Make a concrete info table, represented as a list of CmmStatic

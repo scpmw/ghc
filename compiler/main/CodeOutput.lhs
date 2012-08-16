@@ -49,7 +49,7 @@ codeOutput :: DynFlags
            -> ModLocation
            -> ForeignStubs
            -> [PackageId]
-           -> Stream IO RawCmmGroup TickMap                     -- Compiled C--
+           -> Stream IO (RawCmmGroup, TickMap) ()                  -- Compiled C--
            -> IO (Bool{-stub_h_exists-}, Maybe FilePath{-stub_c_exists-})
 
 codeOutput dflags this_mod location foreign_stubs pkg_deps cmm_stream
@@ -61,20 +61,20 @@ codeOutput dflags this_mod location foreign_stubs pkg_deps cmm_stream
                     then Stream.mapM do_lint cmm_stream
                     else cmm_stream
 
-              do_lint cmm = do
+              do_lint r@(cmm, _) = do
                 { showPass dflags "CmmLint"
                 ; case cmmLint (targetPlatform dflags) cmm of
                         Just err -> do { log_action dflags dflags SevDump noSrcSpan defaultDumpStyle err
                                        ; ghcExit dflags 1
                                        }
                         Nothing  -> return ()
-                ; return cmm
+                ; return r
                 }
 
         ; showPass dflags "CodeOutput"
-        ; let filenm = hscOutName dflags 
+        ; let filenm = hscOutName dflags
         ; stubs_exist <- outputForeignStubs dflags this_mod location foreign_stubs
-        ; let unticked_cmm_stream = linted_cmm_stream >> return ()
+        ; let unticked_cmm_stream = Stream.map fst linted_cmm_stream
         ; case hscTarget dflags of {
              HscInterpreted -> return ();
              HscAsm         -> outputAsm dflags filenm unticked_cmm_stream;
@@ -162,17 +162,13 @@ outputAsm dflags filenm cmm_stream
 %************************************************************************
 
 \begin{code}
-outputLlvm :: DynFlags -> ModLocation -> FilePath -> Stream IO RawCmmGroup TickMap -> IO ()
+outputLlvm :: DynFlags -> ModLocation -> FilePath -> Stream IO (RawCmmGroup,TickMap) () -> IO ()
 outputLlvm dflags location filenm cmm_stream
   = do ncg_uniqs <- mkSplitUniqSupply 'n'
 
-       -- ToDo: make the LLVM backend consume the C-- incrementally,
-       -- by pushing the cmm_stream inside (c.f. nativeCodeGen)
-       (rawcmms, tick_map) <- Stream.collect2 cmm_stream
-
        {-# SCC "llvm_output" #-} doOutput filenm $
            \f -> {-# SCC "llvm_CodeGen" #-}
-                 llvmCodeGen dflags location f ncg_uniqs rawcmms tick_map
+                 llvmCodeGen dflags location f ncg_uniqs cmm_stream
 \end{code}
 
 

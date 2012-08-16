@@ -86,7 +86,11 @@ ppParams varg p
 -- | An LLVM section definition. If Nothing then let LLVM decide the section
 type LMSection = Maybe LMString
 type LMAlign = Maybe Int
-type LMConst = Bool -- ^ is a variable constant or not
+
+data LMConst = Global      -- ^ Mutable global variable
+             | Constant    -- ^ Constant global variable
+             | Alias       -- ^ Alias of another variable
+             deriving (Eq)
 
 newtype LMMetaInt = LMMetaInt {unLMMetaVar :: Int}
   deriving (Eq, Num, Outputable, Show)

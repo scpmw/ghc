@@ -62,7 +62,7 @@ codeGen :: DynFlags
         -> CollectedCCs               -- (Local/global) cost-centres needing declaring/registering.
         -> [(StgBinding,[(Id,[Id])])] -- Bindings to convert, with SRTs
         -> HpcInfo                    -- Profiling info
-        -> Stream IO CmmGroup TickMap
+        -> Stream IO (CmmGroup, TickMap) ()
               -- N.B. returning '[Cmm]' and not 'Cmm' here makes it
               -- possible for object splitting to split up the
               -- pieces later.
@@ -72,7 +72,7 @@ codeGen dflags this_mod data_tycons cost_centre_info stg_binds hpc_info
    = do { liftIO $ showPass dflags "CodeGen"
 
         ; cgref <- liftIO $ newIORef =<< initC
-        ; let cg :: FCode CmmGroup -> Stream IO CmmGroup ()
+        ; let cg :: FCode CmmGroup -> Stream IO (CmmGroup, TickMap) ()
               cg fcode = do
                 cmm <- liftIO $ do
                          st <- readIORef cgref
@@ -84,7 +84,7 @@ codeGen dflags this_mod data_tycons cost_centre_info stg_binds hpc_info
                          -- a big space leak.  DO NOT REMOVE!
                          writeIORef cgref $! st'{ cgs_tops = nilOL,
                                                   cgs_stmts = nilOL }
-                         return a
+                         return (a, cgs_tick_map st')
                 Stream.yield cmm
 
         ; cg (getCmm $ mkModuleInit dflags cost_centre_info this_mod hpc_info)
@@ -92,8 +92,6 @@ codeGen dflags this_mod data_tycons cost_centre_info stg_binds hpc_info
         ; mapM_ (cg . getCmm . cgTopBinding dflags) stg_binds
 
         ; mapM_ (cg . cgTyCon) data_tycons
-
-        ; liftIO $ liftM cgs_tick_map $ readIORef cgref
         }
 
 mkModuleInit
