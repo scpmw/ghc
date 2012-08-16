@@ -619,7 +619,7 @@ schedulePreLoop(void)
 {
   // initialisation for scheduler - what cannot go into initScheduler()  
 
-#if defined(mingw32_HOST_OS) && !defined(GhcUnregisterised)
+#if defined(mingw32_HOST_OS) && !defined(USE_MINIINTERPRETER)
     win32AllocStack();
 #endif
 }
@@ -646,15 +646,24 @@ scheduleFindWork (Capability **pcap)
 
 #if defined(THREADED_RTS)
 STATIC_INLINE rtsBool
-shouldYieldCapability (Capability *cap, Task *task)
+shouldYieldCapability (Capability *cap, Task *task, rtsBool didGcLast)
 {
     // we need to yield this capability to someone else if..
-    //   - another thread is initiating a GC
+    //   - another thread is initiating a GC, and we didn't just do a GC
+    //     (see Note [GC livelock])
     //   - another Task is returning from a foreign call
     //   - the thread at the head of the run queue cannot be run
     //     by this Task (it is bound to another Task, or it is unbound
     //     and this task it bound).
-    return (pending_sync ||
+    //
+    // Note [GC livelock]
+    //
+    // If we are interrupted to do a GC, then we do not immediately do
+    // another one.  This avoids a starvation situation where one
+    // Capability keeps forcing a GC and the other Capabilities make no
+    // progress at all.
+
+    return ((pending_sync && !didGcLast) ||
             cap->returning_tasks_hd != NULL ||
             (!emptyRunQueue(cap) && (task->incall->tso == NULL
                                      ? cap->run_queue_hd->bound != NULL
@@ -675,20 +684,22 @@ static void
 scheduleYield (Capability **pcap, Task *task)
 {
     Capability *cap = *pcap;
+    int didGcLast = rtsFalse;
 
     // if we have work, and we don't need to give up the Capability, continue.
     //
-    if (!shouldYieldCapability(cap,task) && 
+    if (!shouldYieldCapability(cap,task,rtsFalse) && 
         (!emptyRunQueue(cap) ||
          !emptyInbox(cap) ||
-         sched_state >= SCHED_INTERRUPTING))
+         sched_state >= SCHED_INTERRUPTING)) {
         return;
+    }
 
     // otherwise yield (sleep), and keep yielding if necessary.
     do {
-        yieldCapability(&cap,task);
+        didGcLast = yieldCapability(&cap,task, !didGcLast);
     } 
-    while (shouldYieldCapability(cap,task));
+    while (shouldYieldCapability(cap,task,didGcLast));
 
     // note there may still be no threads on the run queue at this
     // point, the caller has to check.
@@ -1382,7 +1393,7 @@ static nat requestSync (Capability **pcap, Task *task, nat sync_type)
             debugTrace(DEBUG_sched, "someone else is trying to sync (%d)...",
                        prev_pending_sync);
             ASSERT(*pcap);
-            yieldCapability(pcap,task);
+            yieldCapability(pcap,task,rtsTrue);
         } while (pending_sync);
         return prev_pending_sync; // NOTE: task->cap might have changed now
     }
@@ -1639,7 +1650,6 @@ delete_threads_and_gc:
 
     heap_census = scheduleNeedHeapProfile(rtsTrue);
 
-    traceEventGcStart(cap);
 #if defined(THREADED_RTS)
     // reset pending_sync *before* GC, so that when the GC threads
     // emerge they don't immediately re-enter the GC.
@@ -1648,25 +1658,33 @@ delete_threads_and_gc:
 #else
     GarbageCollect(force_major || heap_census, heap_census, 0, cap);
 #endif
-    traceEventGcEnd(cap);
 
     traceSparkCounters(cap);
 
-    if (recent_activity == ACTIVITY_INACTIVE && force_major)
-    {
-        // We are doing a GC because the system has been idle for a
-        // timeslice and we need to check for deadlock.  Record the
-        // fact that we've done a GC and turn off the timer signal;
-        // it will get re-enabled if we run any threads after the GC.
-        recent_activity = ACTIVITY_DONE_GC;
-        stopTimer();
-    }
-    else
-    {
+    switch (recent_activity) {
+    case ACTIVITY_INACTIVE:
+        if (force_major) {
+            // We are doing a GC because the system has been idle for a
+            // timeslice and we need to check for deadlock.  Record the
+            // fact that we've done a GC and turn off the timer signal;
+            // it will get re-enabled if we run any threads after the GC.
+            recent_activity = ACTIVITY_DONE_GC;
+            stopTimer();
+            break;
+        }
+        // fall through...
+
+    case ACTIVITY_MAYBE_NO:
         // the GC might have taken long enough for the timer to set
-        // recent_activity = ACTIVITY_INACTIVE, but we aren't
-        // necessarily deadlocked:
+        // recent_activity = ACTIVITY_MAYBE_NO or ACTIVITY_INACTIVE,
+        // but we aren't necessarily deadlocked:
         recent_activity = ACTIVITY_YES;
+        break;
+
+    case ACTIVITY_DONE_GC:
+        // If we are actually active, the scheduler will reset the
+        // recent_activity flag and re-enable the timer.
+        break;
     }
 
 #if defined(THREADED_RTS)
@@ -1993,6 +2011,7 @@ setNumCapabilities (nat new_n_capabilities USED_IF_THREADS)
         //
         for (n = new_n_capabilities; n < enabled_capabilities; n++) {
             capabilities[n].disabled = rtsTrue;
+            traceCapDisable(&capabilities[n]);
         }
         enabled_capabilities = new_n_capabilities;
     }
@@ -2004,6 +2023,7 @@ setNumCapabilities (nat new_n_capabilities USED_IF_THREADS)
         for (n = enabled_capabilities;
              n < new_n_capabilities && n < n_capabilities; n++) {
             capabilities[n].disabled = rtsFalse;
+            traceCapEnable(&capabilities[n]);
         }
         enabled_capabilities = n;
 
@@ -2011,7 +2031,8 @@ setNumCapabilities (nat new_n_capabilities USED_IF_THREADS)
 #if defined(TRACING)
             // Allocate eventlog buffers for the new capabilities.  Note this
             // must be done before calling moreCapabilities(), because that
-            // will emit events to add the new capabilities to capsets.
+            // will emit events about creating the new capabilities and adding
+            // them to existing capsets.
             tracingAddCapapilities(n_capabilities, new_n_capabilities);
 #endif
 
@@ -2450,7 +2471,7 @@ exitScheduler (rtsBool wait_foreign USED_IF_THREADS)
 	sched_state = SCHED_INTERRUPTING;
         Capability *cap = task->cap;
         waitForReturnCapability(&cap,task);
-        scheduleDoGC(&cap,task,rtsFalse);
+        scheduleDoGC(&cap,task,rtsTrue);
         ASSERT(task->incall->tso == NULL);
         releaseCapability(cap);
     }

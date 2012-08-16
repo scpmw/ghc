@@ -33,7 +33,7 @@ module HsUtils(
 
   nlHsTyApp, nlHsVar, nlHsLit, nlHsApp, nlHsApps, nlHsIntLit, nlHsVarApps, 
   nlHsDo, nlHsOpApp, nlHsLam, nlHsPar, nlHsIf, nlHsCase, nlList,
-  mkLHsTupleExpr, mkLHsVarTuple, missingTupArg, mkHsBSig, 
+  mkLHsTupleExpr, mkLHsVarTuple, missingTupArg, 
 
   -- Bindings
   mkFunBind, mkVarBind, mkHsVarBind, mk_easy_FunBind, mkTopFunBind,
@@ -66,7 +66,6 @@ module HsUtils(
   collectPatBinders, collectPatsBinders,
   collectLStmtsBinders, collectStmtsBinders,
   collectLStmtBinders, collectStmtBinders,
-  collectSigTysFromPats, collectSigTysFromPat,
 
   hsLTyClDeclBinders, hsTyClDeclBinders, hsTyClDeclsBinders, 
   hsForeignDeclsBinders, hsGroupBinders, hsFamInstBinders,
@@ -94,7 +93,7 @@ import SrcLoc
 import FastString
 import Util
 import Bag
-
+import Outputable
 import Data.Either
 \end{code}
 
@@ -217,7 +216,8 @@ mkGroupUsingStmt   :: [LStmt idL]                -> LHsExpr idR -> StmtLR idL id
 mkGroupByUsingStmt :: [LStmt idL] -> LHsExpr idR -> LHsExpr idR -> StmtLR idL idR
 
 emptyTransStmt :: StmtLR idL idR
-emptyTransStmt = TransStmt { trS_form = undefined, trS_stmts = [], trS_bndrs = [] 
+emptyTransStmt = TransStmt { trS_form = panic "emptyTransStmt: form"
+                           , trS_stmts = [], trS_bndrs = [] 
                            , trS_by = Nothing, trS_using = noLoc noSyntaxExpr
                            , trS_ret = noSyntaxExpr, trS_bind = noSyntaxExpr
                            , trS_fmap = noSyntaxExpr }
@@ -264,9 +264,6 @@ unqualQuasiQuote = mkRdrUnqual (mkVarOccFS (fsLit "quasiquote"))
 
 mkHsString :: String -> HsLit
 mkHsString s = HsString (mkFastString s)
-
-mkHsBSig :: a -> HsBndrSig a
-mkHsBSig x = HsBSig x placeHolderBndrs
 
 -------------
 userHsTyVarBndrs :: SrcSpan -> [name] -> [Located (HsTyVarBndr name)]
@@ -539,8 +536,8 @@ collectStmtBinders (BindStmt pat _ _ _) = collectPatBinders pat
 collectStmtBinders (LetStmt binds)      = collectLocalBinders binds
 collectStmtBinders (ExprStmt {})        = []
 collectStmtBinders (LastStmt {})        = []
-collectStmtBinders (ParStmt xs _ _ _)   = collectLStmtsBinders
-                                        $ concatMap fst xs
+collectStmtBinders (ParStmt xs _ _)     = collectLStmtsBinders
+                                        $ [s | ParStmtBlock ss _ _ <- xs, s <- ss]
 collectStmtBinders (TransStmt { trS_stmts = stmts }) = collectLStmtsBinders stmts
 collectStmtBinders (RecStmt { recS_stmts = ss })     = collectLStmtsBinders ss
 
@@ -654,7 +651,7 @@ hsTyClDeclBinders (TyDecl { tcdLName = name, tcdTyDefn = defn })
 -------------------
 hsInstDeclBinders :: Eq name => InstDecl name -> [Located name]
 hsInstDeclBinders (ClsInstD { cid_fam_insts = fis }) = concatMap (hsFamInstBinders . unLoc) fis
-hsInstDeclBinders (FamInstD fi) = hsFamInstBinders fi
+hsInstDeclBinders (FamInstD { lid_inst = fi }) = hsFamInstBinders fi
 
 -------------------
 hsFamInstBinders :: Eq name => FamInstDecl name -> [Located name]
@@ -715,8 +712,7 @@ lStmtsImplicits = hs_lstmts
     hs_stmt (LetStmt binds)      = hs_local_binds binds
     hs_stmt (ExprStmt {})        = emptyNameSet
     hs_stmt (LastStmt {})        = emptyNameSet
-    hs_stmt (ParStmt xs _ _ _)   = hs_lstmts $ concatMap fst xs
-    
+    hs_stmt (ParStmt xs _ _)     = hs_lstmts [s | ParStmtBlock ss _ _ <- xs, s <- ss]
     hs_stmt (TransStmt { trS_stmts = stmts }) = hs_lstmts stmts
     hs_stmt (RecStmt { recS_stmts = ss })     = hs_lstmts ss
     
@@ -768,35 +764,4 @@ lPatImplicits = hs_lpat
                                                     , let pat = hsRecFieldArg fld
                                                           pat_explicit = maybe True (i<) (rec_dotdot fs)]
     details (InfixCon p1 p2) = hs_lpat p1 `unionNameSets` hs_lpat p2
-\end{code}
-
-
-%************************************************************************
-%*									*
-	Collecting type signatures from patterns
-%*									*
-%************************************************************************
-
-\begin{code}
-collectSigTysFromPats :: [InPat name] -> [HsBndrSig (LHsType name)]
-collectSigTysFromPats pats = foldr collect_sig_lpat [] pats
-
-collectSigTysFromPat :: InPat name -> [HsBndrSig (LHsType name)]
-collectSigTysFromPat pat = collect_sig_lpat pat []
-
-collect_sig_lpat :: InPat name -> [HsBndrSig (LHsType name)] -> [HsBndrSig (LHsType name)]
-collect_sig_lpat pat acc = collect_sig_pat (unLoc pat) acc
-
-collect_sig_pat :: Pat name -> [HsBndrSig (LHsType name)] -> [HsBndrSig (LHsType name)]
-collect_sig_pat (SigPatIn pat ty)   acc = collect_sig_lpat pat (ty:acc)
-
-collect_sig_pat (LazyPat pat)       acc = collect_sig_lpat pat acc
-collect_sig_pat (BangPat pat)       acc = collect_sig_lpat pat acc
-collect_sig_pat (AsPat _ pat)       acc = collect_sig_lpat pat acc
-collect_sig_pat (ParPat  pat)       acc = collect_sig_lpat pat acc
-collect_sig_pat (ListPat pats _)    acc = foldr collect_sig_lpat acc pats
-collect_sig_pat (PArrPat pats _)    acc = foldr collect_sig_lpat acc pats
-collect_sig_pat (TuplePat pats _ _) acc = foldr collect_sig_lpat acc pats
-collect_sig_pat (ConPatIn _ ps)     acc = foldr collect_sig_lpat acc (hsConPatArgs ps)
-collect_sig_pat _                   acc = acc       -- Literals, vars, wildcard
 \end{code}

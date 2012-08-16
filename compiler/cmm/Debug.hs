@@ -55,10 +55,10 @@ instance Eq TickMapEntry where
 
 -- | Shows the tick map in a nice tree form
 pprTickMap :: Platform -> TickMap -> SDoc
-pprTickMap p tick_map =
+pprTickMap _p tick_map =
   let lvl p pre = vcat $ map (pp pre) $ getTicksByParent tick_map p
       pp pre tim
-        = pre <> pprPlatform p (timLabel tim) <+> ppr (timTicks tim)
+        = pre <> ppr (timLabel tim) <+> ppr (timTicks tim)
           $$ nest 3 (lvl (Just tim) (ptext (sLit "> ")))
   in lvl Nothing empty
 
@@ -141,19 +141,19 @@ putModuleEvent bh package mod_loc =
     putString bh $ packageIdString package
     putString bh $ fromMaybe "???" $ ml_hs_file mod_loc
 
-putProcedureEvent :: BinHandle -> Platform -> TickMap -> TickMapEntry -> CLabel -> IO ()
-putProcedureEvent bh platform tick_map tim lbl =
+putProcedureEvent :: BinHandle -> DynFlags -> TickMap -> TickMapEntry -> CLabel -> IO ()
+putProcedureEvent bh dflags tick_map tim lbl =
   putEvent bh EVENT_DEBUG_PROCEDURE $ do
     put_ bh $ encInstr $ Just tim
     put_ bh $ encInstr $ timParent tim
-    putString bh $ showSDocC  $ pprCLabel platform lbl
+    putString bh $ showSDocC  $ ppr lbl
  where encInstr tim = case fmap (getInstrId tick_map) tim of
          Just i  -> fromIntegral i
          Nothing -> 0xffff :: Word16
-       showSDocC = flip renderWithStyle (mkCodeStyle CStyle)
+       showSDocC = flip (renderWithStyle dflags) (mkCodeStyle CStyle)
 
-putAnnotEvent :: BinHandle -> CoreMap -> Maybe (Tickish ()) -> Tickish () -> IO ()
-putAnnotEvent bh _ _ (SourceNote ss names _) =
+putAnnotEvent :: BinHandle -> DynFlags -> CoreMap -> Maybe (Tickish ()) -> Tickish () -> IO ()
+putAnnotEvent bh _ _ _ (SourceNote ss names _) =
   putEvent bh EVENT_DEBUG_SOURCE $ do
     put_ bh $ encLoc $ srcSpanStartLine ss
     put_ bh $ encLoc $ srcSpanStartCol ss
@@ -163,18 +163,18 @@ putAnnotEvent bh _ _ (SourceNote ss names _) =
     putString bh names
  where encLoc x = fromIntegral x :: Word16
 
-putAnnotEvent bh bnds mbind c@(CoreNote lbl con corePtr)
+putAnnotEvent bh dflags bnds mbind c@(CoreNote lbl con corePtr)
   | mbind == Just c =
       putEvent bh EVENT_DEBUG_CORE $ do
-        putString bh $ showSDocDump $ ppr lbl
+        putString bh $ showSDocDump dflags $ ppr lbl
         putString bh $ case con of
           DEFAULT -> ""
-          _       -> showSDoc $ ppr con
+          _       -> showSDoc dflags $ ppr con
         case corePtr of
-          ExprPtr core -> putCoreExpr bh bnds core
-          AltPtr  alt  -> putCoreAlt bh bnds alt
+          ExprPtr core -> putCoreExpr bh dflags bnds core
+          AltPtr  alt  -> putCoreAlt bh dflags bnds alt
 
-putAnnotEvent _ _ _ _ = return ()
+putAnnotEvent _ _ _ _ _ = return ()
 
 -- | Get core name from tickishs. Note that we might often have many,
 -- many core notes in the list, as Core2Stg annotates every point
@@ -215,9 +215,9 @@ debugWriteEventlog dflags mod_loc tick_map lbls = do
   forM_ lbls $ \(cmml, asml) ->
     case M.lookup cmml tick_map of
       Just tim -> do
-        putProcedureEvent bh (targetPlatform dflags) tick_map tim asml
+        putProcedureEvent bh dflags tick_map tim asml
         let mbind = getMainCoreBind (timTicks tim)
-        mapM_ (putAnnotEvent bh binds mbind) (timTicks tim)
+        mapM_ (putAnnotEvent bh dflags binds mbind) (timTicks tim)
       Nothing  -> return ()
 
   -- Return buffer
@@ -233,69 +233,69 @@ coreLet  = 4
 coreCase = 5
 coreAlt  = 6
 
-putCoreExpr :: BinHandle -> CoreMap -> CoreExpr -> IO ()
-putCoreExpr bh bs (App e1 e2) = do
+putCoreExpr :: BinHandle -> DynFlags -> CoreMap -> CoreExpr -> IO ()
+putCoreExpr bh dflags bs (App e1 e2) = do
   put_ bh coreApp
-  putCoreExpr bh bs e1
-  putCoreExpr bh bs e2
-putCoreExpr bh bs (Lam b e) = do
+  putCoreExpr bh dflags bs e1
+  putCoreExpr bh dflags bs e2
+putCoreExpr bh dflags bs (Lam b e) = do
   put_ bh coreLam
-  putString bh $ showSDoc $ ppr b
-  putCoreExpr bh bs e
-putCoreExpr bh bs (Let es e) = do
+  putString bh $ showSDoc dflags $ ppr b
+  putCoreExpr bh dflags bs e
+putCoreExpr bh dflags bs (Let es e) = do
   put_ bh coreLet
-  putCoreLet bh bs es
-  putCoreExpr bh bs e
-putCoreExpr bh bs (Case expr bind ty alts) = do
+  putCoreLet bh dflags bs es
+  putCoreExpr bh dflags bs e
+putCoreExpr bh dflags bs (Case expr bind ty alts) = do
   put_ bh coreCase
-  putCoreExpr bh bs expr
-  putString bh $ showSDoc $ ppr bind
-  putString bh $ showSDoc $ ppr ty
+  putCoreExpr bh dflags bs expr
+  putString bh $ showSDoc dflags $ ppr bind
+  putString bh $ showSDoc dflags $ ppr ty
   put_ bh (fromIntegral (length alts) :: Word16)
-  forM_ alts $ \alt@(a, _, _) -> checkCoreRef bh bs (bind, a) $
-    putCoreAlt bh bs alt
-putCoreExpr bh bs (Cast e _) = putCoreExpr bh bs e
-putCoreExpr bh bs (Tick _ e) = putCoreExpr bh bs e
+  forM_ alts $ \alt@(a, _, _) -> checkCoreRef bh dflags bs (bind, a) $
+    putCoreAlt bh dflags bs alt
+putCoreExpr bh dflags bs (Cast e _) = putCoreExpr bh dflags bs e
+putCoreExpr bh dflags bs (Tick _ e) = putCoreExpr bh dflags bs e
 -- All other elements are supposed to have a simple "pretty printed"
 -- representation that we can simply output verbatim.
-putCoreExpr bh _ other = do
+putCoreExpr bh dflags _ other = do
   put_ bh coreMisc
-  putString bh $ showSDoc $ ppr other
+  putString bh $ showSDoc dflags $ ppr other
 
-putCoreAlt :: BinHandle -> CoreMap -> CoreAlt -> IO ()
-putCoreAlt bh bs (a,b,e) = do
+putCoreAlt :: BinHandle -> DynFlags -> CoreMap -> CoreAlt -> IO ()
+putCoreAlt bh dflags bs (a,b,e) = do
   put_ bh coreAlt
   putString bh $ case a of
     DEFAULT -> ""
-    _       -> showSDoc $ ppr a
+    _       -> showSDoc dflags $ ppr a
   put_ bh (fromIntegral (length b) :: Word16)
-  mapM_ (putString bh . showSDoc . ppr) b
-  putCoreExpr bh bs e
+  mapM_ (putString bh . showSDoc dflags . ppr) b
+  putCoreExpr bh dflags bs e
 
-putCoreLet :: BinHandle -> CoreMap -> CoreBind -> IO ()
-putCoreLet bh bs (NonRec b e) = do
+putCoreLet :: BinHandle -> DynFlags -> CoreMap -> CoreBind -> IO ()
+putCoreLet bh dflags bs (NonRec b e) = do
   put_ bh (1 :: Word16) -- could use 0 to mark non-recursive case?
-  putString bh $ showSDoc $ ppr b
-  putString bh $ showSDoc $ ppr $ varType b
-  checkCoreRef bh bs (b, DEFAULT) $
-    putCoreExpr bh bs e
-putCoreLet bh bs (Rec ps) = do
+  putString bh $ showSDoc dflags $ ppr b
+  putString bh $ showSDoc dflags $ ppr $ varType b
+  checkCoreRef bh dflags bs (b, DEFAULT) $
+    putCoreExpr bh dflags bs e
+putCoreLet bh dflags bs (Rec ps) = do
   put_ bh (fromIntegral (length ps) :: Word16)
   forM_ ps $ \(b, e) -> do
-    putString bh $ showSDoc $ ppr b
-    putString bh $ showSDoc $ ppr $ varType b
-    checkCoreRef bh bs (b, DEFAULT) $
-      putCoreExpr bh bs e
+    putString bh $ showSDoc dflags $ ppr b
+    putString bh $ showSDoc dflags $ ppr $ varType b
+    checkCoreRef bh dflags bs (b, DEFAULT) $
+      putCoreExpr bh dflags bs e
 
 -- | Generate reference to core piece that was output elsewhere... Or
 -- proceed with given code otherwise.
-checkCoreRef :: BinHandle -> CoreMap -> (Var, AltCon) -> IO () -> IO ()
-checkCoreRef bh bs (b,a) code
+checkCoreRef :: BinHandle -> DynFlags -> CoreMap -> (Var, AltCon) -> IO () -> IO ()
+checkCoreRef bh dflags bs (b,a) code
   | (b,a) `elemCoreMap` bs  = do
       put_ bh coreRef
-      putString bh $ showSDocDump $ ppr b
+      putString bh $ showSDocDump dflags $ ppr b
       putString bh $ case a of
         DEFAULT -> ""
-        _       -> showSDoc $ ppr a
+        _       -> showSDoc dflags $ ppr a
   | otherwise =
       code

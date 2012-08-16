@@ -98,9 +98,9 @@ unitN = mkMetaUnique (fsLit "LlvmMeta.unitN")
 fileN = mkMetaUnique (fsLit "LlvmMeta.fileN")
 
 -- | Often-used types to cache meta data for
-cachedTypeMeta :: [(LlvmType, LMMetaUnique)]
-cachedTypeMeta =
-  [ mk llvmFunTy   "llvmFunTy"
+cachedTypeMeta :: LlvmM [(LlvmType, LMMetaUnique)]
+cachedTypeMeta = llvmFunTy >>= \funTy -> return
+  [ mk funTy       "llvmFunTy"
   , mk i8          "i8"
   , mk i32         "i32"
   , mk i64         "i64"
@@ -126,13 +126,14 @@ cmmMetaLlvmPrelude mod_loc = do
   setUniqMeta fileN fileId
 
   -- Allocate meta data ids for type descriptors.
-  flip mapM_ cachedTypeMeta $ \(_, uniq) -> do
+  cached <- cachedTypeMeta
+  flip mapM_ cached $ \(_, uniq) -> do
     i <- getMetaUniqueId
     setUniqMeta uniq i
 
   -- Emit the actual definitions. This is done as a separate step so
   -- the definitions can reference each other.
-  flip mapM_ cachedTypeMeta $ \(ty, uniq) -> do
+  flip mapM_ cached $ \(ty, uniq) -> do
     Just i <- getUniqMeta uniq
     tyMeta <- typeToMeta' ty
     renderMeta i tyMeta
@@ -156,7 +157,8 @@ cmmMetaLlvmUnit mod_loc = do
 
   -- Make lists of enums, retained types, subprograms and globals
   Just unitId <- getUniqMeta unitN
-  typeIds <- mapM (fmap fromJust . getUniqMeta . snd) cachedTypeMeta
+  cached <- cachedTypeMeta
+  typeIds <- mapM (fmap fromJust . getUniqMeta . snd) cached
   procIds <- getProcMetaIds
   let toMetaList      = LMMeta . map (LMLitVar . LMMetaRef)
       enumTypeMetas   = []
@@ -249,7 +251,8 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
   linkageName <- strCLabel_llvm entryLabel
   displayName <- strDisplayName_llvm entryLabel
 
-  let funRef = LMGlobalVar linkageName (LMPointer llvmFunTy) Internal Nothing Nothing True
+  funTy <- llvmFunTy
+  let funRef = LMGlobalVar linkageName (LMPointer funTy) Internal Nothing Nothing True
       local = not . externallyVisibleCLabel $ entryLabel
       procedureName = displayName
 
@@ -257,7 +260,7 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
 
   -- get global metadata ids from context
   Just unitId <- getUniqMeta unitN
-  procTypeMeta <- typeToMeta llvmFunTy
+  procTypeMeta <- typeToMeta funTy
 
   procId <- getMetaUniqueId
   renderMeta procId $ LMMeta $ map LMLitVar
@@ -327,8 +330,9 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
         -- trick here: We generate a special variable in the scope
         -- above, the name of which will tell the RTS what the block
         -- name actually is.
+        dflags <- getDynFlags
         platform <- getLlvmPlatform
-        let bname = renderWithStyle (pprCLabel platform (timLabel tim))
+        let bname = renderWithStyle dflags (pprCLabel platform (timLabel tim))
                                     (mkCodeStyle CStyle)
             vname = mkFastString ("__debug_ghc_" ++ bname)
         vid <- getMetaUniqueId
@@ -390,11 +394,12 @@ findGoodSourceTick lbl unit tiMap
 -- | Gives type description as meta data or a reference to an existing
 -- metadata node that contains it.
 typeToMeta :: LlvmType -> LlvmM LlvmLit
-typeToMeta ty
-  | Just uniq <- Prelude.lookup ty cachedTypeMeta
-              = do Just i <- getUniqMeta uniq
-                   return (LMMetaRef i)
-  | otherwise = typeToMeta' ty
+typeToMeta ty = do
+  cached <- cachedTypeMeta
+  case Prelude.lookup ty cached of
+    Just uniq -> do Just i <- getUniqMeta uniq
+                    return (LMMetaRef i)
+    Nothing   -> typeToMeta' ty
 
 -- | Gives type description as meta data
 typeToMeta' :: LlvmType -> LlvmM LlvmLit
@@ -419,10 +424,11 @@ typeToMeta' ty = case ty of
  where
   mkType tag fields = do
    Just unitMeta <- getUniqMeta unitN
+   df <- getDynFlags
    return $ LMMeta $ map LMLitVar $
     [ mkI32 tag
     , LMMetaRef unitMeta                              -- Context
-    , LMMetaString $ mkFastString $ showSDoc $ ppr ty -- Name
+    , LMMetaString $ mkFastString $ showSDoc df $ ppr ty -- Name
     , nullLit                                         -- File reference
     , mkI32 0                                         -- Line number
     , mkI64 $ fromIntegral $ llvmWidthInBits ty       -- Width in bits

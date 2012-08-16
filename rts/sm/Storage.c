@@ -186,6 +186,13 @@ initStorage (void)
   IF_DEBUG(gc, statDescribeGens());
 
   RELEASE_SM_LOCK;
+
+  traceEventHeapInfo(CAPSET_HEAP_DEFAULT,
+                     RtsFlags.GcFlags.generations,
+                     RtsFlags.GcFlags.maxHeapSize * BLOCK_SIZE_W * sizeof(W_),
+                     RtsFlags.GcFlags.minAllocAreaSize * BLOCK_SIZE_W * sizeof(W_),
+                     MBLOCK_SIZE_W * sizeof(W_),
+                     BLOCK_SIZE_W  * sizeof(W_));
 }
 
 void storageAddCapabilities (nat from, nat to)
@@ -228,7 +235,8 @@ void storageAddCapabilities (nat from, nat to)
 void
 exitStorage (void)
 {
-    stat_exit(calcAllocated(rtsTrue));
+    lnat allocated = updateNurseriesStats();
+    stat_exit(allocated);
 }
 
 void
@@ -488,21 +496,19 @@ allocNurseries (nat from, nat to)
     assignNurseriesToCapabilities(from, to);
 }
       
-lnat // words allocated
-clearNurseries (void)
+lnat
+clearNursery (Capability *cap)
 {
-    lnat allocated = 0;
-    nat i;
     bdescr *bd;
+    lnat allocated = 0;
 
-    for (i = 0; i < n_capabilities; i++) {
-        for (bd = nurseries[i].blocks; bd; bd = bd->link) {
-            allocated += (lnat)(bd->free - bd->start);
-            bd->free = bd->start;
-            ASSERT(bd->gen_no == 0);
-            ASSERT(bd->gen == g0);
-            IF_DEBUG(sanity,memset(bd->start, 0xaa, BLOCK_SIZE));
-        }
+    for (bd = nurseries[cap->no].blocks; bd; bd = bd->link) {
+        allocated            += (lnat)(bd->free - bd->start);
+        cap->total_allocated += (lnat)(bd->free - bd->start);
+        bd->free = bd->start;
+        ASSERT(bd->gen_no == 0);
+        ASSERT(bd->gen == g0);
+        IF_DEBUG(sanity,memset(bd->start, 0xaa, BLOCK_SIZE));
     }
 
     return allocated;
@@ -656,6 +662,7 @@ allocate (Capability *cap, lnat n)
         initBdescr(bd, g0, g0);
         bd->flags = BF_LARGE;
         bd->free = bd->start + n;
+        cap->total_allocated += n;
         return bd->start;
     }
 
@@ -786,7 +793,7 @@ allocatePinned (Capability *cap, lnat n)
             if (bd->link != NULL) {
                 bd->link->u.back = cap->r.rCurrentNursery;
             }
-            cap->r.rNursery->n_blocks--;
+            cap->r.rNursery->n_blocks -= bd->blocks;
         }
 
         cap->pinned_object_block = bd;
@@ -895,34 +902,36 @@ dirty_MVAR(StgRegTable *reg, StgClosure *p)
  * -------------------------------------------------------------------------- */
 
 /* -----------------------------------------------------------------------------
- * calcAllocated()
+ * updateNurseriesStats()
  *
- * Approximate how much we've allocated: number of blocks in the
- * nursery + blocks allocated via allocate() - unused nusery blocks.
- * This leaves a little slop at the end of each block.
+ * Update the per-cap total_allocated numbers with an approximation of
+ * the amount of memory used in each cap's nursery. Also return the
+ * total across all caps.
+ * 
+ * Since this update is also performed by clearNurseries() then we only
+ * need this function for the final stats when the RTS is shutting down.
  * -------------------------------------------------------------------------- */
 
 lnat
-calcAllocated (rtsBool include_nurseries)
+updateNurseriesStats (void)
 {
-  nat allocated = 0;
-  nat i;
+    lnat allocated = 0;
+    nat i;
 
-  // When called from GC.c, we already have the allocation count for
-  // the nursery from resetNurseries(), so we don't need to walk
-  // through these block lists again.
-  if (include_nurseries)
-  {
-      for (i = 0; i < n_capabilities; i++) {
-          allocated += countOccupied(nurseries[i].blocks);
-      }
-  }
+    for (i = 0; i < n_capabilities; i++) {
+        int cap_allocated = countOccupied(nurseries[i].blocks);
+        capabilities[i].total_allocated += cap_allocated;
+        allocated                       += cap_allocated;
+    }
 
-  // add in sizes of new large and pinned objects
-  allocated += g0->n_new_large_words;
+    return allocated;
+}
 
-  return allocated;
-}  
+lnat
+countLargeAllocated (void)
+{
+    return g0->n_new_large_words;
+}
 
 lnat countOccupied (bdescr *bd)
 {

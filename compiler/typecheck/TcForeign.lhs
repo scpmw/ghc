@@ -48,6 +48,9 @@ import Platform
 import SrcLoc
 import Bag
 import FastString
+import Util
+
+import Control.Monad
 \end{code}
 
 \begin{code}
@@ -201,26 +204,26 @@ tcFImport d = pprPanic "tcFImport" (ppr d)
 \begin{code}
 tcCheckFIType :: Type -> [Type] -> Type -> ForeignImport -> TcM ForeignImport
 
-tcCheckFIType sig_ty arg_tys res_ty idecl@(CImport _ _ _ (CLabel _))
+tcCheckFIType sig_ty arg_tys res_ty (CImport cconv safety mh l@(CLabel _))
   = ASSERT( null arg_tys )
-    do { checkCg checkCOrAsmOrLlvmOrInterp
-       ; check (isFFILabelTy res_ty) (illegalForeignTyErr empty sig_ty)
-       ; return idecl }      -- NB check res_ty not sig_ty!
-                             --    In case sig_ty is (forall a. ForeignPtr a)
+    do checkCg checkCOrAsmOrLlvmOrInterp
+       -- NB check res_ty not sig_ty!
+       --    In case sig_ty is (forall a. ForeignPtr a)
+       check (isFFILabelTy res_ty) (illegalForeignTyErr empty sig_ty)
+       cconv' <- checkCConv cconv
+       return (CImport cconv' safety mh l)
 
 tcCheckFIType sig_ty arg_tys res_ty (CImport cconv safety mh CWrapper) = do
         -- Foreign wrapper (former f.e.d.)
-        -- The type must be of the form ft -> IO (FunPtr ft), where ft is a
-        -- valid foreign type.  For legacy reasons ft -> IO (Ptr ft) as well
-        -- as ft -> IO Addr is accepted, too.  The use of the latter two forms
-        -- is DEPRECATED, though.
+        -- The type must be of the form ft -> IO (FunPtr ft), where ft is a valid
+        -- foreign type.  For legacy reasons ft -> IO (Ptr ft) is accepted, too.
+        -- The use of the latter form is DEPRECATED, though.
     checkCg checkCOrAsmOrLlvmOrInterp
     cconv' <- checkCConv cconv
     case arg_tys of
         [arg1_ty] -> do checkForeignArgs isFFIExternalTy arg1_tys
                         checkForeignRes nonIOok  checkSafe isFFIExportResultTy res1_ty
-                        checkForeignRes mustBeIO checkSafe isFFIDynResultTy    res_ty
-                                 -- ToDo: Why are res1_ty and res_ty not equal?
+                        checkForeignRes mustBeIO checkSafe (isFFIDynTy arg1_ty) res_ty
                   where
                      (arg1_tys, res1_ty) = tcSplitFunTys arg1_ty
         _ -> addErrTc (illegalForeignTyErr empty sig_ty)
@@ -230,12 +233,13 @@ tcCheckFIType sig_ty arg_tys res_ty idecl@(CImport cconv safety mh (CFunction ta
   | isDynamicTarget target = do -- Foreign import dynamic
       checkCg checkCOrAsmOrLlvmOrInterp
       cconv' <- checkCConv cconv
-      case arg_tys of           -- The first arg must be Ptr, FunPtr, or Addr
+      case arg_tys of           -- The first arg must be Ptr or FunPtr
         []                -> do
           check False (illegalForeignTyErr empty sig_ty)
         (arg1_ty:arg_tys) -> do
           dflags <- getDynFlags
-          check (isFFIDynArgumentTy arg1_ty)
+          let curried_res_ty = foldr FunTy res_ty arg_tys
+          check (isFFIDynTy curried_res_ty arg1_ty)
                 (illegalForeignTyErr argument arg1_ty)
           checkForeignArgs (isFFIArgumentTy dflags safety) arg_tys
           checkForeignRes nonIOok checkSafe (isFFIImportResultTy dflags) res_ty
@@ -455,7 +459,8 @@ checkCConv StdCallConv  = do dflags <- getDynFlags
                              if platformArch platform == ArchX86
                                  then return StdCallConv
                                  else do -- This is a warning, not an error. see #3336
-                                         addWarnTc (text "the 'stdcall' calling convention is unsupported on this platform," $$ text "treating as ccall")
+                                         when (wopt Opt_WarnUnsupportedCallingConventions dflags) $
+                                             addWarnTc (text "the 'stdcall' calling convention is unsupported on this platform," $$ text "treating as ccall")
                                          return CCallConv
 checkCConv PrimCallConv = do addErrTc (text "The `prim' calling convention can only be used with `foreign import'")
                              return PrimCallConv

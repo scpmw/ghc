@@ -1090,6 +1090,61 @@ def = toEnum 0
     printf.
    </para>
     </sect2>
+   <sect2 id="ghci-interactive-print">
+     <title>Using a custom interactive printing function</title>
+     <para>[<emphasis role="bold">New in version 7.6.1</emphasis>]
+        By default, GHCi prints the result of expressions typed at the prompt
+        using the function <literal>System.IO.print</literal>. Its type
+        signature is <literal>Show a => a -> IO ()</literal>, and it works by
+        converting the value to <literal>String</literal> using
+        <literal>show</literal>.
+     </para>
+     <para>
+        This is not ideal in certain cases, like when the output is long, or
+        contains strings with non-ascii characters.
+     </para>
+     <para>
+       The <literal>-interactive-print</literal> flag allows to specify any
+       function of type <literal>C a => a -> IO ()</literal>, for some
+       constraint <literal>C</literal>, as the function for printing evaluated
+       expressions. The function can reside in any loaded module or any
+       registered package.
+     </para>
+     <para>
+       As an example, suppose we have following special printing module:
+       <programlisting>
+	 module SpecPrinter where
+	 import System.IO
+
+	 sprint a = putStrLn $ show a ++ "!"
+       </programlisting>
+       The <literal>sprint</literal> function adds an exclamation mark at the
+       end of any printed value. Running GHCi with the command:
+       <programlisting>
+	 ghci -interactive-print=SpecPrinter.sprinter SpecPrinter
+       </programlisting>
+       will start an interactive session where values with be printed using
+       <literal>sprint</literal>:
+       <programlisting>
+	 *SpecPrinter> [1,2,3]
+	 [1,2,3]!
+	 *SpecPrinter> 42
+	 42!
+       </programlisting>
+     </para>
+     <para>
+       A custom pretty printing function can be used, for example, to format
+       tree-like and nested structures in a more readable way.
+     </para>
+     <para>
+       The <literal>-interactive-print</literal> flag can also be used when
+       running GHC in <literal>-e mode</literal>:
+       <programlisting>
+	 % ghc -e "[1,2,3]" -interactive-print=SpecPrinter.sprint SpecPrinter
+	 [1,2,3]!
+       </programlisting>
+     </para>
+   </sect2>
   </sect1>
 
   <sect1 id="ghci-debugger">
@@ -3105,6 +3160,10 @@ warning settings:
     wiki page: <ulink
       url="http://haskell.org/haskellwiki/GHC/GHCi">GHC/GHCi</ulink></para>
 
+	<para>Additionally, any files specified with
+    <literal>-ghci-script</literal> flags will be read after the
+    standard files, allowing the use of custom .ghci files.</para>
+
     <para>Two command-line options control whether the
     startup files files are read:</para>
 
@@ -3121,22 +3180,15 @@ warning settings:
       </varlistentry>
       <varlistentry>
 	<term>
-          <option>-read-dot-ghci</option>
-          <indexterm><primary><option>-read-dot-ghci</option></primary></indexterm>
-        </term>
+         <option>-ghci-script</option>
+         <indexterm><primary><option>-ghci-script</option></primary></indexterm>
+    </term>
 	<listitem>
-	  <para>Read <filename>./.ghci</filename> and the other
-          startup files (see above).  This is normally the
-	  default, but the <option>-read-dot-ghci</option> option may
-	  be used to override a previous
-	  <option>-ignore-dot-ghci</option> option.</para>
+	  <para>Read a specific file after the usual startup files.
+	  Maybe be specified repeatedly for multiple inputs.</para>
 	</listitem>
       </varlistentry>
     </variablelist>
-
-    <para>Additional <filename>.ghci</filename> files can be added
-    through the <option>-ghci-script</option> option. These are
-    loaded after the normal <filename>.ghci</filename> files.</para>
 
   </sect1>
 

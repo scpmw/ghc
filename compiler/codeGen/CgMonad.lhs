@@ -13,8 +13,8 @@ stuff fits into the Big Picture.
 module CgMonad (
         Code, FCode,
 
-        initC, thenC, thenFC, listCs, listFCs, mapCs, mapFCs,
-        returnFC, fixC, fixC_, checkedAbsC,
+        initC, runC, thenC, thenFC, listCs, listFCs, mapCs, mapFCs,
+        returnFC, fixC, fixC_, checkedAbsC, 
         stmtC, stmtsC, labelC, emitStmts, nopC, whenC, newLabelC,
         newUnique, newUniqSupply,
         addTick, finishInstrument, saveContext,
@@ -78,6 +78,7 @@ import VarEnv
 import OrdList
 import Unique
 import UniqSupply
+import Util
 import Outputable
 import Debug
 
@@ -410,11 +411,13 @@ instance Monad FCode where
 {-# INLINE thenFC #-}
 {-# INLINE returnFC #-}
 
-initC :: DynFlags -> Module -> FCode a -> IO a
-initC dflags mod (FCode code) = do
-    uniqs <- mkSplitUniqSupply 'c'
-    let (res, env) = code (initCgInfoDown dflags mod (cgs_tick_map env)) (initCgState uniqs)
-    return res
+initC :: IO CgState
+initC  = do { uniqs <- mkSplitUniqSupply 'c'
+            ; return (initCgState uniqs) }
+
+runC :: DynFlags -> Module -> CgState -> FCode a -> (a,CgState)
+runC dflags mod st (FCode code) = (res,env)
+  where (res,env) = code (initCgInfoDown dflags mod (cgs_tick_map env)) st
 
 returnFC :: a -> FCode a
 returnFC val = FCode $ \_ state -> (val, state)
@@ -757,7 +760,7 @@ emitDecl decl = do
     state <- getState
     setState $ state { cgs_tops = cgs_tops state `snocOL` decl }
 
-emitProc :: CmmInfo -> CLabel -> [CmmFormal] -> [CmmBasicBlock] -> Code
+emitProc :: CmmInfoTable -> CLabel -> [CmmFormal] -> [CmmBasicBlock] -> Code
 emitProc info lbl [] blocks = do
     let proc_block = CmmProc info lbl (ListGraph blocks)
     state <- getState
@@ -769,7 +772,7 @@ emitSimpleProc :: CLabel -> Code -> Code
 emitSimpleProc lbl code = do
     stmts <- getCgStmts code
     blks <- cgStmtsToBlocks =<< finishInstrument lbl stmts
-    emitProc (CmmInfo Nothing Nothing CmmNonInfoTable) lbl [] blks
+    emitProc CmmNonInfoTable lbl [] blks
 
 -- Get all the CmmTops (there should be no stmts)
 -- Return a single Cmm which may be split from other Cmms by

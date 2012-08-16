@@ -81,8 +81,9 @@ ppLlvmGlobal (LMGlobal var@(LMMetaUnnamed _) (Just val)) =
 ppLlvmGlobal (LMGlobal var@(LMMetaNamed _) (Just (LMStaticLit l))) =
   ppAssignment var (ppLit l) -- omit type annotation
 
-ppLlvmGlobal (LMGlobal var val) = error $ "Non Global var ppr as global! "
-                                          ++ showSDoc (ppr var) ++ " " ++ showSDoc (ppr val)
+ppLlvmGlobal (LMGlobal var val) = sdocWithDynFlags $ \dflags ->
+  error $ "Non Global var ppr as global! "
+          ++ showSDoc dflags (ppr var) ++ " " ++ showSDoc dflags (ppr val)
 
 
 -- | Print out a list of LLVM type aliases.
@@ -91,7 +92,8 @@ ppLlvmAliases tys = vcat $ map ppLlvmAlias tys
 
 -- | Print out an LLVM type alias.
 ppLlvmAlias :: LlvmAlias -> SDoc
-ppLlvmAlias (name, ty) = text "%" <> ftext name <+> equals <+> text "type" <+> ppr ty
+ppLlvmAlias (name, ty)
+  = text "%" <> ftext name <+> equals <+> text "type" <+> ppr ty
 
 
 -- | Print out a list of function definitions.

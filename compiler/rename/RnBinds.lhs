@@ -25,7 +25,7 @@ module RnBinds (
 
    -- Other bindings
    rnMethodBinds, renameSigs, mkSigTvFn,
-   rnMatchGroup, rnGRHSs,
+   rnMatchGroup, rnGRHSs, rnGRHS,
    makeMiniFixityEnv, MiniFixityEnv,
    HsSigCtxt(..)
    ) where
@@ -35,7 +35,7 @@ import {-# SOURCE #-} RnExpr( rnLExpr, rnStmts )
 import HsSyn
 import TcRnMonad
 import TcEvidence     ( emptyTcEvBinds )
-import RnTypes        ( bindSigTyVarsFV, rnIPName, rnHsSigType, rnLHsType, checkPrecMatch )
+import RnTypes        ( bindSigTyVarsFV, rnHsSigType, rnLHsType, checkPrecMatch )
 import RnPat
 import RnEnv
 import DynFlags
@@ -46,7 +46,7 @@ import RdrName          ( RdrName, rdrNameOcc )
 import SrcLoc
 import ListSetOps	( findDupsEq )
 import BasicTypes	( RecFlag(..) )
-import Digraph		( SCC(..), stronglyConnCompFromEdgedVertices )
+import Digraph		( SCC(..) )
 import Bag
 import Outputable
 import FastString
@@ -170,13 +170,13 @@ rnTopBindsLHS :: MiniFixityEnv
 rnTopBindsLHS fix_env binds
   = rnValBindsLHS (topRecNameMaker fix_env) binds
 
-rnTopBindsRHS :: HsValBindsLR Name RdrName 
+rnTopBindsRHS :: NameSet -> HsValBindsLR Name RdrName 
               -> RnM (HsValBinds Name, DefUses)
-rnTopBindsRHS binds
+rnTopBindsRHS bound_names binds
   = do { is_boot <- tcIsHsBoot
        ; if is_boot 
          then rnTopBindsBoot binds
-         else rnValBindsRHS TopSigCtxt binds }
+         else rnValBindsRHS (TopSigCtxt bound_names False) binds }
 
 rnTopBindsBoot :: HsValBindsLR Name RdrName -> RnM (HsValBinds Name, DefUses)
 -- A hs-boot file has no bindings. 
@@ -220,10 +220,9 @@ rnIPBinds (IPBinds ip_binds _no_dict_binds) = do
     return (IPBinds ip_binds' emptyTcEvBinds, plusFVs fvs_s)
 
 rnIPBind :: IPBind RdrName -> RnM (IPBind Name, FreeVars)
-rnIPBind (IPBind n expr) = do
-    n' <- rnIPName n
+rnIPBind (IPBind ~(Left n) expr) = do
     (expr',fvExpr) <- rnLExpr expr
-    return (IPBind n' expr', fvExpr)
+    return (IPBind (Left n) expr', fvExpr)
 \end{code}
 
 
@@ -506,17 +505,9 @@ depAnalBinds :: Bag (LHsBind Name, [Name], Uses)
 depAnalBinds binds_w_dus
   = (map get_binds sccs, map get_du sccs)
   where
-    sccs = stronglyConnCompFromEdgedVertices edges
-
-    keyd_nodes = bagToList binds_w_dus `zip` [0::Int ..]
-
-    edges = [ (node, key, [key | n <- nameSetToList uses,
-			         Just key <- [lookupNameEnv key_map n] ])
-	    | (node@(_,_,uses), key) <- keyd_nodes ]
-
-    key_map :: NameEnv Int	-- Which binding it comes from
-    key_map = mkNameEnv [(bndr, key) | ((_, bndrs, _), key) <- keyd_nodes
-				     , bndr <- bndrs ]
+    sccs = depAnal (\(_, defs, _) -> defs)
+                   (\(_, _, uses) -> nameSetToList uses)
+                   (bagToList binds_w_dus)
 
     get_binds (AcyclicSCC (bind, _, _)) = (NonRecursive, unitBag bind)
     get_binds (CyclicSCC  binds_w_dus)  = (Recursive, listToBag [b | (b,_,_) <- binds_w_dus])
@@ -526,7 +517,6 @@ depAnalBinds binds_w_dus
 	where
 	  defs = mkNameSet [b | (_,bs,_) <- binds_w_dus, b <- bs]
 	  uses = unionManyNameSets [u | (_,_,u) <- binds_w_dus]
-
 
 ---------------------
 -- Bind the top-level forall'd type variables in the sigs.
@@ -548,7 +538,7 @@ mkSigTvFn sigs
   = \n -> lookupNameEnv env n `orElse` []
   where
     env :: NameEnv [Name]
-    env = mkNameEnv [ (name, map hsLTyVarName ltvs)
+    env = mkNameEnv [ (name, hsLKiTyVarNames ltvs)  -- Kind variables and type variables
 		    | L _ (TypeSig names
 			           (L _ (HsForAllTy Explicit ltvs _ _))) <- sigs
                     , (L _ name) <- names]
@@ -705,8 +695,8 @@ renameSig _ (SpecInstSig ty)
 -- then the SPECIALISE pragma is ambiguous, unlike all other signatures
 renameSig ctxt sig@(SpecSig v ty inl)
   = do	{ new_v <- case ctxt of 
-                     TopSigCtxt -> lookupLocatedOccRn v
-                     _          -> lookupSigOccRn ctxt sig v
+                     TopSigCtxt {} -> lookupLocatedOccRn v
+                     _             -> lookupSigOccRn ctxt sig v
 	; (new_ty, fvs) <- rnHsSigType (quotes (ppr v)) ty
 	; return (SpecSig new_v new_ty inl, fvs) }
 
@@ -732,14 +722,14 @@ okHsSig ctxt (L _ sig)
      (FixSig {}, InstDeclCtxt {}) -> False
      (FixSig {}, _)               -> True
 
-     (IdSig {}, TopSigCtxt)      -> True
+     (IdSig {}, TopSigCtxt {})   -> True
      (IdSig {}, InstDeclCtxt {}) -> True
      (IdSig {}, _)               -> False
 
      (InlineSig {}, HsBootCtxt) -> False
      (InlineSig {}, _)          -> True
 
-     (SpecSig {}, TopSigCtxt)       -> True
+     (SpecSig {}, TopSigCtxt {})    -> True
      (SpecSig {}, LocalBindCtxt {}) -> True
      (SpecSig {}, InstDeclCtxt {})  -> True
      (SpecSig {}, _)                -> False

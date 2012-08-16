@@ -3,7 +3,7 @@
 -- | Handle conversion of CmmProc to LLVM code.
 --
 
-module LlvmCodeGen.CodeGen ( genLlvmProc ) where
+module LlvmCodeGen.CodeGen ( genLlvmProc, trashRegs ) where
 
 #include "HsVersions.h"
 
@@ -196,12 +196,13 @@ genCall (CmmPrim op@(MO_PopCnt w) _) [CmmHinted dst _] args _ = do
 
 -- Handle memcpy function specifically since llvm's intrinsic version takes
 -- some extra parameters.
-genCall t@(CmmPrim op _) [] args CmmMayReturn
+genCall t@(CmmPrim op _) [] args' CmmMayReturn
  | op == MO_Memcpy ||
    op == MO_Memset ||
    op == MO_Memmove = do
     ver <- getLlvmVer
-    let (isVolTy, isVolVal)
+    let (args, alignVal) = splitAlignVal args'
+        (isVolTy, isVolVal)
               | ver >= 28       = ([i1], [mkIntLit i1 0]) 
               | otherwise       = ([], [])
         argTy | op == MO_Memset = [i8Ptr, i8,    llvmWord, i32] ++ isVolTy
@@ -214,11 +215,21 @@ genCall t@(CmmPrim op _) [] args CmmMayReturn
     (argVars', stmts3)            <- castVars $ zip argVars argTy
 
     stmts4 <- trashStmts
-    let arguments = argVars' ++ isVolVal
+    let arguments = argVars' ++ (alignVal:isVolVal)
         call = Expr $ Call StdCall fptr arguments []
         stmts = stmts1 `appOL` stmts2 `appOL` stmts3
                 `appOL` stmts4 `snocOL` call
     return (stmts, top1 ++ top2)
+  where
+    splitAlignVal xs = (init xs, extractLit $ last xs)
+
+    -- Fix for trac #6158. Since LLVM 3.1, opt fails when given anything other
+    -- than a direct constant (i.e. 'i32 8') as the alignment argument for the
+    -- memcpy & co llvm intrinsic functions. So we handle this directly now.
+    extractLit (CmmHinted (CmmLit (CmmInt i _)) _) = mkIntLit i32 i
+    extractLit _other = trace ("WARNING: Non constant alignment value given" ++ 
+                               " for memcpy! Please report to GHC developers")
+                        mkIntLit i32 0
 
 genCall (CmmPrim _ (Just stmts)) _ _ _
     = stmtsToInstrs stmts
@@ -331,13 +342,14 @@ getFunPtr funTy targ = case targ of
 
     CmmCallee expr _ -> do
         (v1, stmts, top) <- exprToVar expr
+        dflags <- getDynFlags
         let fty = funTy $ fsLit "dynamic"
             cast = case getVarType v1 of
                 ty | isPointer ty -> LM_Bitcast
                 ty | isInt ty     -> LM_Inttoptr
 
                 ty -> panic $ "genCall: Expr is of bad type for function"
-                              ++ " call! (" ++ showSDoc (ppr ty) ++ ")"
+                              ++ " call! (" ++ showSDoc dflags (ppr ty) ++ ")"
 
         (v2,s1) <- doExpr (pLift fty) $ Cast cast v1 (pLift fty)
         return (v2, stmts `snocOL` s1, top)
@@ -383,12 +395,13 @@ arg_vars [] (vars, stmts, tops)
 
 arg_vars (CmmHinted e AddrHint:rest) (vars, stmts, tops)
   = do (v1, stmts', top') <- exprToVar e
+       dflags <- getDynFlags
        let op = case getVarType v1 of
                ty | isPointer ty -> LM_Bitcast
                ty | isInt ty     -> LM_Inttoptr
 
                a  -> panic $ "genCall: Can't cast llvmType to i8*! ("
-                           ++ showSDoc (ppr a) ++ ")"
+                           ++ showSDoc dflags (ppr a) ++ ")"
 
        (v2, s1) <- doExpr i8Ptr $ Cast op v1 i8Ptr
        arg_vars rest (vars ++ [v2], stmts `appOL` stmts' `snocOL` s1,
@@ -413,7 +426,8 @@ castVar v t | getVarType v == t
             = return (v, Nop)
 
             | otherwise
-            = let op = case (getVarType v, t) of
+            = do dflags <- getDynFlags
+                 let op = case (getVarType v, t) of
                       (LMInt n, LMInt m)
                           -> if n < m then LM_Sext else LM_Trunc
                       (vt, _) | isFloat vt && isFloat t
@@ -426,8 +440,8 @@ castVar v t | getVarType v == t
                       (vt, _) | isPointer vt && isPointer t -> LM_Bitcast
 
                       (vt, _) -> panic $ "castVars: Can't cast this type ("
-                                  ++ showSDoc (ppr vt) ++ ") to (" ++ showSDoc (ppr t) ++ ")"
-              in doExpr t $ Cast op v t
+                                  ++ showSDoc dflags (ppr vt) ++ ") to (" ++ showSDoc dflags (ppr t) ++ ")"
+                 doExpr t $ Cast op v t
 
 
 -- | Decide what C function to use to implement a CallishMachOp
@@ -435,10 +449,11 @@ cmmPrimOpFunctions :: CallishMachOp -> LlvmM LMString
 cmmPrimOpFunctions mop = do
 
   ver <- getLlvmVer
+  dflags <- getDynFlags
   let intrinTy1 = (if ver >= 28
-                       then "p0i8.p0i8." else "") ++ showSDoc (ppr llvmWord)
+                       then "p0i8.p0i8." else "") ++ showSDoc dflags (ppr llvmWord)
       intrinTy2 = (if ver >= 28
-                       then "p0i8." else "") ++ showSDoc (ppr llvmWord)
+                       then "p0i8." else "") ++ showSDoc dflags (ppr llvmWord)
       unsupported = panic ("cmmPrimOpFunctions: " ++ show mop
                         ++ " not supported here")
 
@@ -483,14 +498,15 @@ cmmPrimOpFunctions mop = do
     MO_Memmove    -> fsLit $ "llvm.memmove." ++ intrinTy1
     MO_Memset     -> fsLit $ "llvm.memset."  ++ intrinTy2
 
-    (MO_PopCnt w) -> fsLit $ "llvm.ctpop."  ++ showSDoc (ppr $ widthToLlvmInt w)
+    (MO_PopCnt w) -> fsLit $ "llvm.ctpop."  ++ showSDoc dflags (ppr $ widthToLlvmInt w)
 
-    MO_S_QuotRem {} -> unsupported
-    MO_U_QuotRem {} -> unsupported
-    MO_Add2 {}      -> unsupported
-    MO_U_Mul2 {}    -> unsupported
-    MO_WriteBarrier -> unsupported
-    MO_Touch        -> unsupported
+    MO_S_QuotRem {}  -> unsupported
+    MO_U_QuotRem {}  -> unsupported
+    MO_U_QuotRem2 {} -> unsupported
+    MO_Add2 {}       -> unsupported
+    MO_U_Mul2 {}     -> unsupported
+    MO_WriteBarrier  -> unsupported
+    MO_Touch         -> unsupported
 
 -- | Tail function calls
 genJump :: CmmExpr -> Maybe [GlobalReg] -> LlvmM StmtData
@@ -506,15 +522,16 @@ genJump (CmmLit (CmmLabel lbl)) live = do
 
 -- Call to unknown function / address
 genJump expr live = do
-    let fty = llvmFunTy
+    fty <- llvmFunTy
     (vf, stmts, top) <- exprToVar expr
+    dflags <- getDynFlags
 
     let cast = case getVarType vf of
          ty | isPointer ty -> LM_Bitcast
          ty | isInt ty     -> LM_Inttoptr
 
          ty -> panic $ "genJump: Expr is of bad type for function call! ("
-                     ++ showSDoc (ppr ty) ++ ")"
+                     ++ showSDoc dflags (ppr ty) ++ ")"
 
     (v1, s1) <- doExpr (pLift fty) $ Cast cast vf (pLift fty)
     (stgRegs, stgStmts) <- funEpilogue live
@@ -637,12 +654,12 @@ genStore_slow addr val meta = do
             return (stmts `snocOL` s1 `snocOL` s2, top1 ++ top2)
 
         other -> do
-            platform <- getLlvmPlatform
+            dflags <- getDynFlags
             pprPanic "genStore: ptr not right type!"
-                    (PprCmm.pprExpr platform addr <+> text (
+                    (PprCmm.pprExpr addr <+> text (
                         "Size of Ptr: " ++ show llvmPtrBits ++
                         ", Size of var: " ++ show (llvmWidthInBits other) ++
-                        ", Var: " ++ showSDoc (ppr vaddr)))
+                        ", Var: " ++ showSDoc dflags (ppr vaddr)))
 
 
 -- | Unconditional branch
@@ -664,8 +681,9 @@ genCondBranch cond idT = do
             let s1 = BranchIf vc labelT labelF
             let s2 = MkLabel idF
             return $ (stmts `snocOL` s1 `snocOL` s2, top)
-        else
-            panic $ "genCondBranch: Cond expr not bool! (" ++ showSDoc (ppr vc) ++ ")"
+        else do
+            dflags <- getDynFlags
+            panic $ "genCondBranch: Cond expr not bool! (" ++ showSDoc dflags (ppr vc) ++ ")"
 
 
 -- | Switch branch
@@ -950,8 +968,10 @@ genMachOp_slow opt op [x, y] = case op of
 
                 else do
                     -- Error. Continue anyway so we can debug the generated ll file.
-                    platform <- getLlvmPlatform
-                    let cmmToStr = lines . showSDoc . PprCmm.pprExpr platform
+                    dflags <- getDynFlags
+                    let style = mkCodeStyle CStyle
+                        toString doc = renderWithStyle dflags doc style
+                        cmmToStr = (lines . toString . PprCmm.pprExpr)
                     let dx = Comment $ map fsLit $ cmmToStr x
                     let dy = Comment $ map fsLit $ cmmToStr y
                     (v1, s1) <- doExpr (ty vx) $ binOp vx vy
@@ -978,12 +998,14 @@ genMachOp_slow opt op [x, y] = case op of
                                     (v2, s1) <- doExpr t $ Cast LM_Zext v1 t
                                     return (v2, stmts `snocOL` s1, top)
 
-                                | otherwise ->
+                                | otherwise -> do
+                                    dflags <- getDynFlags
                                     panic $ "genBinComp: Can't case i1 compare"
-                                        ++ "res to non int type " ++ showSDoc (ppr t)
-                else
+                                        ++ "res to non int type " ++ showSDoc dflags (ppr t)
+                else do
+                    dflags <- getDynFlags
                     panic $ "genBinComp: Compare returned type other then i1! "
-                        ++ (showSDoc $ ppr $ getVarType v1)
+                        ++ (showSDoc dflags $ ppr $ getVarType v1)
 
         genBinMach op = binLlvmOp getVarType (LlvmOp op)
 
@@ -1017,8 +1039,9 @@ genMachOp_slow opt op [x, y] = case op of
                     return (dst, stmts1 `appOL` stmts2 `appOL` stmts,
                         top1 ++ top2)
 
-                else
-                    panic $ "isSMulOK: Not bit type! (" ++ showSDoc (ppr word) ++ ")"
+                else do
+                    dflags <- getDynFlags
+                    panic $ "isSMulOK: Not bit type! (" ++ showSDoc dflags (ppr word) ++ ")"
 
         panicOp = panic $ "LLVM.CodeGen.genMachOp_slow: unary op encourntered"
                        ++ "with two arguments! (" ++ show op ++ ")"
@@ -1109,13 +1132,12 @@ genLoad_slow e ty meta = do
                                            (MetaExpr meta $ Load ptr)
                     return (dvar, stmts `snocOL` cast `snocOL` load, tops)
 
-         other -> do
-                  platform <- getLlvmPlatform
-                  pprPanic "exprToVar: CmmLoad expression is not right type!"
-                        (PprCmm.pprExpr platform e <+> text (
+         other -> do dflags <- getDynFlags
+                     pprPanic "exprToVar: CmmLoad expression is not right type!"
+                        (PprCmm.pprExpr e <+> text (
                             "Size of Ptr: " ++ show llvmPtrBits ++
                             ", Size of var: " ++ show (llvmWidthInBits other) ++
-                            ", Var: " ++ showSDoc (ppr iptr)))
+                            ", Var: " ++ showSDoc dflags (ppr iptr)))
 
 
 -- | Handle CmmReg expression. This will return a pointer to the stack
@@ -1124,18 +1146,20 @@ genLoad_slow e ty meta = do
 getCmmReg :: CmmReg -> LlvmM LlvmVar
 getCmmReg (CmmLocal (LocalReg un _))
   = do exists <- varLookup un
+       dflags <- getDynFlags
        case exists of
          Just ety -> return (LMLocalVar un $ pLift ety)
-         Nothing  -> fail $ "getCmmReg: Cmm register " ++ showSDoc (ppr un) ++ " was not allocated!"
+         Nothing  -> fail $ "getCmmReg: Cmm register " ++ showSDoc dflags (ppr un) ++ " was not allocated!"
            -- This should never happen, as every local variable should
            -- have been assigned a value at some point, triggering
            -- "funPrologue" to allocate it on the stack.
 
 getCmmReg (CmmGlobal g)
   = do onStack <- checkStackReg g
+       dflags <- getDynFlags
        if onStack
          then return (lmGlobalRegVar g)
-         else fail $ "getCmmReg: Cmm register " ++ showSDoc (ppr g) ++ " not stack-allocated!"
+         else fail $ "getCmmReg: Cmm register " ++ showSDoc dflags (ppr g) ++ " not stack-allocated!"
 
 -- | Return the value of a given register, as well as its type. Might
 -- need to be load from stack.
@@ -1245,10 +1269,11 @@ genLit CmmHighStackMark
 funPrologue :: [CmmBasicBlock] -> LMMetaInt -> LlvmM StmtData
 funPrologue cmmBlocks scopeId = do
 
+  trash <- trashRegs
   let getAssignedRegs (CmmAssign reg _)  = [reg]
       -- Calls will trash all registers. Unfortunately, this needs them to
       -- be stack-allocated in the first place.
-      getAssignedRegs (CmmCall t rs _ _) = map CmmGlobal trashRegs ++
+      getAssignedRegs (CmmCall t rs _ _) = map CmmGlobal trash ++
                                             map formalToReg rs ++
                                             getPrimRegs t
       getAssignedRegs _                  = []
@@ -1359,15 +1384,17 @@ blockPrologue varId = do
 -- before the call by assigning the 'undef' value to them. The ones we
 -- need are restored from the Cmm local var and the ones we don't need
 -- are fine to be trashed.
-trashStmts :: LlvmM (LlvmStatements)
-trashStmts = fmap toOL $ mapM trashReg trashRegs
-    where trashReg r = do
-            reg <- getCmmReg (CmmGlobal r)
-            let ty    = (pLower . getVarType) reg
-            return $ Store (LMLitVar $ LMUndefLit ty) reg
+trashStmts :: LlvmM LlvmStatements
+trashStmts = do
+  regs <- trashRegs
+  stmts <- flip mapM regs $ \ r -> do
+    reg <- getCmmReg (CmmGlobal r)
+    let ty = (pLower . getVarType) reg
+    return $ Store (LMLitVar $ LMUndefLit ty) reg
+  return $ toOL stmts
 
-trashRegs :: [GlobalReg]
-trashRegs = filter callerSaves activeStgRegs
+trashRegs :: LlvmM [GlobalReg]
+trashRegs = return $ filter callerSaves activeStgRegs
 
 -- | Get a function pointer to the CLabel specified.
 --
@@ -1387,8 +1414,9 @@ getHsFunc lbl
         Just ty' -> do
             let fun = LMGlobalVar fn (pLift ty') ExternallyVisible
                             Nothing Nothing False
-            (v1, s1) <- doExpr (pLift llvmFunTy) $
-                            Cast LM_Bitcast fun (pLift llvmFunTy)
+            funTy <- llvmFunTy
+            (v1, s1) <- doExpr (pLift funTy) $
+                            Cast LM_Bitcast fun (pLift funTy)
             return (v1, unitOL s1, [])
 
         -- label not in module, create external reference

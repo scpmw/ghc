@@ -271,7 +271,7 @@ lintCoreExpr (Cast expr co)
   = do { expr_ty <- lintCoreExpr expr
        ; co' <- applySubstCo co
        ; (_, from_ty, to_ty) <- lintCoercion co'
-       ; checkTys from_ty expr_ty (mkCastErr from_ty expr_ty)
+       ; checkTys from_ty expr_ty (mkCastErr expr co' from_ty expr_ty)
        ; return to_ty }
 
 lintCoreExpr (Tick (Breakpoint _ ids) expr)
@@ -352,17 +352,11 @@ lintCoreExpr e@(Case scrut var alt_ty alts) =
      ; subst <- getTvSubst 
      ; checkTys var_ty scrut_ty (mkScrutMsg var var_ty scrut_ty subst)
 
-     -- If the binder is an unboxed tuple type, don't put it in scope
-     ; let scope = if (isUnboxedTupleType (idType var)) then 
-                       pass_var 
-                   else lintAndScopeId var
-     ; scope $ \_ ->
+     ; lintAndScopeId var $ \_ ->
        do { -- Check the alternatives
             mapM_ (lintCoreAlt scrut_ty alt_ty) alts
           ; checkCaseAlts e scrut_ty alts
           ; return alt_ty } }
-  where
-    pass_var f = f var
 
 lintCoreExpr (Type ty)
   = do { ty' <- lintInTy ty
@@ -498,9 +492,6 @@ checkCaseAlts :: CoreExpr -> OutType -> [CoreAlt] -> LintM ()
 --     the simplifer correctly eliminates case that can't 
 --     possibly match.
 
-checkCaseAlts e _ []
-  = addErrL (mkNullAltsMsg e)
-
 checkCaseAlts e ty alts = 
   do { checkL (all non_deflt con_alts) (mkNonDefltMsg e)
      ; checkL (increasing_tag con_alts) (mkNonIncreasingAltsMsg e)
@@ -601,10 +592,7 @@ lintIdBndr :: Id -> (Id -> LintM a) -> LintM a
 -- ToDo: lint its rules
 
 lintIdBndr id linterF 
-  = do 	{ checkL (not (isUnboxedTupleType (idType id))) 
-		 (mkUnboxedTupleMsg id)
-		-- No variable can be bound to an unboxed tuple.
-        ; lintAndScopeId id $ \id' -> linterF id' }
+  = do 	{ lintAndScopeId id $ \id' -> linterF id' }
 
 lintAndScopeIds :: [Var] -> ([Var] -> LintM a) -> LintM a
 lintAndScopeIds ids linterF 
@@ -1116,11 +1104,6 @@ pp_binder b | isId b    = hsep [ppr b, dcolon, ppr (idType b)]
 ------------------------------------------------------
 --	Messages for case expressions
 
-mkNullAltsMsg :: CoreExpr -> MsgDoc
-mkNullAltsMsg e 
-  = hang (text "Case expression with no alternatives:")
-	 4 (ppr e)
-
 mkDefaultArgsMsg :: [Var] -> MsgDoc
 mkDefaultArgsMsg args 
   = hang (text "DEFAULT case with binders")
@@ -1265,17 +1248,14 @@ mkArityMsg binder
          ]
            where (StrictSig dmd_ty) = idStrictness binder
 
-mkUnboxedTupleMsg :: Id -> MsgDoc
-mkUnboxedTupleMsg binder
-  = vcat [hsep [ptext (sLit "A variable has unboxed tuple type:"), ppr binder],
-	  hsep [ptext (sLit "Binder's type:"), ppr (idType binder)]]
-
-mkCastErr :: Type -> Type -> MsgDoc
-mkCastErr from_ty expr_ty
+mkCastErr :: CoreExpr -> Coercion -> Type -> Type -> MsgDoc
+mkCastErr expr co from_ty expr_ty
   = vcat [ptext (sLit "From-type of Cast differs from type of enclosed expression"),
 	  ptext (sLit "From-type:") <+> ppr from_ty,
-	  ptext (sLit "Type of enclosed expr:") <+> ppr expr_ty
-    ]
+	  ptext (sLit "Type of enclosed expr:") <+> ppr expr_ty,
+          ptext (sLit "Actual enclosed expr:") <+> ppr expr,
+          ptext (sLit "Coercion used in cast:") <+> ppr co
+         ]
 
 dupVars :: [[Var]] -> MsgDoc
 dupVars vars

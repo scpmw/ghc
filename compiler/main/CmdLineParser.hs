@@ -27,6 +27,7 @@ import Panic
 import Bag
 import SrcLoc
 
+import Data.Function
 import Data.List
 
 
@@ -194,11 +195,12 @@ processOneArg opt_kind rest arg args
 
 findArg :: [Flag m] -> String -> Maybe (String, OptKind m)
 findArg spec arg =
-    case [ (removeSpaces rest, optKind)
-         | flag <- spec,
-           let optKind  = flagOptKind flag,
-           Just rest <- [stripPrefix (flagName flag) arg],
-           arg_ok optKind rest arg ]
+    case sortBy (compare `on` (length . fst)) -- prefer longest matching flag
+           [ (removeSpaces rest, optKind)
+           | flag <- spec,
+             let optKind  = flagOptKind flag,
+             Just rest <- [stripPrefix (flagName flag) arg],
+             arg_ok optKind rest arg ]
     of
         []      -> Nothing
         (one:_) -> Just one
@@ -243,6 +245,6 @@ missingArgErr f = Left ("missing argument for flag: " ++ f)
 
 errorsToGhcException :: [Located String] -> GhcException
 errorsToGhcException errs =
-    let errors = vcat [ ppr l <> text ": " <> text e | L l e <- errs ]
-    in UsageError (renderWithStyle errors cmdlineParserStyle)
+    UsageError $
+        intercalate "\n" [ showUserSpan True l ++ ": " ++ e | L l e <- errs ]
 

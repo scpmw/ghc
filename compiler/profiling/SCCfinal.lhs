@@ -34,6 +34,7 @@ import Outputable
 import DynFlags
 import CoreSyn          ( Tickish(..) )
 import SrcLoc
+import Util
 import FastString
 
 stgMassageForProfiling
