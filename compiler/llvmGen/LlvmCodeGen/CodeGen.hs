@@ -131,6 +131,8 @@ getInstrinct2 fname fty@(LMFunction funSig) = do
 
     return (fv, nilOL, tops)
 
+getInstrinct2 _ _otherTy = error "getInstrinct2: Expects function type!"
+
 -- | Declares an instrinct function by return and parameter types
 getInstrinct :: LMString -> LlvmType -> [LlvmType] -> LlvmM ExprData
 getInstrinct fname retTy parTys =

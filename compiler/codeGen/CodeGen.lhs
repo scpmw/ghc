@@ -54,7 +54,6 @@ import Stream (Stream, liftIO)
 import qualified Stream
 
 import Data.IORef
-import Control.Monad ( liftM )
 
 codeGen :: DynFlags
         -> Module                     -- Module we are compiling

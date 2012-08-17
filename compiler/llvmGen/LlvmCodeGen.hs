@@ -107,11 +107,11 @@ llvmGroupLlvmGens location (cmm, tick_map) = do
         -- Insert functions into map, collect data
         let split (CmmData s d' ) = return $ Just (s, d')
             split (CmmProc i l _) = do
-              lbl <- strCLabel_llvm $ case i of
+              let l' = case i of
                          Nothing                   -> l
                          Just (Statics info_lbl _) -> info_lbl
-              lml <- strCLabel_llvm l'
-              funInsert lml =<< llvmFunTy
+              lbl <- strCLabel_llvm l'
+              funInsert lbl =<< llvmFunTy
               labelInsert l l'
               return Nothing
         cdata <- fmap catMaybes $ mapM split cmm
