@@ -24,6 +24,7 @@ module LlvmCodeGen.Base (
         setUniqMeta, getUniqMeta,
         setFileMeta, getFileMeta,
         addProcMeta, getProcMetaIds,
+        freshSectionId,
 
         cmmToLlvmType, widthToLlvmFloat, widthToLlvmInt, llvmFunTy,
         llvmFunSig, llvmStdFunAttrs, llvmFunAlign, llvmInfAlign,
@@ -201,6 +202,7 @@ data LlvmEnv = LlvmEnv
   , envUniqMeta :: UniqFM LMMetaInt
   , envFileMeta :: UniqFM LMMetaInt
   , envProcMeta :: [LMMetaInt]
+  , envNextSection :: Int
   }
 
 type LlvmEnvMap = UniqFM LlvmType
@@ -240,6 +242,7 @@ runLlvm dflags ver out us m = do
                       , envUniqMeta = emptyUFM
                       , envFileMeta = emptyUFM
                       , envProcMeta = []
+                      , envNextSection = 1
                       }
 
 -- | Get environment (internal)
@@ -383,6 +386,10 @@ addProcMeta m = LlvmM $ \env -> return ((), env { envProcMeta = m:envProcMeta en
 -- | Returns all procedure meta data IDs
 getProcMetaIds :: LlvmM [LMMetaInt]
 getProcMetaIds = getLlvmEnv (reverse . envProcMeta)
+
+-- | Returns a fresh section ID
+freshSectionId :: LlvmM Int
+freshSectionId = LlvmM $ \env -> return (envNextSection env, env { envNextSection = envNextSection env + 1})
 
 -- ----------------------------------------------------------------------------
 -- * Label handling
