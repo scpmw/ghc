@@ -32,9 +32,10 @@ import SysTools ( figureLlvmVersion )
 import MonadUtils
 import qualified Stream
 
-import Data.Maybe ( fromMaybe, catMaybes )
 import Control.Monad ( when )
-import Data.IORef ( writeIORef )
+import Data.Maybe    ( fromMaybe, catMaybes )
+import Data.Map      ( unions )
+import Data.IORef    ( writeIORef )
 import System.IO
 
 -- -----------------------------------------------------------------------------
@@ -98,7 +99,7 @@ llvmCodeGen' location cmm_stream
 
         -- Postamble
         cmmMetaLlvmUnit location
-        cmmDebugLlvmGens location (last tick_maps)
+        cmmDebugLlvmGens location (unions tick_maps)
         cmmUsedLlvmGens
 
 llvmGroupLlvmGens :: ModLocation -> (RawCmmGroup, TickMap) -> LlvmM TickMap

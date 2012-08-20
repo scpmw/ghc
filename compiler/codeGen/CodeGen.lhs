@@ -83,7 +83,8 @@ codeGen dflags this_mod data_tycons cost_centre_info stg_binds hpc_info
                          -- NB. stub-out cgs_tops and cgs_stmts.  This fixes
                          -- a big space leak.  DO NOT REMOVE!
                          writeIORef cgref $! st'{ cgs_tops = nilOL,
-                                                  cgs_stmts = nilOL }
+                                                  cgs_stmts = nilOL,
+                                                  cgs_tick_map = emptyTickMap }
                          return (a, cgs_tick_map st')
                 Stream.yield cmm
 

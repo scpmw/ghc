@@ -12,6 +12,7 @@ module Debug (
 
   TickMapEntry(..), TickMap,
   Tickish(..), -- reexported
+  emptyTickMap,
 
   pprTickMap, getTicksByParent, getInstrId,
 
@@ -34,7 +35,7 @@ import Control.Monad ( forM_ )
 
 import Data.Word
 import Data.Maybe
-import Data.Map as M ( Map, elems, lookup, split, size )
+import Data.Map as M ( Map, empty, elems, lookup, split, size )
 import Data.Char     ( ord )
 
 import Foreign.ForeignPtr
@@ -49,6 +50,9 @@ data TickMapEntry = TickMapEntry {
   }
 type TickMap = Map CLabel TickMapEntry
 
+emptyTickMap :: TickMap
+emptyTickMap = M.empty
+
 instance Eq TickMapEntry where
   tim1 == tim2  = timLabel tim1 == timLabel tim2
 
@@ -59,7 +63,7 @@ pprTickMap tick_map =
       pp pre tim
         = pre <> ppr (timLabel tim) <+> ppr (timTicks tim)
           $$ nest 3 (lvl (Just tim) (ptext (sLit "> ")))
-  in lvl Nothing empty
+  in lvl Nothing Outputable.empty
 
 -- | Gets child ticks of a tick map entry. If @Nothing@ is passed,
 -- returns all top-level tick map entries.
