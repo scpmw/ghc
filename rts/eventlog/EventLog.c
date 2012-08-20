@@ -242,6 +242,10 @@ static StgWord16 getEventSize(EventTypeNum t)
         return sizeof(EventThreadID) + sizeof(StgWord16) + sizeof(EventThreadID);
 
     case EVENT_STARTUP:         // (cap count)
+    case EVENT_CAP_CREATE:      // (cap)
+    case EVENT_CAP_DELETE:      // (cap)
+    case EVENT_CAP_ENABLE:      // (cap)
+    case EVENT_CAP_DISABLE:     // (cap)
         return sizeof(EventCapNo);
 
     case EVENT_CAPSET_CREATE:   // (capset, capset_type)
@@ -268,6 +272,7 @@ static StgWord16 getEventSize(EventTypeNum t)
     case EVENT_GC_IDLE:
     case EVENT_GC_WORK:
     case EVENT_GC_DONE:
+    case EVENT_GC_GLOBAL_SYNC:  // (cap)
     case EVENT_SPARK_CREATE:    // (cap)
     case EVENT_SPARK_DUD:       // (cap)
     case EVENT_SPARK_OVERFLOW:  // (cap)
