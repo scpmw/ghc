@@ -22,7 +22,6 @@ module Debug (
 import Binary
 import CLabel
 import DynFlags
-import Platform
 import Module
 import CoreSyn
 import Outputable
@@ -54,8 +53,8 @@ instance Eq TickMapEntry where
   tim1 == tim2  = timLabel tim1 == timLabel tim2
 
 -- | Shows the tick map in a nice tree form
-pprTickMap :: Platform -> TickMap -> SDoc
-pprTickMap _p tick_map =
+pprTickMap :: TickMap -> SDoc
+pprTickMap tick_map =
   let lvl p pre = vcat $ map (pp pre) $ getTicksByParent tick_map p
       pp pre tim
         = pre <> ppr (timLabel tim) <+> ppr (timTicks tim)

@@ -77,7 +77,8 @@ codeGen dflags this_mod data_tycons cost_centre_info stg_binds hpc_info
                          st <- readIORef cgref
                          let (a,st') = runC dflags this_mod st fcode
 
-                         dumpIfSet_dyn dflags Opt_D_dump_cmm "Cmm" $ ppr a
+                         dumpIfSet_dyn dflags Opt_D_dump_cmm "Cmm" $
+                           ppr a $$ pprTickMap (cgs_tick_map st')
 
                          -- NB. stub-out cgs_tops and cgs_stmts.  This fixes
                          -- a big space leak.  DO NOT REMOVE!
