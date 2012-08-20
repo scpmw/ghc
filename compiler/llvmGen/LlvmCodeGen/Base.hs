@@ -287,7 +287,7 @@ checkStackReg r = LlvmM $ \env -> return (r `elem` envStackRegs env, env)
 
 -- | Register the LLVM label for a CMM label
 labelInsert :: CLabel -> CLabel -> LlvmM ()
-labelInsert cl ll = LlvmM $ \env -> return ((), env { envLabelMap = (ll,cl):envLabelMap env })
+labelInsert cl ll = LlvmM $ \env -> return ((), env { envLabelMap = (cl,ll):envLabelMap env })
 
 -- | Lookup LLVM label of a CMM label
 getLabelMap :: LlvmM [(CLabel, CLabel)]
