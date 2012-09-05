@@ -244,6 +244,7 @@ putCoreExpr bh dflags bs (App e1 e2) = do
 putCoreExpr bh dflags bs (Lam b e) = do
   put_ bh coreLam
   putString bh $ showSDoc dflags $ ppr b
+  putString bh $ showSDoc dflags $ ppr $ varType b
   putCoreExpr bh dflags bs e
 putCoreExpr bh dflags bs (Let es e) = do
   put_ bh coreLet
