@@ -52,14 +52,16 @@ void *dwarf_ghc_debug_data = 0;
 
 #define GHC_DEBUG_DATA_SECTION ".debug_ghc"
 
-struct seg_space_t
+struct seg_space_
 {
     void *base;         // Add this to position in file to get virtual address
     void *start, *end;  // Limits of segment address space
+    size_t file_offset; // Where in the file the mapping begins
+    struct seg_space_ *next;
 };
-typedef struct seg_space_t seg_space;
+typedef struct seg_space_ seg_space;
 
-static void *dwarf_get_code_offset(Elf *elf, seg_space *seg);
+static void dwarf_get_code_bases(Elf *elf, seg_space *seg);
 static void dwarf_load_ghc_debug_data(Elf *elf);
 static void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg);
 
@@ -87,7 +89,7 @@ void dwarf_load()
 
 	// Initialize ELF library
 	if (elf_version(EV_CURRENT) == EV_NONE) {
-		barf("libelf version too old!");
+		errorBelch("libelf version too old!");
 		return;
 	}
 
@@ -97,6 +99,12 @@ void dwarf_load()
 		sysErrorBelch("Could not read /proc/self/map!");
 		return;
 	}
+
+	// Accumulated segments for the same file. We assume that all
+	// segments for a file are going to be listed together, so we
+	// don't have to maintain a real map.
+	seg_space *segs = NULL;
+	char *cur_module = NULL;
 
 	// Read out mappings
 	char line[1025];
@@ -113,11 +121,40 @@ void dwarf_load()
 		            &seg_start, &seg_end, &exec_perm, &offset, module_path) > 0)
 			break;
 
-		// Load if it is an executable section
-		struct seg_space_t seg = { (char *)seg_start - offset, seg_start, seg_end };
-		if (exec_perm == 'x' && module_path[0] && module_path[0] != '[')
-			dwarf_load_file(module_path, &seg);
+		// Different module? Load its segments
+		if (segs && strcmp(cur_module, module_path)) {
+			dwarf_load_file(cur_module, segs);
+			free(cur_module); cur_module = NULL;
+			seg_space *seg;
+			while ((seg = segs)) {
+				segs = seg->next;
+				stgFree(seg);
+			}
+		}
 
+		// Add to list, if it is an executable section
+		if (exec_perm == 'x' && module_path[0] && module_path[0] != '[') {
+			if (!cur_module) cur_module = strdup(module_path);
+			seg_space *seg = (seg_space *)stgMallocBytes(sizeof(DwarfUnit), "dwarf_new_unit");
+			seg->base = NULL; // Might get corrected later
+			seg->start = seg_start;
+			seg->end = seg_end;
+			seg->file_offset = offset;
+			seg->next = segs;
+			segs = seg;
+		}
+
+	}
+
+	// Process any remaining segments
+	if (segs) {
+		dwarf_load_file(cur_module, segs);
+		free(cur_module); cur_module = NULL;
+		seg_space *seg;
+		while ((seg = segs)) {
+			segs = seg->next;
+			stgFree(seg);
+		}
 	}
 
 	fclose(map_file);
@@ -131,7 +168,7 @@ void dwarf_load()
 {
 	// Initialize ELF library
 	if (elf_version(EV_CURRENT) == EV_NONE) {
-		barf("libelf version too old!");
+		errorBelch("libelf version too old!");
 		return;
 	}
 
@@ -210,7 +247,7 @@ void dwarf_load_file(char *module_path, seg_space *seg)
 	// Open using libelf (no archives, don't need elf_next)
 	Elf *elf = elf_begin(fd, ELF_C_READ, 0);
 	if(!elf) {
-		barf("Could not open ELF file: %s", elf_errmsg(elf_errno()));
+		errorBelch("Could not open ELF file: %s", elf_errmsg(elf_errno()));
 		return;
 	}
 
@@ -221,8 +258,7 @@ void dwarf_load_file(char *module_path, seg_space *seg)
 	dwarf_load_symbols(module_path, elf, seg);
 
 	// Find symbol address offset
-	void *code_offset = dwarf_get_code_offset(elf, seg);
-	seg_space seg2 = { code_offset, seg->start, seg->end };
+	dwarf_get_code_bases(elf, seg);
 
 	// Open using libdwarf
 	Dwarf_Debug dbg; Dwarf_Error err;
@@ -285,7 +321,7 @@ void dwarf_load_file(char *module_path, seg_space *seg)
 		if (!unit) unit = dwarf_new_unit(name, comp_dir);
 
 		// Go through tree, log all ranges found
-		dwarf_load_dies(unit, dbg, cu_die, &seg2);
+		dwarf_load_dies(unit, dbg, cu_die, seg);
 
 	}
 
@@ -297,30 +333,37 @@ void dwarf_load_file(char *module_path, seg_space *seg)
 	close(fd);
 }
 
-void *dwarf_get_code_offset(Elf *elf, seg_space *seg)
+void dwarf_get_code_bases(Elf *elf, seg_space *segs)
 {
 
-	// Go through sections
-	Elf_Scn *scn = 0;
-	while ((scn = elf_nextscn(elf, scn))) {
+	// Process all segments
+	seg_space *seg;
+	for (seg = segs; seg; seg = seg->next) {
 
-		// Get section header
-		GElf_Shdr hdr;
-		if (!gelf_getshdr(scn, &hdr))
-			continue;
+		// Go through sections
+		Elf_Scn *scn = 0;
+		while ((scn = elf_nextscn(elf, scn))) {
 
-		// Executable section?
-		if (!(hdr.sh_flags & SHF_EXECINSTR) ||
-		    !(hdr.sh_flags & SHF_ALLOC))
-			continue;
+			// Get section header
+			GElf_Shdr hdr;
+			if (!gelf_getshdr(scn, &hdr))
+				continue;
 
-		// Calculate the symbol offset.
-		char *addr = (char *)seg->base - hdr.sh_addr + hdr.sh_offset;
-        return addr;
+			// Ignore non-executable sections
+			if (!(hdr.sh_flags & SHF_EXECINSTR))
+				continue;
+
+			// This section not contained in the segment?
+			size_t seg_len = (StgWord8 *)seg->end - (StgWord8 *)seg->start;
+			if (hdr.sh_offset < seg->file_offset  ||
+				hdr.sh_offset >= seg->file_offset + seg_len)
+				continue;
+
+			// Calculate the symbol offset.
+			seg->base = (char *)seg->start - seg->file_offset - hdr.sh_addr + hdr.sh_offset;
+			break;
+		}
 	}
-
-	// Just assume a zero offset otherwise
-	return 0;
 }
 
 void dwarf_load_ghc_debug_data(Elf *elf)
@@ -420,14 +463,14 @@ void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg)
 			// Get symbol data
 			GElf_Sym sym;
 			if (gelf_getsym(data, ndx, &sym) != &sym) {
-				barf("DWARF: Could not read symbol %d: %s\n", ndx, elf_errmsg(elf_errno()));
+				errorBelch("DWARF: Could not read symbol %d: %s\n", ndx, elf_errmsg(elf_errno()));
 				continue;
 			}
 
 			// Look up string
 			char *name = elf_strptr(elf, hdr.sh_link, sym.st_name);
 			if (!name) {
-				barf("DWARF: Could not lookup name for symbol no %d: %s\n", ndx, elf_errmsg(elf_errno()));
+				errorBelch("DWARF: Could not lookup name for symbol no %d: %s\n", ndx, elf_errmsg(elf_errno()));
 				continue;
 			}
 
@@ -562,7 +605,7 @@ void dwarf_load_proc_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_sp
 
 			ref = 0;
 			dwarf_dieoffset(die, &ref, &error);
-			barf("DWARF <%x>: subroutine without name or abstract origin!\n", ref);
+			errorBelch("DWARF <%x>: subroutine without name or abstract origin!\n", ref);
 			return;
 		}
 	}
@@ -706,21 +749,31 @@ DwarfProc *dwarf_get_proc(DwarfUnit *unit, char *name)
 DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name,
                           Dwarf_Addr low_pc, Dwarf_Addr high_pc,
                           DwarfSource source,
-                          seg_space *seg)
+                          seg_space *segs)
 {
+	// Security
+	if (high_pc <= low_pc)
+		return NULL;
 
-
-	// Apply offset to translate into our address space
+	// Apply offset to translate into our address space, then
+	// range-check so we don't associate it with the wrong
+	// memory region.
 	// TODO: Check this is actually doing the right thing, haven't
-	//       tested with dynamic libs so far
-	void *low_pc_ptr = (char *)seg->base + low_pc;
-	void *high_pc_ptr = (char *)seg->base + high_pc;
+	//		 tested with dynamic libs so far
+	void *low_pc_ptr = NULL, *high_pc_ptr = NULL;
+	seg_space *seg;
+	for (seg = segs; seg; seg = seg->next) {
+		low_pc_ptr = (char *)seg->base + low_pc;
+		high_pc_ptr = (char *)seg->base + high_pc;
 
-    // Range-check the symbol so we don't associate it with the wrong
-    // memory region.
-    if ((char *)low_pc_ptr < (char *)seg->start ||
-        (char *)high_pc_ptr > (char *)seg->end)
-        return 0;
+		if ((char *)low_pc_ptr < (char *)seg->start ||
+			(char *)high_pc_ptr > (char *)seg->end) {
+
+			low_pc_ptr = high_pc_ptr = NULL;
+		}
+	}
+	if (!low_pc_ptr)
+		return NULL;
 
 	// Already have the proc? This can happen when there are multiple
 	// inlinings.
@@ -793,7 +846,7 @@ void dwarf_trace_debug_data()
 
 		// Sanity-check size
 		if (dbg + size >= dbg_limit) {
-			barf("Debug data packet num %d exceeds section size! Probably corrupt debug data.", num);
+			errorBelch("Debug data packet num %d exceeds section size! Probably corrupt debug data.", num);
 			break;
 		}
 
