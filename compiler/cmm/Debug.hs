@@ -247,14 +247,15 @@ putCoreExpr bh dflags bs (Let es e) = do
   put_ bh coreLet
   putCoreLet bh dflags bs es
   putCoreExpr bh dflags bs e
-putCoreExpr bh dflags bs (Case expr bind ty alts) = do
+putCoreExpr bh dflags bs (Case expr bind _ alts) = do
   put_ bh coreCase
   putCoreExpr bh dflags bs expr
   putString bh $ showSDoc dflags $ ppr bind
-  putString bh $ showSDoc dflags $ ppr ty
+  putString bh $ showSDoc dflags $ ppr $ varType bind
   put_ bh (fromIntegral (length alts) :: Word16)
-  forM_ alts $ \alt@(a, _, _) -> checkCoreRef bh dflags bs (bind, a) $
-    putCoreAlt bh dflags bs alt
+  forM_ alts $ \alt@(a, _, _) ->
+    checkCoreRef bh dflags bs (bind, a) $ do
+      putCoreAlt bh dflags bs alt
 putCoreExpr bh dflags bs (Cast e _) = putCoreExpr bh dflags bs e
 putCoreExpr bh dflags bs (Tick _ e) = putCoreExpr bh dflags bs e
 -- All other elements are supposed to have a simple "pretty printed"
@@ -264,13 +265,15 @@ putCoreExpr bh dflags _ other = do
   putString bh $ showSDoc dflags $ ppr other
 
 putCoreAlt :: BinHandle -> DynFlags -> CoreMap -> CoreAlt -> IO ()
-putCoreAlt bh dflags bs (a,b,e) = do
+putCoreAlt bh dflags bs (a,binds,e) = do
   put_ bh coreAlt
   putString bh $ case a of
     DEFAULT -> ""
     _       -> showSDoc dflags $ ppr a
-  put_ bh (fromIntegral (length b) :: Word16)
-  mapM_ (putString bh . showSDoc dflags . ppr) b
+  put_ bh (fromIntegral (length binds) :: Word16)
+  forM_ binds $ \b -> do
+    putString bh . showSDoc dflags . ppr $ b
+    putString bh . showSDoc dflags . ppr . varType $ b
   putCoreExpr bh dflags bs e
 
 putCoreLet :: BinHandle -> DynFlags -> CoreMap -> CoreBind -> IO ()
