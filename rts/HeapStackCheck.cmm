@@ -20,14 +20,14 @@ import LeaveCriticalSection;
 
 #ifdef TRACING
 
-#define SAMPLE_IP if (1) {                                              \
+#define SAMPLE_IP                                                       \
   CInt n;                                                               \
   n = Capability_heap_ip_sample_count(MyCapability());                  \
   if (n < 4096::CInt) {                                                 \
      W_[MyCapability()+OFFSET_Capability_heap_ip_samples+WDS(TO_W_(n))] \
        = sampleIp;                                                      \
      Capability_heap_ip_sample_count(MyCapability()) = n+(1::CInt);     \
-  } }
+  }  
 #else
 #define SAMPLE_IP
 #endif
