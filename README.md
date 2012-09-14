@@ -81,17 +81,47 @@ should be able to view generated profiles using `threadscope-pmw`:
 
       $ threadscope-pmw myProgram.eventlog
 
-Hints
------
+Hints and Known Problems
+------------------------
 
-If you followed the above instructions for building GHC, you should
-have libraries will full debug information. Hoever, ThreadScope won't
-know where to find the sources unless we add the GHC source to the
-search directories:
+* If you followed the above instructions for building GHC, you should
+  have libraries will full debug information. However, ThreadScope
+  won't know where to find the sources unless we add the GHC source to
+  the search directories:
 
       $ threadscope-pmw myProgram.eventlog -d $GHC_INSTALL_PREFIX
+
+* If your ThreadScope installation crashes when clicking on the left
+  side bar, your `gtksourceview2` installation still has a bug that
+  makes it impossible to react to these kinds of events without
+  causing a crash. You can find a patch to `gtksourceview2` that
+  corrects this problem attached to the bug report:
+
+  http://hackage.haskell.org/trac/gtk2hs/ticket/1252
+
+* If the program complied with the custom GHC refuses to accept the
+  `-E` command line option, the `perf_event` interface is not
+  available or was not detected properly.
+
+  Check that you have a compatible Linux version, and that the
+  configuration process correctly set `GhcRtsWithPerfEvent = YES`
+
+* In the case that you don't see any sources or Core in ThreadScope
+  even though there are "Instruction pointer sample" entries in the
+  event log, `libdwarf` was probably not found when configuring the
+  GHC build.
+
+  Check the installation and that `GhcRtsWithDwarf = YES` is set in
+  `mk/config.mk`.
+
+* If you see a lot of code that looks like `abcd_info` or similar
+  listed under the `(no Haskell)` pseudo module, this means that you
+  did not compile the module in question with `-fllvm`. Only the LLVM
+  backend can currently generate the DWARF debug information required
+  for the profiling framework to work.
 
 Feedback
 --------
 
-When (!) you run into problems, feel free to contact me at (scpmw@leeds.ac.uk)[mailto:scpmw@leeds.ac.uk].
+Once you have run into problems - please contact me at
+scpmw@leeds.ac.uk.
