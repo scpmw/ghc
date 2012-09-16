@@ -11,8 +11,8 @@ Requirements
 * [LLVM](http://llvm.org) installed - because that's currently the
   only way to write debug meta data.
 
-* `libdwarf-dev` (or similar) installed - because that's the only way we
-  *can currently read* debug data.
+* `libelf-dev` and `libdwarf-dev` (or similar) installed - because
+  that's the only way we can currently read debug data.
 
 Note the installation will gracefully fail if any of these are not
 met, and just compile a GHC without the respective support enabled.
@@ -31,7 +31,7 @@ Then fetch the profiling GHC branch:
 
      $ git remote add profiling http://github.com/scpmw/ghc
      $ git fetch profiling
-     $ git checkout profiling-7.6 remotes/profiling/profiling-7.6
+     $ git checkout profiling-7.6
 
 Make a configuration:
 
