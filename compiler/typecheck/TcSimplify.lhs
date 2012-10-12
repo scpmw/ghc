@@ -148,7 +148,9 @@ More details in Note [DefaultTyVar].
 simplifyAmbiguityCheck :: Name -> WantedConstraints -> TcM (Bag EvBind)
 simplifyAmbiguityCheck name wanteds
   = traceTc "simplifyAmbiguityCheck" (text "name =" <+> ppr name) >> 
-    simplifyCheck wanteds
+    simplifyTop wanteds  -- NB: must be simplifyTop not simplifyCheck, so that we
+                         --     do ambiguity resolution.  
+                         -- See Note [Impedence matching] in TcBinds.
  
 ------------------
 simplifyInteractive :: WantedConstraints -> TcM (Bag EvBind)
@@ -388,10 +390,12 @@ simplifyInfer _top_lvl apply_mr name_taus (untch,wanteds)
                                   , wc_insol = emptyBag }
 
               -- Step 6) Final candidates for quantification                
-       ; let final_quant_candidates :: Bag PredType
-             final_quant_candidates = mapBag ctPred $ 
+       ; let final_quant_candidates :: [PredType]
+             final_quant_candidates = map ctPred $ bagToList $
                                       keepWanted (wc_flat quant_candidates_transformed)
              -- NB: Already the fixpoint of any unifications that may have happened
+             -- But need to zonk out the flatten-skolems
+       ; final_quant_candidates <- mapM zonkTcType final_quant_candidates
                   
        ; gbl_tvs        <- tcGetGlobalTyVars -- TODO: can we just use untch instead of gbl_tvs?
        ; zonked_tau_tvs <- zonkTyVarsAndFV zonked_tau_tvs
@@ -401,25 +405,27 @@ simplifyInfer _top_lvl apply_mr name_taus (untch,wanteds)
               , ptext (sLit "gbl_tvs=") <+> ppr gbl_tvs
               , ptext (sLit "zonked_tau_tvs=") <+> ppr zonked_tau_tvs ]
          
-       ; let init_tvs 	     = zonked_tau_tvs `minusVarSet` gbl_tvs
-             poly_qtvs       = growPreds gbl_tvs id final_quant_candidates init_tvs
-             
-             pbound          = filterBag (quantifyMe poly_qtvs id) final_quant_candidates
+       ; let init_tvs  = zonked_tau_tvs `minusVarSet` gbl_tvs
+             poly_qtvs = growThetaTyVars final_quant_candidates init_tvs 
+                         `minusVarSet` gbl_tvs
+             pbound    = filter (quantifyPred poly_qtvs) final_quant_candidates
              
        ; traceTc "simplifyWithApprox" $
-         vcat [ ptext (sLit "pbound =") <+> ppr pbound ]
+         vcat [ ptext (sLit "pbound =") <+> ppr pbound
+              , ptext (sLit "init_qtvs =") <+> ppr init_tvs 
+              , ptext (sLit "poly_qtvs =") <+> ppr poly_qtvs ]
          
 	     -- Monomorphism restriction
        ; let mr_qtvs  	     = init_tvs `minusVarSet` constrained_tvs
-             constrained_tvs = tyVarsOfBag tyVarsOfType final_quant_candidates
-	     mr_bites        = apply_mr && not (isEmptyBag pbound)
+             constrained_tvs = tyVarsOfTypes final_quant_candidates
+	     mr_bites        = apply_mr && not (null pbound)
 
              (qtvs, bound)
-                | mr_bites  = (mr_qtvs,   emptyBag)
+                | mr_bites  = (mr_qtvs,   [])
                 | otherwise = (poly_qtvs, pbound)
              
 
-       ; if isEmptyVarSet qtvs && isEmptyBag bound
+       ; if isEmptyVarSet qtvs && null bound
          then do { traceTc "} simplifyInfer/no quantification" empty                   
                  ; emitConstraints wanted_transformed
                     -- Includes insolubles (if -fdefer-type-errors)
@@ -431,7 +437,7 @@ simplifyInfer _top_lvl apply_mr name_taus (untch,wanteds)
          ptext (sLit "bound are =") <+> ppr bound 
          
             -- Step 4, zonk quantified variables 
-       ; let minimal_flat_preds = mkMinimalBySCs $ bagToList bound
+       ; let minimal_flat_preds = mkMinimalBySCs bound
              skol_info = InferSkol [ (name, mkSigmaTy [] minimal_flat_preds ty)
                                    | (name, ty) <- name_taus ]
                         -- Don't add the quantified variables here, because
@@ -467,8 +473,8 @@ simplifyInfer _top_lvl apply_mr name_taus (untch,wanteds)
 \end{code}
 
 
-Note [Note [Default while Inferring]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Note [Default while Inferring]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Our current plan is that defaulting only happens at simplifyTop and
 not simplifyInfer.  This may lead to some insoluble deferred constraints
 Example:
@@ -514,10 +520,7 @@ from superclass selection from Ord alpha. This minimization is what
 mkMinimalBySCs does. Then, simplifyInfer uses the minimal constraint
 to check the original wanted.
 
-
 \begin{code}
-
-
 approximateWC :: WantedConstraints -> Cts
 -- Postcondition: Wanted or Derived Cts 
 approximateWC wc = float_wc emptyVarSet wc
@@ -539,27 +542,6 @@ approximateWC wc = float_wc emptyVarSet wc
         
     do_bag :: (a -> Bag c) -> Bag a -> Bag c
     do_bag f = foldrBag (unionBags.f) emptyBag
-
-
-\end{code}
-
-\begin{code}
-growPreds :: TyVarSet -> (a -> PredType) -> Bag a -> TyVarSet -> TyVarSet
-growPreds gbl_tvs get_pred items tvs
-  = foldrBag extend tvs items
-  where
-    extend item tvs = tvs `unionVarSet`
-                      (growPredTyVars (get_pred item) tvs `minusVarSet` gbl_tvs)
-
---------------------
-quantifyMe :: TyVarSet      -- Quantifying over these
-	   -> (a -> PredType)
-	   -> a -> Bool	    -- True <=> quantify over this wanted
-quantifyMe qtvs toPred ct
-  | isIPPred pred = True  -- Note [Inheriting implicit parameters]
-  | otherwise	  = tyVarsOfType pred `intersectsVarSet` qtvs
-  where
-    pred = toPred ct
 \end{code}
 
 Note [Avoid unecessary constraint simplification]
@@ -584,32 +566,6 @@ just notice that g isn't quantified over 't' and partition
 the contraints before simplifying.
 
 This only half-works, but then let-generalisation only half-works.
-
-
-Note [Inheriting implicit parameters]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider this:
-
-	f x = (x::Int) + ?y
-
-where f is *not* a top-level binding.
-From the RHS of f we'll get the constraint (?y::Int).
-There are two types we might infer for f:
-
-	f :: Int -> Int
-
-(so we get ?y from the context of f's definition), or
-
-	f :: (?y::Int) => Int -> Int
-
-At first you might think the first was better, becuase then
-?y behaves like a free variable of the definition, rather than
-having to be passed at each call site.  But of course, the WHOLE
-IDEA is that ?y should be passed at each call site (that's what
-dynamic binding means) so we'd better infer the second.
-
-BOTTOM LINE: when *inferring types* you *must* quantify 
-over implicit parameters. See the predicate isFreeWhenInferring.
 
 
 *********************************************************************************
@@ -771,10 +727,10 @@ solve_wanteds wanted@(WC { wc_flat = flats, wc_impl = implics, wc_insol = insols
 
          -- Try the flat bit, including insolubles. Solving insolubles a 
          -- second time round is a bit of a waste but the code is simple 
-         -- and the program is wrong anyway. 
-         -- Why keepWanted insols? See Note [KeepWanted in SolveWanteds] 
-       ; let all_flats = flats `unionBags` keepWanted insols
-             -- DV: Used to be 'keepWanted insols' but just insols is
+         -- and the program is wrong anyway, and we don't run the danger 
+         -- of adding Derived insolubles twice; see 
+         -- TcSMonad Note [Do not add duplicate derived insolubles] 
+       ; let all_flats = flats `unionBags` insols
                          
        ; impls_from_flats <- solveInteractCts $ bagToList all_flats
 
@@ -917,10 +873,7 @@ solveImplication tcs_untouchables
        ; let (res_flat_free, res_flat_bound)
                  = floatEqualities skols givens unsolved_flats
 
-       ; let res_wanted = WC { wc_flat  = keepWanted $ res_flat_bound
-                               -- I think this keepWanted must eventually go away, but it is
-                               -- a real code-breaking change. 
-                               -- See Note [KeepWanted in SolveImplication]
+       ; let res_wanted = WC { wc_flat  = res_flat_bound
                              , wc_impl  = unsolved_implics
                              , wc_insol = insols }
 
@@ -940,81 +893,8 @@ solveImplication tcs_untouchables
 
 \end{code}
 
-Note [KeepWanted in SolveWanteds]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Why do we have:
-   let all_flats = flats `unionBags` keepWanted insols
-instead of the simpler:
-   let all_flats = flats `unionBags` insols
-in solve_wanteds?
-
-Assume a top-level class and instance declaration:
-
-  class D a b | a -> b 
-  instance D [a] [a] 
-
-Assume we have started with an implication:
-
-  forall c. Eq c => { wc_flat = D [c] c [W] }
-
-which we have simplified to:
-
-  forall c. Eq c => { wc_flat = D [c] c [W]
-                    , wc_insols = (c ~ [c]) [D] }
-
-For some reason, e.g. because we floated an equality somewhere else,
-we might try to re-solve this implication. If we do not do a
-keepWanted, then we will end up trying to solve the following
-constraints the second time:
-
-  (D [c] c) [W]
-  (c ~ [c]) [D]
-
-which will result in two Deriveds to end up in the insoluble set:
-
-  wc_flat   = D [c] c [W]
-  wc_insols = (c ~ [c]) [D], (c ~ [c]) [D]
-
-which can result in reporting the same error twice.  
-
-So, do we /lose/ some potentially useful information by doing this? 
-
-No, because the insoluble Derived/Given are going to be equalities, 
-which are going to be derivable anyway from the rest of the flat 
-constraints. 
-
-
-Note [KeepWanted in SolveImplication]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Here is a real example, 
-stripped off from libraries/utf8-string/Codec/Binary/UTF8/Generic.hs
-
-  class C a b | a -> b
-  g :: C a b => a -> b -> () 
-  f :: C a b => a -> b -> () 
-  f xa xb = 
-      let loop = g xa 
-      in loop xb
-
-We will first try to infer a type for loop, and we will succeed:
-    C a b' => b' -> ()
-Subsequently, we will type check (loop xb) and all is good. But, 
-recall that we have to solve a final implication constraint: 
-    C a b => (C a b' => .... cts from body of loop .... )) 
-And now we have a problem as we will generate an equality b ~ b' and fail to 
-solve it. 
-
-I actually think this is a legitimate behaviour (to fail). After all, if we had 
-given the inferred signature to foo we would have failed as well, but we have to 
-find a workaround because library code breaks.
-
-For now I keep the 'keepWanted' though it seems problematic e.g. we might discard 
-a useful Derived!
 
 \begin{code}
-
-
 floatEqualities :: [TcTyVar] -> [EvVar] -> Cts -> (Cts, Cts)
 -- Post: The returned FlavoredEvVar's are only Wanted or Derived
 -- and come from the input wanted ev vars or deriveds 

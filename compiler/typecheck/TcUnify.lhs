@@ -1059,18 +1059,21 @@ happy to have types of kind Constraint on either end of an arrow.
 matchExpectedFunKind :: TcKind -> TcM (Maybe (TcKind, TcKind))
 -- Like unifyFunTy, but does not fail; instead just returns Nothing
 
-matchExpectedFunKind (TyVarTy kvar) = do
-    maybe_kind <- readMetaTyVar kvar
-    case maybe_kind of
-      Indirect fun_kind -> matchExpectedFunKind fun_kind
-      Flexi ->
-          do { arg_kind <- newMetaKindVar
-             ; res_kind <- newMetaKindVar
-             ; writeMetaTyVar kvar (mkArrowKind arg_kind res_kind)
-             ; return (Just (arg_kind,res_kind)) }
+matchExpectedFunKind (FunTy arg_kind res_kind) 
+  = return (Just (arg_kind,res_kind))
 
-matchExpectedFunKind (FunTy arg_kind res_kind) = return (Just (arg_kind,res_kind))
-matchExpectedFunKind _                         = return Nothing
+matchExpectedFunKind (TyVarTy kvar) 
+  | isTcTyVar kvar, isMetaTyVar kvar
+  = do { maybe_kind <- readMetaTyVar kvar
+       ; case maybe_kind of
+            Indirect fun_kind -> matchExpectedFunKind fun_kind
+            Flexi ->
+                do { arg_kind <- newMetaKindVar
+                   ; res_kind <- newMetaKindVar
+                   ; writeMetaTyVar kvar (mkArrowKind arg_kind res_kind)
+                   ; return (Just (arg_kind,res_kind)) } }
+
+matchExpectedFunKind _ = return Nothing
 
 -----------------  
 unifyKind :: TcKind           -- k1 (actual)
@@ -1162,17 +1165,20 @@ uUnboundKVar kv1 k2@(TyVarTy kv2)
 
 uUnboundKVar kv1 non_var_k2
   = do  { k2' <- zonkTcKind non_var_k2
-        ; kindOccurCheck kv1 k2'
         ; let k2'' = defaultKind k2'
                 -- MetaKindVars must be bound only to simple kinds
+        ; kindUnifCheck kv1 k2''
         ; writeMetaTyVar kv1 k2'' }
 
 ----------------
-kindOccurCheck :: TyVar -> Type -> TcM ()
-kindOccurCheck kv1 k2   -- k2 is zonked
-  = if elemVarSet kv1 (tyVarsOfType k2)
-    then failWithTc (kindOccurCheckErr kv1 k2)
-    else return ()
+kindUnifCheck :: TyVar -> Type -> TcM ()
+kindUnifCheck kv1 k2   -- k2 is zonked
+  | elemVarSet kv1 (tyVarsOfType k2)
+  = failWithTc (kindOccurCheckErr kv1 k2)
+  | isSigTyVar kv1
+  = failWithTc (kindSigVarErr kv1 k2)
+  | otherwise
+  = return ()
 
 mkKindErrorCtxt :: Type -> Type -> Kind -> Kind -> TidyEnv -> TcM (TidyEnv, SDoc)
 mkKindErrorCtxt ty1 ty2 k1 k2 env0
@@ -1204,4 +1210,9 @@ kindOccurCheckErr :: Var -> Type -> SDoc
 kindOccurCheckErr tyvar ty
   = hang (ptext (sLit "Occurs check: cannot construct the infinite kind:"))
        2 (sep [ppr tyvar, char '=', ppr ty])
+
+kindSigVarErr :: Var -> Type -> SDoc
+kindSigVarErr tv ty
+  = hang (ptext (sLit "Cannot unify the kind variable") <+> quotes (ppr tv))
+       2 (ptext (sLit "with the kind") <+> quotes (ppr ty))
 \end{code}

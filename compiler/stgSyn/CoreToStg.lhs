@@ -36,6 +36,7 @@ import Maybes           ( maybeToBool )
 import Name             ( getOccName, isExternalName, nameOccName )
 import OccName          ( occNameString, occNameFS )
 import BasicTypes       ( Arity )
+import TysWiredIn       ( unboxedUnitDataCon )
 import Literal
 import Outputable
 import MonadUtils
@@ -421,6 +422,15 @@ coreToStgExpr (Case scrut bndr _ alts) = do
       )
   where
     vars_alt alt@(con, binders, rhs)
+      | DataAlt c <- con, c == unboxedUnitDataCon
+      = -- This case is a bit smelly. 
+        -- See Note [Nullary unboxed tuple] in Type.lhs
+        -- where a nullary tuple is mapped to (State# World#)
+        ASSERT( null binders )
+        do { (rhs2, rhs_fvs, rhs_escs) <- coreToStgExpr rhs
+           ; let rhs3 = StgTick (CoreNote bndr con (AltPtr alt)) rhs2
+           ; return ((DEFAULT, [], [], rhs3), rhs_fvs, rhs_escs) }
+      | otherwise
       = let     -- Remove type variables
             binders' = filterStgBinders binders
         in
@@ -466,7 +476,7 @@ mkStgAltType bndr alts = case repType (idType bndr) of
                                         PolyAlt
         Nothing                      -> PolyAlt
     UbxTupleRep rep_tys -> UbxTupAlt (length rep_tys)
-
+    -- NB Nullary unboxed tuples have UnaryRep, and generate a PrimAlt
   where
    _is_poly_alt_tycon tc
         =  isFunTyCon tc

@@ -24,6 +24,7 @@ module IfaceSyn (
 
         -- Misc
         ifaceDeclImplicitBndrs, visibleIfConDecls,
+        ifaceDeclFingerprints,
 
         -- Free Names
         freeNamesIfDecl, freeNamesIfRule, freeNamesIfFamInst,
@@ -52,6 +53,10 @@ import FastString
 import Module
 import TysWiredIn ( eqTyConName )
 import SrcLoc     ( RealSrcSpan, showUserRealSpan )
+import Fingerprint
+import Binary
+
+import GHC.IO (unsafeDupablePerformIO)
 
 infixl 3 &&&
 \end{code}
@@ -450,6 +455,23 @@ ifaceDeclImplicitBndrs (IfaceClass {ifCtxt = sc_ctxt, ifName = cls_tc_occ,
     is_newtype = n_sigs + n_ctxt == 1 -- Sigh
 
 ifaceDeclImplicitBndrs _ = []
+
+-- -----------------------------------------------------------------------------
+-- The fingerprints of an IfaceDecl
+
+       -- We better give each name bound by the declaration a
+       -- different fingerprint!  So we calculate the fingerprint of
+       -- each binder by combining the fingerprint of the whole
+       -- declaration with the name of the binder. (#5614, #7215)
+ifaceDeclFingerprints :: Fingerprint -> IfaceDecl -> [(OccName,Fingerprint)]
+ifaceDeclFingerprints hash decl
+  = (ifName decl, hash) :
+    [ (occ, computeFingerprint' (hash,occ))
+    | occ <- ifaceDeclImplicitBndrs decl ]
+  where
+     computeFingerprint' =
+       unsafeDupablePerformIO
+        . computeFingerprint (panic "ifaceDeclFingerprints")
 
 ----------------------------- Printing IfaceDecl ------------------------------
 

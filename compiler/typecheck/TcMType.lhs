@@ -55,7 +55,7 @@ module TcMType (
   checkValidInstHead, checkValidInstance, validDerivPred,
   checkInstTermination, checkValidFamInst, checkTyFamFreeness, 
   arityErr, 
-  growPredTyVars, growThetaTyVars, 
+  growThetaTyVars, quantifyPred,
 
   --------------------------------
   -- Zonking
@@ -113,7 +113,7 @@ import Data.List        ( (\\), partition, mapAccumL )
 
 \begin{code}
 newMetaKindVar :: TcM TcKind
-newMetaKindVar = do { uniq <- newUnique
+newMetaKindVar = do { uniq <- newMetaUnique
 		    ; ref <- newMutVar Flexi
 		    ; return (mkTyVarTy (mkMetaKindVar uniq ref)) }
 
@@ -593,14 +593,17 @@ skolemiseSigTv tv
 
 \begin{code}
 zonkImplication :: Implication -> TcM Implication
-zonkImplication implic@(Implic { ic_given = given 
+zonkImplication implic@(Implic { ic_skols  = skols
+                               , ic_given = given 
                                , ic_wanted = wanted
                                , ic_loc = loc })
-  = do {    -- No need to zonk the skolems
+  = do { skols'  <- mapM zonkTcTyVarBndr skols  -- Need to zonk their kinds!
+                                                -- as Trac #7230 showed
        ; given'  <- mapM zonkEvVar given
        ; loc'    <- zonkGivenLoc loc
        ; wanted' <- zonkWC wanted
-       ; return (implic { ic_given = given'
+       ; return (implic { ic_skols = skols'
+                        , ic_given = given'
                         , ic_wanted = wanted'
                         , ic_loc = loc' }) }
 
@@ -765,10 +768,18 @@ zonkTcType ty
 		       | otherwise	 = TyVarTy <$> updateTyVarKindM go tyvar
 		-- Ordinary (non Tc) tyvars occur inside quantified types
 
-    go (ForAllTy tyvar ty) = ASSERT2( isImmutableTyVar tyvar, ppr tyvar ) do
-                             ty' <- go ty
-                             tyvar' <- updateTyVarKindM go tyvar
-                             return (ForAllTy tyvar' ty')
+    go (ForAllTy tv ty) = do { tv' <- zonkTcTyVarBndr tv
+                             ; ty' <- go ty
+                             ; return (ForAllTy tv' ty') }
+
+zonkTcTyVarBndr :: TcTyVar -> TcM TcTyVar
+-- A tyvar binder is never a unification variable (MetaTv),
+-- rather it is always a skolems.  BUT it may have a kind 
+-- that has not yet been zonked, and may include kind
+-- unification variables.
+zonkTcTyVarBndr tyvar
+  = ASSERT2( isImmutableTyVar tyvar, ppr tyvar ) do
+    updateTyVarKindM zonkTcType tyvar
 
 zonkTcTyVar :: TcTyVar -> TcM TcType
 -- Simply look through all Flexis
@@ -1408,7 +1419,38 @@ Note [Growing the tau-tvs using constraints]
 E.g. tvs = {a}, preds = {H [a] b, K (b,Int) c, Eq e}
 Then grow precs tvs = {a,b,c}
 
+Note [Inheriting implicit parameters]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider this:
+
+	f x = (x::Int) + ?y
+
+where f is *not* a top-level binding.
+From the RHS of f we'll get the constraint (?y::Int).
+There are two types we might infer for f:
+
+	f :: Int -> Int
+
+(so we get ?y from the context of f's definition), or
+
+	f :: (?y::Int) => Int -> Int
+
+At first you might think the first was better, becuase then
+?y behaves like a free variable of the definition, rather than
+having to be passed at each call site.  But of course, the WHOLE
+IDEA is that ?y should be passed at each call site (that's what
+dynamic binding means) so we'd better infer the second.
+
+BOTTOM LINE: when *inferring types* you *must* quantify 
+over implicit parameters. See the predicate isFreeWhenInferring.
+
 \begin{code}
+quantifyPred :: TyVarSet      -- Quantifying over these
+	     -> PredType -> Bool	    -- True <=> quantify over this wanted
+quantifyPred qtvs pred
+  | isIPPred pred = True  -- Note [Inheriting implicit parameters]
+  | otherwise	  = tyVarsOfType pred `intersectsVarSet` qtvs
+
 growThetaTyVars :: TcThetaType -> TyVarSet -> TyVarSet
 -- See Note [Growing the tau-tvs using constraints]
 growThetaTyVars theta tvs
@@ -1422,6 +1464,7 @@ growPredTyVars :: TcPredType
                -> TyVarSet	-- The set to extend
 	       -> TyVarSet	-- TyVars of the predicate if it intersects the set, 
 growPredTyVars pred tvs 
+   | isIPPred pred                   = pred_tvs   -- Always quantify over implicit parameers
    | pred_tvs `intersectsVarSet` tvs = pred_tvs
    | otherwise                       = emptyVarSet
   where

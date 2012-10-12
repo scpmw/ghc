@@ -36,7 +36,7 @@ import Var
 import PprCore ()   -- Instance OutputableBndr TyVar
 import TypeRep  -- Knows type representation
 import TcType
-import Type( tyConAppArgN, getEqPredTys_maybe, tyConAppTyCon_maybe, getEqPredTys )
+import Type( tyConAppArgN, tyConAppTyCon_maybe, getEqPredTys )
 import TysPrim( funTyCon )
 import TyCon
 import PrelNames
@@ -114,7 +114,7 @@ isEqVar v = case tyConAppTyCon_maybe (varType v) of
 
 isTcReflCo_maybe :: TcCoercion -> Maybe TcType
 isTcReflCo_maybe (TcRefl ty) = Just ty
-isTcReflCo_maybe _             = Nothing
+isTcReflCo_maybe _           = Nothing
 
 isTcReflCo :: TcCoercion -> Bool
 isTcReflCo (TcRefl {}) = True
@@ -185,13 +185,12 @@ mkTcInstCos co tys          = foldl TcInstCo co tys
 
 mkTcCoVarCo :: EqVar -> TcCoercion
 -- ipv :: s ~ t  (the boxed equality type)
-mkTcCoVarCo ipv
-  | ty1 `eqType` ty2 = TcRefl ty1
-  | otherwise        = TcCoVarCo ipv
-  where
-    (ty1, ty2) = case getEqPredTys_maybe (varType ipv) of
-        Nothing  -> pprPanic "mkCoVarLCo" (ppr ipv)
-        Just tys -> tys
+mkTcCoVarCo ipv = TcCoVarCo ipv
+  -- Previously I checked for (ty ~ ty) and generated Refl,
+  -- but in fact ipv may not even (visibly) have a (t1 ~ t2) type, because
+  -- the constraint solver does not substitute in the types of
+  -- evidence variables as it goes.  In any case, the optimisation
+  -- will be done in the later zonking phase
 \end{code}
 
 \begin{code}
@@ -245,11 +244,9 @@ coVarsOfTcCo tc_co
     go (TcLetCo {}) = emptyVarSet    -- Harumph. This does legitimately happen in the call
                                      -- to evVarsOfTerm in the DEBUG check of setEvBind
 
-    -- We expect only coercion bindings
+    -- We expect only coercion bindings, so use evTermCoercion 
     go_bind :: EvBind -> VarSet
-    go_bind (EvBind _ (EvCoercion co)) = go co
-    go_bind (EvBind _ (EvId v))        = unitVarSet v
-    go_bind other = pprPanic "coVarsOfTcCo:Bind" (ppr other)
+    go_bind (EvBind _ tm) = go (evTermCoercion tm)
 
     get_bndrs :: Bag EvBind -> VarSet
     get_bndrs = foldrBag (\ (EvBind b _) bs -> extendVarSet bs b) emptyVarSet 
@@ -493,28 +490,28 @@ data EvLit
 
 \end{code}
 
-Note [Coecion evidence terms]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Notice that a coercion variable (v :: t1 ~ t2) can be represented as an EvTerm
-in two different ways:
-   EvId v
-   EvCoercion (TcCoVarCo v)
-
-An alternative would be 
-
-* To establish the invariant that coercions are represented only 
-   by EvCoercion
-
-* To maintain the invariant by smart constructors.  Eg
-     mkEvCast (EvCoercion c1) c2 = EvCoercion (TcCastCo c1 c2)
-     mkEvCast t c = EvCast t c
+Note [Coercion evidence terms]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A "coercion evidence term" takes one of these forms
+   co_tm ::= EvId v           where v :: t1 ~ t2
+           | EvCoercion co
+           | EvCast co_tm co
 
 We do quite often need to get a TcCoercion from an EvTerm; see
-'evTermCoercion'.  Notice that as well as EvId and EvCoercion it may see
-an EvCast.
+'evTermCoercion'.
 
-I don't think it matters much... but maybe we'll find a good reason to
-do one or the other.
+INVARIANT: The evidence for any constraint with type (t1~t2) is 
+a coercion evidence term.  Consider for example
+    [G] g :: F Int a
+If we have
+    ax7 a :: F Int a ~ (a ~ Bool)
+then we do NOT generate the constraint
+    [G} (g |> ax7 a) :: a ~ Bool
+because that does not satisfy the invariant.  Instead we make a binding
+    g1 :: a~Bool = g |> ax7 a
+and the constraint
+    [G] g1 :: a~Bool
+See Trac [7238]
 
 Note [EvKindCast] 
 ~~~~~~~~~~~~~~~~~ 
