@@ -253,7 +253,7 @@ dumpSDoc dflags dflag hdr doc
                         let doc'
                               | null hdr  = doc
                               | otherwise = doc $$ blankLine
-                        defaultLogActionHPrintDoc dflags handle doc' defaultDumpStyle
+                        defaultLogActionHPrintDoc dflags handle doc' lineAnnotatedDumpStyle
                         hClose handle
 
             -- write the dump to stdout
