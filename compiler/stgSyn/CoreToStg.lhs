@@ -279,23 +279,28 @@ mkTopStgRhs :: DynFlags -> FreeVarsInfo
             -> StgExpr
             -> StgRhs
 
-mkTopStgRhs _ rhs_fvs srt binder_info annot (StgLam bndrs body)
-  = StgRhsClosure noCCS binder_info
-                  (getFVs rhs_fvs)
-                  ReEntrant
-                  srt
-                  bndrs (annot body)
+mkTopStgRhs dflags rhs_fvs srt binder_info annot rhs = case stripTicks [] rhs of
+  (ticks, StgLam bndrs body)
+    -> StgRhsClosure noCCS binder_info
+                     (getFVs rhs_fvs)
+                     ReEntrant
+                     srt
+                     bndrs (annot $ foldr StgTick body ticks)
 
-mkTopStgRhs dflags _ _ _ _ (StgConApp con args)
-  | not (isDllConApp dflags con args)  -- Dynamic StgConApps are updatable
-  = StgRhsCon noCCS con args
+  (_, StgConApp con args)
+    | not (isDllConApp dflags con args)  -- Dynamic StgConApps are updatable
+    -> StgRhsCon noCCS con args          -- Ticks are dropped
 
-mkTopStgRhs _ rhs_fvs srt binder_info annot rhs
-  = StgRhsClosure noCCS binder_info
-                  (getFVs rhs_fvs)
-                  Updatable
-                  srt
-                  [] (annot rhs)
+  _ -> StgRhsClosure noCCS binder_info
+                    (getFVs rhs_fvs)
+                    Updatable
+                    srt
+                    [] (annot rhs)
+
+  where stripTicks ts (StgTick t e)
+          | not (tickishIsCode t)    = stripTicks (t:ts) e
+        stripTicks ts other          = (reverse ts, other)
+
 \end{code}
 
 
