@@ -239,10 +239,10 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
   -- Find source tick to associate with procedure
   let unitFile = fromMaybe "** no source file **" (ml_hs_file mod_loc)
       procTick = findGoodSourceTick cmmLabel unitFile tiMap
-      (line, _) = case fmap sourceSpan procTick of
-        Just span -> (srcSpanStartLine span, srcSpanStartCol span)
-        _         -> (1, 0)
-  fileId <- emitFileMeta (mkFastString unitFile)
+      (file, line, _) = case fmap sourceSpan procTick of
+        Just span -> (srcSpanFile span, srcSpanStartLine span, srcSpanStartCol span)
+        _         -> (mkFastString unitFile, 1, 0)
+  fileId <- emitFileMeta file
 
   -- it seems like LLVM 3.0 (likely 2.x as well) ignores the procedureName
   -- procedureName <- strProcedureName_llvm entryLabel
@@ -287,9 +287,10 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
         -- Figure out line information for this tick
         let tick = findGoodSourceTick (timLabel tim) unitFile tiMap
 
-        let (line, col) = case fmap sourceSpan tick of
-              Just span -> (srcSpanStartLine span, srcSpanStartCol span)
-              _         -> (1, 0)
+        let (file, line, col) = case fmap sourceSpan tick of
+              Just span -> (srcSpanFile span, srcSpanStartLine span, srcSpanStartCol span)
+              _         -> (mkFastString unitFile, 1, 0)
+        fileId <- emitFileMeta file
 
         -- According to the llvm docs, the main reason it's asking for
         -- source line/column on the blocks is to prevent different
