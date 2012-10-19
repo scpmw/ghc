@@ -39,7 +39,7 @@ import MonadUtils      ( MonadIO(..), zipWith3M )
 import Outputable      ( showSDoc, ppr, renderWithStyle, mkCodeStyle,  CodeStyle(..) )
 
 import System.Directory(getCurrentDirectory)
-import Data.List       (maximumBy)
+import Data.List       (maximumBy, isPrefixOf)
 import Data.Maybe      (fromMaybe, fromJust, mapMaybe)
 import Data.Map as Map (lookup, fromList)
 import Data.Function   (on)
@@ -50,6 +50,8 @@ import Data.Bits       (shiftL)
 import Foreign.Ptr
 import Foreign.ForeignPtr
 import Foreign.Storable
+
+import System.FilePath (takeExtension)
 
 -- Constants
 
@@ -376,7 +378,11 @@ findGoodSourceTick lbl unit tiMap
     unitFS = mkFastString unit
     ticks = findSourceTis (Map.lookup lbl tiMap)
     rangeRating (SourceNote span _ _) =
-      (srcSpanFile span == unitFS,
+      (case () of
+        _ | ".dump" `isPrefixOf` takeExtension (unpackFS $ srcSpanFile span)
+                                       -> 2
+          | srcSpanFile span == unitFS -> 1
+          | otherwise                  -> 0 :: Int,
        srcSpanEndLine span - srcSpanStartLine span,
        srcSpanEndCol span - srcSpanStartCol span)
     rangeRating _non_source_note = error "rangeRating"
