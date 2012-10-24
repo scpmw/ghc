@@ -58,6 +58,7 @@ cmmEliminateDeadBlocks blocks@(BasicBlock base_id _:_) =
             where
                 stmt m CmmNop = m
                 stmt m (CmmComment _) = m
+                stmt m (CmmTick {}) = m
                 stmt m (CmmAssign _ e) = expr m e
                 stmt m (CmmStore e1 e2) = expr (expr m e1) e2
                 stmt m (CmmCall c _ as _) = f (actuals m as) c

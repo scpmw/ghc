@@ -179,6 +179,7 @@ pprStmt platform stmt = case stmt of
                           -- XXX we probably want to emit these comments when
                           -- some debugging option is on.  They can get quite
                           -- large.
+    CmmTick _    -> empty
 
     CmmAssign dest src -> pprAssign platform dest src
 

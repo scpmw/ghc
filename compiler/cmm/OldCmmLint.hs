@@ -123,6 +123,7 @@ lintCmmStmt :: Platform -> BlockSet -> CmmStmt -> CmmLint ()
 lintCmmStmt platform labels = lint
     where lint (CmmNop) = return ()
           lint (CmmComment {}) = return ()
+          lint (CmmTick {}) = return ()
           lint stmt@(CmmAssign reg expr) = do
             erep <- lintCmmExpr platform expr
 	    let reg_ty = cmmRegType reg

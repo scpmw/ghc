@@ -118,6 +118,7 @@ stmtToInstrs stmt = do
   case stmt of
     CmmNop         -> return nilOL
     CmmComment s   -> return (unitOL (COMMENT s))
+    CmmTick {}     -> return nilOL
 
     CmmAssign reg src
       | isFloatType ty -> assignReg_FltCode size reg src

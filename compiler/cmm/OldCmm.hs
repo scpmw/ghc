@@ -39,7 +39,7 @@ import ClosureInfo
 import CmmExpr
 import FastString
 import ForeignCall
-
+import CoreSyn (Tickish)
 
 -- A [[BlockId]] is a local label.
 -- Local labels must be unique within an entire compilation unit, not
@@ -125,6 +125,7 @@ data CmmReturnInfo
 data CmmStmt
   = CmmNop
   | CmmComment FastString
+  | CmmTick (Tickish ())
 
   | CmmAssign CmmReg CmmExpr      -- Assign to register
 
@@ -189,6 +190,7 @@ instance UserOfLocalRegs CmmStmt where
       stmt :: CmmStmt -> b -> b
       stmt (CmmNop)                  = id
       stmt (CmmComment {})           = id
+      stmt (CmmTick {})              = id
       stmt (CmmAssign _ e)           = gen e
       stmt (CmmStore e1 e2)          = gen e1 . gen e2
       stmt (CmmCall target _ es _)   = gen target . gen es

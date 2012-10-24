@@ -88,6 +88,9 @@ pprStmt stmt = case stmt of
     -- // text
     CmmComment s -> text "//" <+> ftext s
 
+    -- // tick text
+    CmmTick t -> text "// tick" <+> ppr t
+
     -- reg = expr;
     CmmAssign reg expr -> ppr reg <+> equals <+> ppr expr <> semi
 
