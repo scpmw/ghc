@@ -178,6 +178,9 @@ pprNode node = pp_node <+> pp_debug
       -- // text
       CmmComment s -> text "//" <+> ftext s
 
+      -- // tick tick<...>
+      CmmTick t -> text "// tick" <+> ppr t
+
       -- reg = expr;
       CmmAssign reg expr -> ppr reg <+> equals <+> ppr expr <> semi
 
@@ -258,6 +261,7 @@ pprNode node = pp_node <+> pp_debug
       else case node of
              CmmEntry {}             -> empty -- Looks terrible with text "  // CmmEntry"
              CmmComment {}           -> empty -- Looks also terrible with text "  // CmmComment"
+             CmmTick {}              -> empty -- Would look terrible in some way, too, I presume
              CmmAssign {}            -> text "  // CmmAssign"
              CmmStore {}             -> text "  // CmmStore"
              CmmUnsafeForeignCall {} -> text "  // CmmUnsafeForeignCall"

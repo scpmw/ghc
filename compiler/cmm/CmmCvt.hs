@@ -80,6 +80,7 @@ ofZgraph g = Old.ListGraph $ mapMaybe convert_block $ postorderDfs g
                     where stmt :: Old.CmmStmt
                           stmt = case node of
                             CmmComment s                                   -> Old.CmmComment s
+                            CmmTick _                                      -> error "converting tick"
                             CmmAssign l r                                  -> Old.CmmAssign l r
                             CmmStore  l r                                  -> Old.CmmStore  l r
                             CmmUnsafeForeignCall (PrimTarget MO_Touch) _ _ -> Old.CmmNop

@@ -24,7 +24,7 @@ module StgCmmMonad (
         newLabelC, emitLabel,
 
 	emit, emitDecl, emitProc, emitProcWithConvention, emitSimpleProc,
-        emitOutOfLine, emitAssign, emitStore, emitComment,
+        emitOutOfLine, emitAssign, emitStore, emitComment, emitTick,
 
 	getCmm, cgStmtsToBlocks,
 	getCodeR, getCode, getHeapUsage,
@@ -69,6 +69,7 @@ import DynFlags
 import MkGraph
 import BlockId
 import CLabel
+import CoreSyn (Tickish)
 import SMRep
 import Module
 import Id
@@ -614,6 +615,9 @@ emitComment s = emitCgStmt (CgStmt (CmmComment s))
 #else
 emitComment _ = return ()
 #endif
+
+emitTick :: Tickish () -> FCode ()
+emitTick = emitCgStmt . CgStmt . CmmTick
 
 emitAssign :: CmmReg  -> CmmExpr -> FCode ()
 emitAssign l r = emitCgStmt (CgStmt (CmmAssign l r))

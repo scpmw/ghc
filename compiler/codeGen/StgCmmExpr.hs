@@ -66,11 +66,15 @@ cgExpr (StgOpApp (StgPrimOp SeqOp) [StgVarArg a, _] _res_ty) =
 
 cgExpr (StgOpApp op args ty) = cgOpApp op args ty
 cgExpr (StgConApp con args)  = cgConApp con args
-cgExpr (StgTick (ProfNote cc tick push) expr) 
-                             = do { emitSetCCC cc tick push; cgExpr expr }
-cgExpr (StgTick (HpcTick m n) expr) 
-                             = do { emit (mkTickBox m n); cgExpr expr }
-cgExpr (StgTick _ expr)      = cgExpr expr
+cgExpr (StgTick tick expr)   =
+  do { case tick of
+          ProfNote cc tick push -> emitSetCCC cc tick push
+          HpcTick m n           -> emit (mkTickBox m n)
+          SourceNote src n f    -> emitTick (SourceNote src n f)
+          CoreNote bnd alt core -> emitTick (CoreNote bnd alt core)
+          OptNote rname         -> emitTick (OptNote rname)
+          _other                -> error "cgExpr StgTick"
+     ; cgExpr expr }
 cgExpr (StgLit lit)       = do cmm_lit <- cgLit lit
                                emitReturn [CmmLit cmm_lit]
 

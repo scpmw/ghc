@@ -381,6 +381,8 @@ middleAssignment (Plain n@(CmmUnsafeForeignCall{})) assign
 
 middleAssignment (Plain (CmmComment {})) assign
     = assign
+middleAssignment (Plain (CmmTick {})) assign
+    = assign
 
 -- Assumptions:
 --  * Writes using Hp do not overlap with any other memory locations
