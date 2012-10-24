@@ -472,8 +472,6 @@ cmmPrimOpFunctions mop = do
     MO_F64_Cosh   -> fsLit "cosh"
     MO_F64_Tanh   -> fsLit "tanh"
 
-    MO_CycleCount -> fsLit "llvm.readcyclecounter"
-
     MO_Memcpy     -> fsLit $ "llvm.memcpy."  ++ intrinTy1
     MO_Memmove    -> fsLit $ "llvm.memmove." ++ intrinTy1
     MO_Memset     -> fsLit $ "llvm.memset."  ++ intrinTy2
