@@ -461,9 +461,9 @@ data Tickish id =
 
   deriving (Eq, Ord, Data, Typeable)
 
--- | A hackish newtype mostly for making the expression ignored by all
--- equality checks. Also allows us to cleanly pack expressions as well
--- as "case" alternatives.
+-- | Pointer to a position in the core tree - either an expression or
+-- an alternative. Ignored for the purpose of equality and order
+-- checks.
 data ExprPtr id = ExprPtr (Expr id)
                 | AltPtr (Alt id)
                 deriving (Data, Typeable)
