@@ -458,7 +458,6 @@ data CallishMachOp
   | MO_Memmove
 
   | MO_PopCnt Width
-  | MO_CycleCount
   deriving (Eq, Show)
 
 pprCallishMachOp :: CallishMachOp -> SDoc
