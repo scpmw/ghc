@@ -248,6 +248,16 @@ void dwarf_load_file(char *module_path, seg_space *seg)
 	Elf *elf = elf_begin(fd, ELF_C_READ, 0);
 	if(!elf) {
 		errorBelch("Could not open ELF file: %s", elf_errmsg(elf_errno()));
+		close(fd);
+		return;
+	}
+
+	// Not actually an ELF file? That's okay, we are attempting this
+	// for pretty much all memory-mapped files, so we can expect to
+	// come across a few non-object files.
+	if (elf_kind(elf) != ELF_K_ELF) {
+		elf_end(elf);
+		close(fd);
 		return;
 	}
 
@@ -264,6 +274,7 @@ void dwarf_load_file(char *module_path, seg_space *seg)
 	Dwarf_Debug dbg; Dwarf_Error err;
 	if (dwarf_elf_init(elf, DW_DLC_READ, 0, 0, &dbg, &err) != DW_DLV_OK) {
 		errorBelch("Could not read debug data from %s: %s", module_path, dwarf_errmsg(err));
+		elf_end(elf);
 		close(fd);
 		return;
 	}
@@ -287,14 +298,14 @@ void dwarf_load_file(char *module_path, seg_space *seg)
 			break;
 		if (res != DW_DLV_OK) {
 			errorBelch("Could not read unit debug data from %s!", module_path);
-			return;
+			break;
 		}
 
 		// Get root die
 		Dwarf_Die cu_die = 0;
 		if (dwarf_siblingof(dbg, 0, &cu_die, &error) != DW_DLV_OK) {
 			errorBelch("Could not a read root die from %s!", module_path);
-			return;
+			break;
 		}
 
 		// Check that it is, in fact, a compilation unit die
