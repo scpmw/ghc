@@ -51,6 +51,9 @@ import DynFlags
 import FastString
 import Platform
 import StaticFlags
+import Name             ( NamedThing(..), nameSrcSpan )
+import SrcLoc           ( SrcSpan(..) )
+import CoreSyn          ( Tickish(..) )
 
 import Control.Monad
 \end{code}
@@ -446,6 +449,7 @@ cgDataCon :: DataCon -> Code
 cgDataCon data_con
   = do  {     -- Don't need any dynamic closure code for zero-arity constructors
 
+        ; dflags <- getDynFlags
         ; let
             -- To allow the debuggers, interpreters, etc to cope with
             -- static data structures (ie those built at compile
@@ -457,11 +461,16 @@ cgDataCon data_con
             (dyn_cl_info, arg_things) =
                 layOutDynConstr    data_con arg_reps
 
+            con_name = getName data_con
+
             emit_info cl_info ticky_code
                 = do { code_blks <- getCgStmts the_code
                      ; emitClosureCodeAndInfoTable cl_info [] code_blks }
                 where
                   the_code = do { _ <- ticky_code
+                                ; case nameSrcSpan con_name of
+                                    RealSrcSpan span -> addTick (SourceNote span (showSDoc dflags (ppr con_name)) 0)
+                                    _other           -> return ()
                                 ; ldvEnter (CmmReg nodeReg)
                                 ; body_code }
 
