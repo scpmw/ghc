@@ -19,6 +19,7 @@
 #include "Arena.h"
 #include "Printer.h"
 #include "sm/GCThread.h"
+#include "Trace.h"
 
 #include <string.h>
 
@@ -142,6 +143,14 @@ closureIdentity( StgClosure *p )
             return closure_type_names[info->type];
         }
     }
+    case THEAP_BY_CODE_PTR:
+        // FIXME: This should really not be hard-coded here, but
+        //        GET_ENTRY seems to be unusable?
+#if defined(TABLES_NEXT_TO_CODE)
+        return (void *)GET_INFO(p);
+#else
+        return (void *)GET_INFO(p)->entry;
+#endif
 
 #endif
     default:
@@ -827,6 +836,41 @@ dumpCensus( Census *census )
     printSample(rtsFalse, census->time);
 }
 
+#ifdef TRACING
+
+static void
+traceCensus( Census *census )
+{
+    counter *ctr;
+
+    // Count samples
+    nat count = 0;
+    for (ctr = census->ctrs; ctr != NULL; ctr = ctr->next)
+        count++;
+
+    // Allocate buffer for samples + weights
+    nat size = count * (sizeof(void*) + sizeof(nat));
+    StgWord8 *buf = stgMallocBytes(size, "traceCensus");
+    void **samples = (void **)buf;
+    nat *weights = (nat *)(buf + count * sizeof(void *));
+
+    // Fill
+    nat i = 0;
+    for (ctr = census->ctrs; ctr != NULL; ctr = ctr->next) {
+        samples[i] = ctr->identity;
+        weights[i] = ctr->c.resid;
+        i++;
+    }
+
+    // Trace
+    traceSamples(myTask()->cap, 1, SAMPLE_BY_HEAP_LIFE, SAMPLE_INSTR_PTR,
+                 count, samples, weights);
+
+    // Free
+    stgFree(buf);
+}
+
+#endif
 
 static void heapProfObject(Census *census, StgClosure *p, nat size,
                            rtsBool prim
@@ -1107,6 +1151,7 @@ void heapCensus (Time t)
   }
 
   // dump out the census info
+  if (RtsFlags.ProfFlags.doHeapProfile < THEAP_START) {
 #ifdef PROFILING
     // We can't generate any info for LDV profiling until
     // the end of the run...
@@ -1114,6 +1159,12 @@ void heapCensus (Time t)
 	dumpCensus( census );
 #else
     dumpCensus( census );
+#endif
+  }
+#ifdef TRACING
+  else {
+    traceCensus( census) ;
+  }
 #endif
 
 
