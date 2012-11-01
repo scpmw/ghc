@@ -60,7 +60,7 @@ import Control.Monad
 import qualified Data.ByteString.Char8 as BS
 import Data.Function
 import Data.List        ( sortBy )
-import qualified Data.Map.Strict as Map
+import qualified Data.Map as Map
 import Data.IORef       ( readIORef, writeIORef )
 import Data.Set         ( elems )
 import System.IO
