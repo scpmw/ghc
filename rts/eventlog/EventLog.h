@@ -97,8 +97,9 @@ void postSparkCountersEvent (Capability *cap,
  * Profiling
  */
 
-void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 sample_type,
-                        StgWord32 cnt, void **ips);
+void postSamples(Capability *cap, StgBool own_cap,
+                 StgWord32 sample_by, StgWord32 sample_type,
+                 StgWord32 cnt, void **samples, nat *weights);
 
 void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
 

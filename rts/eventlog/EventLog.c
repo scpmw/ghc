@@ -102,7 +102,7 @@ char *EventDesc[] = {
   [EVENT_SPARK_STEAL]         = "Spark steal",
   [EVENT_SPARK_FIZZLE]        = "Spark fizzle",
   [EVENT_SPARK_GC]            = "Spark GC",
-  [EVENT_INSTR_PTR_SAMPLE]    = "Instruction pointer sample",
+  [EVENT_DEBUG_SAMPLES]       = "Debug samples",
   [EVENT_DEBUG_MODULE]        = "Debug module data",
   [EVENT_DEBUG_PROCEDURE]     = "Debug procedure data",
   [EVENT_DEBUG_SOURCE]        = "Debug source data",
@@ -141,11 +141,21 @@ static inline void postWord8(EventsBuf *eb, StgWord8 i)
 {
     *(eb->pos++) = i; 
 }
+static inline void postWord8at(EventsBuf *eb STG_UNUSED, StgWord8 i, StgInt8 *pos)
+{
+    ASSERT(pos >= eb->begin && pos < eb->pos);
+    *pos = i;
+}
 
 static inline void postWord16(EventsBuf *eb, StgWord16 i)
 {
     postWord8(eb, (StgWord8)(i >> 8));
     postWord8(eb, (StgWord8)i);
+}
+static inline void postWord16at(EventsBuf *eb, StgWord16 i, StgInt8 *pos)
+{
+    postWord8at(eb, (StgWord8)(i >> 8), pos);
+    postWord8at(eb, (StgWord8)i,        pos+1);
 }
 
 static inline void postWord32(EventsBuf *eb, StgWord32 i)
@@ -277,11 +287,11 @@ static StgWord16 getEventSize(EventTypeNum t)
     case EVENT_PROGRAM_ARGS:     // (capset, strvec)
     case EVENT_PROGRAM_ENV:      // (capset, strvec)
     case EVENT_THREAD_LABEL:     // (thread, str)
-    case EVENT_INSTR_PTR_SAMPLE: // (ips)
-    case EVENT_DEBUG_MODULE: // (variable)
-    case EVENT_DEBUG_PROCEDURE: // (variable)
-    case EVENT_DEBUG_SOURCE: // (variable)
-    case EVENT_DEBUG_CORE: // (variable)
+    case EVENT_DEBUG_SAMPLES:    // (variable)
+    case EVENT_DEBUG_MODULE:     // (variable)
+    case EVENT_DEBUG_PROCEDURE:  // (variable)
+    case EVENT_DEBUG_SOURCE:     // (variable)
+    case EVENT_DEBUG_CORE:       // (variable)
         return EVENT_SIZE_VARIABLE;
 
     case EVENT_SPARK_COUNTERS:   // (cap, 7*counter)
@@ -983,22 +993,100 @@ void postUserMsg(Capability *cap, char *msg, va_list ap)
     postLogMsg(&capEventBuf[cap->no], EVENT_USER_MSG, msg, ap);
 }
 
-void postInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 sample_type,
-                        StgWord32 cnt, void **ips)
+void postSamples(Capability *cap, StgBool own_cap,
+                 StgWord32 sample_by, StgWord32 sample_type,
+                 StgWord32 cnt, void **samples, nat *weights)
 {
-	// (size:16, cap:16, type:16, cnt * (tick : 32, freq : 32) )
-	nat size = sizeof(EventCapNo) + sizeof(StgWord16) + cnt * sizeof(StgWord64), i;
-	EventsBuf *eb = own_cap ? &capEventBuf[cap->no] : &eventBuf;
-	if (!ensureRoomForVariableEvent(eb, size)) {
-		return;
-	}
-	postEventHeader(eb, EVENT_INSTR_PTR_SAMPLE);
-	postPayloadSize(eb, size);
-	postCapNo(eb, cap->no);
-	postWord16(eb, sample_type);
-	for (i = 0; i < cnt; i++) {
-		postWord64(eb, (StgWord64) ips[i]);
-	}
+
+    // (size:16, cap:16, verb:8, noun:8, various )
+    nat hdr_size = sizeof(EventCapNo) + 2 * sizeof(StgWord8);
+    nat est_size = hdr_size + cnt * sizeof(StgWord64);
+    EventsBuf *eb = own_cap ? &capEventBuf[cap->no] : &eventBuf;
+    if (!ensureRoomForVariableEvent(eb, est_size)) {
+        return;
+    }
+    postEventHeader(eb, EVENT_DEBUG_SAMPLES);
+    StgInt8 *size_pos = eb->pos;
+    postPayloadSize(eb, 0);
+    postCapNo(eb, cap->no);
+    postWord8(eb, sample_by);
+    postWord8(eb, sample_type);
+
+    // We actually put quite a bit of effort into compressing the
+    // samples here. The basic idea is that we will often have samples
+    // in very close proximity, which can be exploited. Note that we
+    // *might* end up using more space than estimated, in which case
+    // this event might get split up.The encoding is:
+    //  (sample_encoding:4, weight_encoding:4, sample, weight)
+    // with sample encoding types being:
+    //  0  = 8-bit offset to previous address
+    //  1  = reverse 8-bit offset to previous address
+    //  4  = 32-bit offset to previous address
+    //  5  = reverse 32-bit offset to previous address
+    //  15 = direct encoding
+    // and weight encoding being simply the number of bytes used to
+    // encode the weight. If zero bytes are used for a weight, this
+    // implies weight 1.
+    nat i = 0, done = 0, weight = 0;
+    StgWord64 last = 0;
+    for (; i < cnt; i++) {
+        weight += (weights ? weights[i] : 1);
+        // Next entry the same? compress
+        if (i+1 < cnt && samples[i] == samples[i+1])
+            continue;
+        // Weight encoding
+        nat wbytes;
+        if (weight == 1)               wbytes = 0;
+        else if (weight <= 0xff)       wbytes = 1;
+        else if (weight <= 0xffff)     wbytes = 2;
+        else if (weight <= 0xffffffff) wbytes = 4;
+        else                           wbytes = 8;
+        // Similar to last entry?
+        StgWord64 cur = (StgWord64) samples[i];
+        #define CHECK_WRITE(n) \
+            if(eb->pos + (n) >= eb->begin + eb->size) break;
+        if (cur - last <= 0xff) {
+            CHECK_WRITE(2 + wbytes);
+            postWord8(eb, 0x00 | wbytes);
+            postWord8(eb, (StgWord8) (cur - last));
+        } else if (last - cur <= 0xff) {
+            CHECK_WRITE(2 + wbytes);
+            postWord8(eb, 0x10 | wbytes);
+            postWord8(eb, (StgWord8) (last - cur));
+        } else if (cur - last <= 0xffffffff) {
+            CHECK_WRITE(2 + wbytes);
+            postWord8(eb, 0x40 | wbytes);
+            postWord32(eb, (StgWord32) (cur - last));
+        } else if (last - cur <= 0xffffffff) {
+            CHECK_WRITE(2 + wbytes);
+            postWord8(eb, 0x50 | wbytes);
+            postWord32(eb, (StgWord32) (last - cur));
+        } else {
+            CHECK_WRITE(9 + wbytes);
+            postWord8(eb, 0xf0 | wbytes);
+            postWord64(eb, cur);
+        }
+        #undef CHECK_WRITE
+        switch(wbytes) {
+        case 0: break;
+        case 1: postWord8(eb, (StgWord8) weight); break;
+        case 2: postWord16(eb, (StgWord16) weight); break;
+        case 4: postWord32(eb, (StgWord32) weight); break;
+        case 8: postWord64(eb, (StgWord64) weight); break;
+        }
+        // Prepare writing next entry
+        last = cur;
+        weight = 0;
+        done = i+1;
+    }
+    // Determine and write final length
+    EventPayloadSize size = eb->pos - size_pos - sizeof(EventPayloadSize);
+    postWord16at(eb, size, size_pos);
+    // Samples left for output? Generate another message
+    if (done < cnt) {
+        printAndClearEventBuf(eb);
+        postSamples(cap, own_cap, sample_by, sample_type, cnt-done, samples+done, weights+done);
+    }
 }
 
 void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)

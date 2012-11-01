@@ -662,23 +662,27 @@ void traceUserMsg(Capability *cap, char *msg)
     traceFormatUserMsg(cap, "%s", msg);
 }
 
-void traceInstrPtrSample(Capability *cap, StgBool own_cap,
-                         StgWord32 sample_type, StgWord32 cnt, void **ips)
+void traceSamples(Capability *cap, StgBool own_cap,
+                 StgWord32 sample_by, StgWord32 sample_type,
+                 StgWord32 cnt, void **samples, nat *weights)
 {
 #ifdef DEBUG
 	StgWord32 i;
 	if (RtsFlags.TraceFlags.tracing == TRACE_STDERR) {
 		// Maybe sort this somewhen so it looks more useful...
 		tracePreface();
-		debugBelch("cap %d IP sample type %d:", cap->no, sample_type);
-		for (i = 0; i < cnt; i++)
-			debugBelch(" %p", ips[i]);
+		debugBelch("cap %d sample %d by %d:", cap->no, sample_type, sample_by);
+		for (i = 0; i < cnt; i++) {
+			debugBelch((i ? ", %p" : " %p"), samples[i]);
+			if (weights)
+				debugBelch(" (x%d)", weights[i]);
+		}
 		debugBelch("\n");
 	} else
 #endif
 	{
         if (eventlog_enabled) {
-            postInstrPtrSample(cap, own_cap, sample_type, cnt, ips);
+            postSamples(cap, own_cap, sample_by, sample_type, cnt, samples, weights);
         }
 	}
 }

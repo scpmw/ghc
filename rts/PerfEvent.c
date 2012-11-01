@@ -228,7 +228,7 @@ void perf_event_stream(Task *task, StgBool own_task) {
 	}
 
 	// Output samples
-	traceInstrPtrSample(task->cap, own_task, task->perf_event_sample_type, n_samples, ips);
+	traceSamples(task->cap, own_task, task->perf_event_sample_type, SAMPLE_INSTR_PTR, n_samples, ips, NULL);
 	stgFree(ips);
 
 	// Our final head (for incomplete data we might not have read everyhing!)
