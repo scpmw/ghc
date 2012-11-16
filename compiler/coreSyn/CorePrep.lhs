@@ -49,7 +49,8 @@ import Outputable
 import FastString
 import Config
 import Name             ( NamedThing(..), nameSrcSpan )
-import SrcLoc           ( SrcSpan(..) )
+import SrcLoc           ( SrcSpan(..), realSrcLocSpan, mkRealSrcLoc )
+import Module           ( ModLocation(..) )
 import Data.Bits
 import Data.List        ( mapAccumL )
 import Control.Monad
@@ -154,13 +155,14 @@ type CpeRhs  = CoreExpr    -- Non-terminal 'rhs'
 %************************************************************************
 
 \begin{code}
-corePrepPgm :: DynFlags -> HscEnv -> CoreProgram -> [TyCon] -> IO CoreProgram
-corePrepPgm dflags hsc_env binds data_tycons = do
+corePrepPgm :: HscEnv -> ModLocation -> CoreProgram -> [TyCon] -> IO CoreProgram
+corePrepPgm hsc_env mod_loc binds data_tycons = do
+    let dflags = hsc_dflags hsc_env
     showPass dflags "CorePrep"
     us <- mkSplitUniqSupply 's'
     initialCorePrepEnv <- mkInitialCorePrepEnv hsc_env
 
-    let implicit_binds = mkDataConWorkers dflags data_tycons
+    let implicit_binds = mkDataConWorkers dflags mod_loc data_tycons
             -- NB: we must feed mkImplicitBinds through corePrep too
             -- so that they are suitably cloned and eta-expanded
 
@@ -191,17 +193,20 @@ corePrepTopBinds initialCorePrepEnv binds
                                binds' <- go env' binds
                                return (bind' `appendFloats` binds')
 
-mkDataConWorkers :: DynFlags -> [TyCon] -> [CoreBind]
+mkDataConWorkers :: DynFlags -> ModLocation -> [TyCon] -> [CoreBind]
 -- See Note [Data constructor workers]
-mkDataConWorkers dflags data_tycons
+mkDataConWorkers dflags mod_loc data_tycons
   = [ NonRec cid (tick_it $ Var cid) -- The ice is thin here, but it works
     | tycon <- data_tycons,          -- CorePrep will eta-expand it
       data_con <- tyConDataCons tycon,
       let cid = dataConWorkId data_con
           name = getName data_con
-          tick_it = case nameSrcSpan name of
-            RealSrcSpan span -> Tick (SourceNote span (showSDoc dflags (ppr name)) 0)
-            UnhelpfulSpan _  -> id ]
+          span = case nameSrcSpan name of
+            RealSrcSpan span -> span
+            UnhelpfulSpan _  -> case ml_hs_file mod_loc of
+              Just file -> realSrcLocSpan $ mkRealSrcLoc (mkFastString file) 1 1
+              Nothing   -> realSrcLocSpan $ mkRealSrcLoc (fsLit "???") 1 1
+          tick_it = Tick (SourceNote span (showSDoc dflags (ppr name)) 0) ]
 \end{code}
 
 Note [Floating out of top level bindings]
