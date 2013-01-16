@@ -166,9 +166,10 @@ cmmLlvmGen :: ModLocation -> TickMap -> Int -> RawCmmDecl -> LlvmM ()
 cmmLlvmGen mod_loc tick_map count cmm@(CmmProc _ lbl (ListGraph blocks)) = do
 
     -- rewrite assignments to global regs
-    let fixed_cmm = fixStgRegisters cmm
-
     dflags <- getDynFlag id
+    let fixed_cmm = {-# SCC "llvm_fix_regs" #-}
+                    fixStgRegisters (targetPlatform dflags) cmm
+
     liftIO $ dumpIfSet_dyn dflags Opt_D_dump_opt_cmm "Optimised Cmm"
         (pprCmmGroup [fixed_cmm])
 

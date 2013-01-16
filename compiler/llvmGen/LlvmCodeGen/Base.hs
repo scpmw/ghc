@@ -15,7 +15,7 @@ module LlvmCodeGen.Base (
         LlvmM,
         runLlvm, liftStream, withClearVars, varLookup, varInsert,
         markStackReg, checkStackReg,
-        funLookup, funInsert, getLlvmVer, getDynFlag, getLlvmPlatform,
+        funLookup, funInsert, getLlvmVer, getDynFlags, getDynFlag, getLlvmPlatform,
         labelInsert, getLabelMap,
         renderLlvm, runUs, markUsedVar, getUsedVars,
         ghcInternalFunctions,
@@ -46,7 +46,6 @@ import FastString
 import OldCmm
 import qualified Outputable as Outp
 import qualified Pretty as Prt
-import DynFlags
 import Platform
 import UniqFM
 import Unique
@@ -122,8 +121,10 @@ llvmFunSig' lbl link
   = do let toParams x | isPointer x = (x, [NoAlias, NoCapture])
                       | otherwise   = (x, [])
        dflags <- getDynFlags
+       let platform = targetPlatform dflags
        return $ LlvmFunctionDecl lbl link (llvmGhcCC dflags) LMVoid FixedArgs
-                                 (map (toParams . getVarType) llvmFunArgs) llvmFunAlign
+                                 (map (toParams . getVarType) (llvmFunArgs platform))
+                                 llvmFunAlign
 
 -- | Create a Haskell function in LLVM.
 mkLlvmFunc :: CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
@@ -131,7 +132,8 @@ mkLlvmFunc :: CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
 mkLlvmFunc lbl link sec blks
   = do funDec <- llvmFunSig lbl link
        dflags <- getDynFlags
-       let funArgs = map (fsLit . Outp.showSDoc dflags . ppPlainName) llvmFunArgs
+       let platform = targetPlatform dflags
+           funArgs = map (fsLit . Outp.showSDoc dflags . ppPlainName) (llvmFunArgs platform)
        return $ LlvmFunction funDec funArgs llvmStdFunAttrs sec blks
 
 -- | Alignment to use for functions
@@ -143,12 +145,13 @@ llvmInfAlign :: LMAlign
 llvmInfAlign = Just wORD_SIZE
 
 -- | A Function's arguments
-llvmFunArgs :: [LlvmVar]
-llvmFunArgs = map lmGlobalRegArg activeStgRegs
+llvmFunArgs :: Platform -> [LlvmVar]
+llvmFunArgs platform = map lmGlobalRegArg (activeStgRegs platform)
 
 -- | Position of a register in function arguments
-llvmRegArgPos :: GlobalReg -> Maybe Int
-llvmRegArgPos r = elemIndex r activeStgRegs
+llvmRegArgPos :: DynFlags -> GlobalReg -> Maybe Int
+llvmRegArgPos dflags r = elemIndex r (activeStgRegs platform)
+    where platform = targetPlatform dflags
 
 -- | Llvm standard fun attributes
 llvmStdFunAttrs :: [LlvmFuncAttr]

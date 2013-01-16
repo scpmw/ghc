@@ -1277,9 +1277,10 @@ debugDeclareRegister reg rname scopeId = do
 
   -- Check whether register is on stack or as value. Declare
   -- accordingly.
+  dflags <- getDynFlags
   let argNo = case reg of
         CmmLocal  _ -> Nothing
-        CmmGlobal r -> llvmRegArgPos r
+        CmmGlobal r -> llvmRegArgPos dflags r
   onStack <- case reg of
     CmmLocal _  -> return True
     CmmGlobal r -> checkStackReg r
@@ -1325,7 +1326,8 @@ funEpilogue live = do
         loadUndef r = do
           let ty = (pLower . getVarType $ lmGlobalRegVar r)
           return (LMLitVar $ LMUndefLit ty, unitOL Nop)
-    loads <- flip mapM activeStgRegs $ \r -> case liveRegs of
+    platform <- getDynFlag targetPlatform
+    loads <- flip mapM (activeStgRegs platform) $ \r -> case liveRegs of
       Nothing               -> loadExpr r
       Just rs | r `elem` rs -> loadExpr r
               | otherwise   -> loadUndef r
@@ -1361,7 +1363,7 @@ trashStmts = do
 
 trashRegs :: LlvmM [GlobalReg]
 trashRegs = do plat <- getLlvmPlatform
-               return $ filter (callerSaves plat) activeStgRegs
+               return $ filter (callerSaves plat) (activeStgRegs plat)
 
 -- | Get a function pointer to the CLabel specified.
 --
