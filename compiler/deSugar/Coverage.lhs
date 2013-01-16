@@ -925,9 +925,10 @@ data TickTransEnv = TTE { fileName     :: FastString
 
 data TickishType = ProfNotes | HpcTicks | Breakpoints | SourceNotes
 
+
 -- | Tickishs that only make sense when their source code location
--- refers to the current file. This might not apply due LINE pragmas
--- in the code and might confuse at least HPC.
+-- refers to the current file. This might not always be true due to
+-- LINE pragmas in the code - which would confuse at least HPC.
 tickSameFileOnly :: TickishType -> Bool
 tickSameFileOnly HpcTicks = True
 tickSameFileOnly _other   = False
@@ -999,6 +1000,10 @@ getPathEntry = declPath `liftM` getEnv
 
 getFileName :: TM FastString
 getFileName = fileName `liftM` getEnv
+
+isGoodSrcSpan' :: SrcSpan -> Bool
+isGoodSrcSpan' pos@(RealSrcSpan _) = srcSpanStart pos /= srcSpanEnd pos
+isGoodSrcSpan' (UnhelpfulSpan _) = False
 
 isGoodTickSrcSpan :: SrcSpan -> TM Bool
 isGoodTickSrcSpan pos = do
@@ -1097,14 +1102,18 @@ mkTickish boxLabel countEntries topOnly pos fvs decl_path =
 
 allocBinTickBox :: (Bool -> BoxLabel) -> SrcSpan -> TM (HsExpr Id)
                 -> TM (LHsExpr Id)
-allocBinTickBox boxLabel pos m = do {
- ; env <- getEnv
- ; case tickishType env of
-   HpcTicks -> do {
- ; e <- m
- ; if not (isGoodSrcSpan' pos)
-   then return (L pos e)
-   else
+allocBinTickBox boxLabel pos m = do
+  env <- getEnv
+  case tickishType env of
+    HpcTicks -> do e <- liftM (L pos) m
+                   ifGoodTickSrcSpan pos
+                     (mkBinTickBoxHpc boxLabel pos e)
+                     (return e)
+    _other   -> allocTickBox (ExpBox False) False False pos m
+
+mkBinTickBoxHpc :: (Bool -> BoxLabel) -> SrcSpan -> LHsExpr Id
+                -> TM (LHsExpr Id)
+mkBinTickBoxHpc boxLabel pos e =
  TM $ \ env st ->
   let meT = (pos,declPath env, [],boxLabel True)
       meF = (pos,declPath env, [],boxLabel False)
@@ -1112,20 +1121,13 @@ allocBinTickBox boxLabel pos m = do {
       c = tickBoxCount st
       mes = mixEntries st
   in
-             ( L pos $ HsTick (HpcTick (this_mod env) c) $ L pos $ HsBinTick (c+1) (c+2) (L pos e)
+             ( L pos $ HsTick (HpcTick (this_mod env) c) $ L pos $ HsBinTick (c+1) (c+2) e
            -- notice that F and T are reversed,
            -- because we are building the list in
            -- reverse...
              , noFVs
              , st {tickBoxCount=c+3 , mixEntries=meF:meT:meE:mes}
              )
-  }
-   _other -> allocTickBox (ExpBox False) False False pos m
-  }
-
-isGoodSrcSpan' :: SrcSpan -> Bool
-isGoodSrcSpan' pos@(RealSrcSpan _) = srcSpanStart pos /= srcSpanEnd pos
-isGoodSrcSpan' (UnhelpfulSpan _) = False
 
 mkHpcPos :: SrcSpan -> HpcPos
 mkHpcPos pos@(RealSrcSpan s)

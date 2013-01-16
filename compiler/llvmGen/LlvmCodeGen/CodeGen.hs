@@ -132,6 +132,8 @@ getInstrinct2 fname fty@(LMFunction funSig) = do
 
     return (fv, nilOL, tops)
 
+getInstrinct2 _ _ = error "getInstrinct2: Non-function type!"
+
 -- | Declares an instrinct function by return and parameter types
 getInstrinct :: LMString -> LlvmType -> [LlvmType] -> LlvmM ExprData
 getInstrinct fname retTy parTys =
