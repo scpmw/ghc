@@ -90,8 +90,8 @@ addTicksToBinds dflags mod mod_loc exports tyCons binds =
                       , this_mod     = mod
                       , tickishType  = case hscTarget dflags of
                           HscInterpreted          -> Breakpoints
-                          _ | dopt Opt_Hpc dflags -> HpcTicks
-                            | dopt Opt_SccProfilingOn dflags
+                          _ | gopt Opt_Hpc dflags -> HpcTicks
+                            | gopt Opt_SccProfilingOn dflags
                                                   -> ProfNotes
                             | otherwise           -> SourceNotes
                        })
@@ -145,7 +145,7 @@ mkModBreaks dflags count entries = do
 
 writeMixEntries :: DynFlags -> Module -> Int -> [MixEntry_] -> FilePath -> IO Int
 writeMixEntries dflags mod count entries filename
-  | not (dopt Opt_Hpc dflags) = return 0
+  | not (gopt Opt_Hpc dflags) = return 0
   | otherwise   = do
         let
             hpc_dir = hpcDir dflags
@@ -183,7 +183,7 @@ data TickDensity
 
 mkDensity :: DynFlags -> TickDensity
 mkDensity dflags
-  | dopt Opt_Hpc dflags                  = TickForCoverage
+  | gopt Opt_Hpc dflags                  = TickForCoverage
   | HscInterpreted  <- hscTarget dflags  = TickForBreakPoints
   | ProfAutoAll     <- profAuto dflags   = TickAllFunctions
   | ProfAutoTop     <- profAuto dflags   = TickTopFunctions
@@ -271,7 +271,7 @@ addTickLHsBind (L pos (funBind@(FunBind { fun_id = (L _ id)  }))) = do
                  || id `elemVarSet` inline_ids
 
   -- See Note [inline sccs]
-  if inline && dopt Opt_SccProfilingOn dflags then return (L pos funBind) else do
+  if inline && gopt Opt_SccProfilingOn dflags then return (L pos funBind) else do
 
   (fvs, (MatchGroup matches' ty)) <-
         getFreeVars $
@@ -1086,7 +1086,7 @@ mkTickish boxLabel countEntries topOnly pos fvs decl_path =
 
         dflags = tte_dflags env
 
-        count = countEntries && dopt Opt_ProfCountEntries dflags
+        count = countEntries && gopt Opt_ProfCountEntries dflags
 
         tickish = case tickishType env of
           HpcTicks    -> HpcTick (this_mod env) c
@@ -1205,12 +1205,12 @@ hpcInitCode dflags this_mod mod_loc hpc_info
               doubleQuotes mod_loc_str,
               int tickCount, -- really StgWord32
               int hashNo,    -- really StgWord32
-              if dopt Opt_Hpc dflags then tickboxes else int 0
+              if gopt Opt_Hpc dflags then tickboxes else int 0
             ])) <> semi
        ])
     ]
   where
-    do_hpc | not (dopt Opt_Hpc dflags) = False
+    do_hpc | not (gopt Opt_Hpc dflags) = False
            | NoHpcInfo {} <- hpc_info  = False
            | otherwise                 = True
     (tickCount, hashNo)
@@ -1219,7 +1219,7 @@ hpcInitCode dflags this_mod mod_loc hpc_info
 
     tickboxes = ppr (mkHpcTicksLabel $ this_mod)
     tickboxes_decl
-      | dopt Opt_Hpc dflags  = ptext (sLit "extern StgWord64 ") <> tickboxes <> ptext (sLit "[]") <> semi
+      | gopt Opt_Hpc dflags  = ptext (sLit "extern StgWord64 ") <> tickboxes <> ptext (sLit "[]") <> semi
       | otherwise            = empty
 
     module_name  = hcat (map (text.charToC) $

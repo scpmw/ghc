@@ -22,7 +22,7 @@ module GHC (
         needsTemplateHaskell,
 
         -- * Flags and settings
-        DynFlags(..), DynFlag(..), Severity(..), HscTarget(..), dopt,
+        DynFlags(..), GeneralFlag(..), Severity(..), HscTarget(..), gopt,
         GhcMode(..), GhcLink(..), defaultObjectTarget,
         parseDynamicFlags,
         getSessionDynFlags, setSessionDynFlags,
@@ -524,7 +524,7 @@ getInteractiveDynFlags :: GhcMonad m => m DynFlags
 getInteractiveDynFlags = withSession $ \h -> return (ic_dflags (hsc_IC h))
 
 
-parseDynamicFlags :: Monad m =>
+parseDynamicFlags :: MonadIO m =>
                      DynFlags -> [Located String]
                   -> m (DynFlags, [Located String], [Located String])
 parseDynamicFlags = parseDynamicFlagsCmdLine

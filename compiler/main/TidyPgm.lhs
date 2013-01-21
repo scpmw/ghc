@@ -307,8 +307,8 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
                               })
 
   = do  { let { dflags     = hsc_dflags hsc_env
-              ; omit_prags = dopt Opt_OmitInterfacePragmas dflags
-              ; expose_all = dopt Opt_ExposeAllUnfoldings  dflags
+              ; omit_prags = gopt Opt_OmitInterfacePragmas dflags
+              ; expose_all = gopt Opt_ExposeAllUnfoldings  dflags
               ; th         = xopt Opt_TemplateHaskell      dflags
               ; data_kinds = xopt Opt_DataKinds            dflags
               ; no_trim_types = th || data_kinds
@@ -373,14 +373,14 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
 
           -- If the endPass didn't print the rules, but ddump-rules is
           -- on, print now
-        ; unless (dopt Opt_D_dump_simpl dflags) $
+        ; unless (gopt Opt_D_dump_simpl dflags) $
             Err.dumpIfSet_dyn dflags Opt_D_dump_rules
               (showSDoc dflags (ppr CoreTidy <+> ptext (sLit "rules")))
               (pprRulesForUser tidy_rules)
 
           -- Print one-line size info
         ; let cs = coreBindsStats tidy_binds
-        ; when (dopt Opt_D_dump_core_stats dflags)
+        ; when (gopt Opt_D_dump_core_stats dflags)
                (log_action dflags dflags SevDump noSrcSpan defaultDumpStyle
                           (ptext (sLit "Tidy size (terms,types,coercions)")
                            <+> ppr (moduleName mod) <> colon
@@ -1074,14 +1074,14 @@ tidyTopBind dflags this_pkg mkIntegerId unfold_env (occ_env,subst1) (NonRec bndr
   where
     Just (name',show_unfold) = lookupVarEnv unfold_env bndr
     caf_info      = hasCafRefs dflags this_pkg (mkIntegerId, subst1) (idArity bndr) rhs
-    (bndr', rhs') = tidyTopPair show_unfold tidy_env2 caf_info name' (bndr, rhs)
+    (bndr', rhs') = tidyTopPair dflags show_unfold tidy_env2 caf_info name' (bndr, rhs)
     subst2        = extendVarEnv subst1 bndr bndr'
     tidy_env2     = (occ_env, subst2)
 
 tidyTopBind dflags this_pkg mkIntegerId unfold_env (occ_env,subst1) (Rec prs)
   = (tidy_env2, Rec prs')
   where
-    prs' = [ tidyTopPair show_unfold tidy_env2 caf_info name' (id,rhs)
+    prs' = [ tidyTopPair dflags show_unfold tidy_env2 caf_info name' (id,rhs)
            | (id,rhs) <- prs,
              let (name',show_unfold) =
                     expectJust "tidyTopBind" $ lookupVarEnv unfold_env id
@@ -1100,7 +1100,8 @@ tidyTopBind dflags this_pkg mkIntegerId unfold_env (occ_env,subst1) (Rec prs)
         | otherwise                = NoCafRefs
 
 -----------------------------------------------------------
-tidyTopPair :: Bool  -- show unfolding
+tidyTopPair :: DynFlags
+            -> Bool  -- show unfolding
             -> TidyEnv  -- The TidyEnv is used to tidy the IdInfo
                         -- It is knot-tied: don't look at it!
             -> CafInfo
@@ -1113,14 +1114,14 @@ tidyTopPair :: Bool  -- show unfolding
         -- group, a variable late in the group might be mentioned
         -- in the IdInfo of one early in the group
 
-tidyTopPair show_unfold rhs_tidy_env caf_info name' (bndr, rhs)
+tidyTopPair dflags show_unfold rhs_tidy_env caf_info name' (bndr, rhs)
   = (bndr1, rhs1)
   where
     bndr1    = mkGlobalId details name' ty' idinfo'
     details  = idDetails bndr   -- Preserve the IdDetails
     ty'      = tidyTopType (idType bndr)
     rhs1     = tidyExpr rhs_tidy_env rhs
-    idinfo'  = tidyTopIdInfo rhs_tidy_env name' rhs rhs1 (idInfo bndr)
+    idinfo'  = tidyTopIdInfo dflags rhs_tidy_env name' rhs rhs1 (idInfo bndr)
                              show_unfold caf_info
 
 -- tidyTopIdInfo creates the final IdInfo for top-level
@@ -1135,9 +1136,9 @@ tidyTopPair show_unfold rhs_tidy_env caf_info name' (bndr, rhs)
 --      occurrences of the binders in RHSs, and hence to occurrences in
 --      unfoldings, which are inside Ids imported by GHCi. Ditto RULES.
 --      CoreToStg makes use of this when constructing SRTs.
-tidyTopIdInfo :: TidyEnv -> Name -> CoreExpr -> CoreExpr
+tidyTopIdInfo :: DynFlags -> TidyEnv -> Name -> CoreExpr -> CoreExpr
               -> IdInfo -> Bool -> CafInfo -> IdInfo
-tidyTopIdInfo rhs_tidy_env name orig_rhs tidy_rhs idinfo show_unfold caf_info
+tidyTopIdInfo dflags rhs_tidy_env name orig_rhs tidy_rhs idinfo show_unfold caf_info
   | not is_external     -- For internal Ids (not externally visible)
   = vanillaIdInfo       -- we only need enough info for code generation
                         -- Arity and strictness info are enough;
@@ -1182,7 +1183,7 @@ tidyTopIdInfo rhs_tidy_env name orig_rhs tidy_rhs idinfo show_unfold caf_info
     unf_info = unfoldingInfo idinfo
     unfold_info | show_unfold = tidyUnfolding rhs_tidy_env unf_info unf_from_rhs
                 | otherwise   = noUnfolding
-    unf_from_rhs = mkTopUnfolding is_bot tidy_rhs
+    unf_from_rhs = mkTopUnfolding dflags is_bot tidy_rhs
     is_bot = case final_sig of
                 Just sig -> isBottomingSig sig
                 Nothing  -> False

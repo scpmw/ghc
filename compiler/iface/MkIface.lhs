@@ -1131,7 +1131,7 @@ check_old_iface hsc_env mod_summary src_modified maybe_iface
                      return $ Just iface
 
         src_changed
-            | dopt Opt_ForceRecomp (hsc_dflags hsc_env) = True
+            | gopt Opt_ForceRecomp (hsc_dflags hsc_env) = True
             | SourceModified <- src_modified = True
             | otherwise = False
     in do
@@ -1481,7 +1481,7 @@ tyConToIfaceDecl env tycon
 
   | otherwise = pprPanic "toIfaceDecl" (ppr tycon)
   where
-    (env1, tyvars) = tidyTyVarBndrs env (tyConTyVars tycon)
+    (env1, tyvars) = tidyTyClTyVarBndrs env (tyConTyVars tycon)
 
     to_ifsyn_rhs (SynFamilyTyCon a b) = SynFamilyTyCon a b
     to_ifsyn_rhs (SynonymTyCon ty)    = SynonymTyCon (tidyToIfaceType env1 ty)

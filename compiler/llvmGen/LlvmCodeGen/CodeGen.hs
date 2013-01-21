@@ -1331,7 +1331,7 @@ funEpilogue :: Maybe [GlobalReg] -> LlvmM ([LlvmVar], LlvmStatements)
 funEpilogue live = do
 
     -- Have information and liveness optimisation is enabled?
-    doRegLiveness <- getDynFlag (dopt Opt_RegLiveness)
+    doRegLiveness <- getDynFlag (gopt Opt_RegLiveness)
     let liveRegs = if doRegLiveness then fmap (alwaysLive ++) live else Nothing
 
     -- Set to value or "undef" depending on whether the register is

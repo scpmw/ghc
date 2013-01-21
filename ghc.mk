@@ -474,6 +474,8 @@ utils/haddock/dist/package-data.mk: compiler/stage2/package-data.mk
 utils/ghc-pwd/dist-install/package-data.mk: compiler/stage2/package-data.mk
 utils/ghc-cabal/dist-install/package-data.mk: compiler/stage2/package-data.mk
 
+utils/ghctags/dist-install/package-data.mk: compiler/stage2/package-data.mk
+utils/hpc/dist-install/package-data.mk: compiler/stage2/package-data.mk
 utils/ghc-pkg/dist-install/package-data.mk: compiler/stage2/package-data.mk
 utils/hsc2hs/dist-install/package-data.mk: compiler/stage2/package-data.mk
 utils/compare_sizes/dist-install/package-data.mk: compiler/stage2/package-data.mk
@@ -516,10 +518,10 @@ define libraries/ghc-prim_PACKAGE_MAGIC
 libraries/ghc-prim_dist-install_MODULES := $$(filter-out GHC.Prim,$$(libraries/ghc-prim_dist-install_MODULES))
 endef
 
-PRIMOPS_TXT = $(GHC_COMPILER_DIR)/prelude/primops.txt
+PRIMOPS_TXT_STAGE1 = compiler/stage1/build/primops.txt
 
-libraries/ghc-prim/dist-install/build/GHC/PrimopWrappers.hs : $(GENPRIMOP_INPLACE) $(PRIMOPS_TXT) | $$(dir $$@)/.
-	"$(GENPRIMOP_INPLACE)" --make-haskell-wrappers <$(PRIMOPS_TXT) >$@
+libraries/ghc-prim/dist-install/build/GHC/PrimopWrappers.hs : $(GENPRIMOP_INPLACE) $(PRIMOPS_TXT_STAGE1) | $$(dir $$@)/.
+	"$(GENPRIMOP_INPLACE)" --make-haskell-wrappers < $(PRIMOPS_TXT_STAGE1) >$@
 
 # Required so that Haddock documents the primops.
 libraries/ghc-prim_dist-install_EXTRA_HADDOCK_SRCS = libraries/ghc-prim/dist-install/build/autogen/GHC/Prim.hs
@@ -675,6 +677,9 @@ endif
 # BUILD_DIRS_EXTRA needs to come after BUILD_DIRS, because stuff in
 # libraries/dph/ghc.mk refers to stuff defined earlier, in particular
 # things like $(libraries/dph/dph-base_dist-install_GHCI_LIB)
+ifeq "$(GhcProfiled)" "YES"
+BUILD_DIRS_EXTRA := $(filter-out libraries/dph,$(BUILD_DIRS_EXTRA))
+endif
 include $(patsubst %, %/ghc.mk, $(BUILD_DIRS) $(BUILD_DIRS_EXTRA))
 
 # A useful pseudo-target (must be after the include above, because it needs
@@ -788,7 +793,7 @@ $(ghc-prim-$(libraries/ghc-prim_dist-install_VERSION)_HADDOCK_FILE): \
 endif # BINDIST
 
 libraries/ghc-prim/dist-install/build/autogen/GHC/Prim.hs: \
-                            $(PRIMOPS_TXT) $(GENPRIMOP_INPLACE) \
+                            $(PRIMOPS_TXT_STAGE1) $(GENPRIMOP_INPLACE) \
                           | $$(dir $$@)/.
 	"$(GENPRIMOP_INPLACE)" --make-haskell-source < $< > $@
 

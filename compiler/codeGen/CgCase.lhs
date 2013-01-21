@@ -44,7 +44,7 @@ import TyCon
 import Util
 import Outputable
 import FastString
-import DynFlags      ( dopt, DynFlag(Opt_SccProfilingOn) )
+import DynFlags      ( gopt, GeneralFlag(Opt_SccProfilingOn) )
 
 import Control.Monad (when)
 \end{code}
@@ -656,7 +656,7 @@ saveCurrentCostCentre ::
 
 saveCurrentCostCentre
   = do dflags <- getDynFlags
-       if not (dopt Opt_SccProfilingOn dflags)
+       if not (gopt Opt_SccProfilingOn dflags)
            then returnFC (Nothing, noStmts)
            else do slot <- allocPrimStack PtrArg
                    sp_rel <- getSpRelOffset slot
