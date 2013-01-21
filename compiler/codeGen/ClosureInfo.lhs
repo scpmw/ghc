@@ -343,14 +343,14 @@ separateByPtrFollowness things
 
 \begin{code}
 cgRepSizeB :: DynFlags -> CgRep -> ByteOff
-cgRepSizeB _      DoubleArg = dOUBLE_SIZE
+cgRepSizeB dflags DoubleArg = dOUBLE_SIZE dflags
 cgRepSizeB _      LongArg   = wORD64_SIZE
 cgRepSizeB _      VoidArg   = 0
 cgRepSizeB dflags _         = wORD_SIZE dflags
 
 cgRepSizeW :: DynFlags -> CgRep -> ByteOff
-cgRepSizeW dflags DoubleArg = dOUBLE_SIZE `quot` wORD_SIZE dflags
-cgRepSizeW dflags LongArg   = wORD64_SIZE `quot` wORD_SIZE dflags
+cgRepSizeW dflags DoubleArg = dOUBLE_SIZE dflags `quot` wORD_SIZE dflags
+cgRepSizeW dflags LongArg   = wORD64_SIZE        `quot` wORD_SIZE dflags
 cgRepSizeW _      VoidArg   = 0
 cgRepSizeW _      _         = 1
 
@@ -480,7 +480,7 @@ mkClosureInfo dflags is_static id lf_info tot_wds ptr_wds srt_info descr
 		    -- anything else gets eta expanded.
   where
     name   = idName id
-    sm_rep = mkHeapRep dflags is_static ptr_wds nonptr_wds (lfClosureType lf_info)
+    sm_rep = mkHeapRep dflags is_static ptr_wds nonptr_wds (lfClosureType dflags lf_info)
     nonptr_wds = tot_wds - ptr_wds
 
 mkConInfo :: DynFlags
@@ -492,7 +492,7 @@ mkConInfo dflags is_static data_con tot_wds ptr_wds
    = ConInfo {	closureSMRep = sm_rep,
 		closureCon = data_con }
   where
-    sm_rep  = mkHeapRep dflags is_static ptr_wds nonptr_wds (lfClosureType lf_info)
+    sm_rep  = mkHeapRep dflags is_static ptr_wds nonptr_wds (lfClosureType dflags lf_info)
     lf_info = mkConLFInfo data_con
     nonptr_wds = tot_wds - ptr_wds
 \end{code}
@@ -526,16 +526,16 @@ closureNeedsUpdSpace cl_info = closureUpdReqd cl_info
 %************************************************************************
 
 \begin{code}
-lfClosureType :: LambdaFormInfo -> ClosureTypeInfo
-lfClosureType (LFReEntrant _ arity _ argd) = Fun (fromIntegral arity) argd
-lfClosureType (LFCon con)                  = Constr (fromIntegral (dataConTagZ con))
-                                                    (dataConIdentity con)
-lfClosureType (LFThunk _ _ _ is_sel _) 	   = thunkClosureType is_sel
-lfClosureType _                 	   = panic "lfClosureType"
+lfClosureType :: DynFlags -> LambdaFormInfo -> ClosureTypeInfo
+lfClosureType dflags (LFReEntrant _ arity _ argd) = Fun (toStgHalfWord dflags (toInteger arity)) argd
+lfClosureType dflags (LFCon con)                  = Constr (toStgHalfWord dflags (toInteger (dataConTagZ con)))
+                                                           (dataConIdentity con)
+lfClosureType dflags (LFThunk _ _ _ is_sel _)     = thunkClosureType dflags is_sel
+lfClosureType _      _                            = panic "lfClosureType"
 
-thunkClosureType :: StandardFormInfo -> ClosureTypeInfo
-thunkClosureType (SelectorThunk off) = ThunkSelector (fromIntegral off)
-thunkClosureType _                   = Thunk
+thunkClosureType :: DynFlags -> StandardFormInfo -> ClosureTypeInfo
+thunkClosureType dflags (SelectorThunk off) = ThunkSelector (toStgWord dflags (toInteger off))
+thunkClosureType _      _                   = Thunk
 
 -- We *do* get non-updatable top-level thunks sometimes.  eg. f = g
 -- gets compiled to a jump to g (if g has non-zero arity), instead of
@@ -927,25 +927,27 @@ lfFunInfo :: LambdaFormInfo ->  Maybe (RepArity, ArgDescr)
 lfFunInfo (LFReEntrant _ arity _ arg_desc)  = Just (arity, arg_desc)
 lfFunInfo _                                 = Nothing
 
-funTag :: ClosureInfo -> Int
-funTag (ClosureInfo { closureLFInfo = lf_info }) = funTagLFInfo lf_info
-funTag _ = 0
+funTag :: DynFlags -> ClosureInfo -> Int
+funTag dflags (ClosureInfo { closureLFInfo = lf_info })
+    = funTagLFInfo dflags lf_info
+funTag _ _ = 0
 
 -- maybe this should do constructor tags too?
-funTagLFInfo :: LambdaFormInfo -> Int
-funTagLFInfo lf
+funTagLFInfo :: DynFlags -> LambdaFormInfo -> Int
+funTagLFInfo dflags lf
     -- A function is tagged with its arity
   | Just (arity,_) <- lfFunInfo lf,
-    Just tag <- tagForArity arity
+    Just tag <- tagForArity dflags arity
   = tag
 
     -- other closures (and unknown ones) are not tagged
   | otherwise
   = 0
 
-tagForArity :: RepArity -> Maybe Int
-tagForArity i | i <= mAX_PTR_TAG = Just i
-              | otherwise        = Nothing
+tagForArity :: DynFlags -> RepArity -> Maybe Int
+tagForArity dflags i
+ | i <= mAX_PTR_TAG dflags = Just i
+ | otherwise               = Nothing
 
 clHasCafRefs :: ClosureInfo -> CafInfo
 clHasCafRefs (ClosureInfo {closureSRT = srt}) = 

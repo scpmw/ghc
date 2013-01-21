@@ -28,7 +28,6 @@ module TcTyClsDecls (
 import HsSyn
 import HscTypes
 import BuildTyCl
-import TcUnify
 import TcRnMonad
 import TcEnv
 import TcHsSyn
@@ -533,7 +532,8 @@ tcTyClDecl1 parent _calc_isrec
   = tcTyClTyVars tc_name tvs $ \ tvs' kind -> do
   { traceTc "type family:" (ppr tc_name)
   ; checkFamFlag tc_name
-  ; tycon <- buildSynTyCon tc_name tvs' SynFamilyTyCon kind parent
+  ; let syn_rhs = SynFamilyTyCon { synf_open = True, synf_injective = False }
+  ; tycon <- buildSynTyCon tc_name tvs' syn_rhs kind parent
   ; return [ATyCon tycon] }
 
   -- "data family" declaration
@@ -658,7 +658,7 @@ tcTyDefn calc_isrec tc_name tvs kind
            Nothing   -> return ()
            Just hs_k -> do { checkTc (kind_signatures) (badSigTyDecl tc_name)
                            ; tc_kind <- tcLHsKind hs_k
-                           ; _ <- unifyKind kind tc_kind
+                           ; checkKind kind tc_kind
                            ; return () }
 
        ; dataDeclChecks tc_name new_or_data stupid_theta cons
@@ -770,12 +770,12 @@ kcTyDefn (TySynonym { td_synRhs = rhs_ty }) res_k
 ------------------
 kcResultKind :: Maybe (LHsKind Name) -> Kind -> TcM ()
 kcResultKind Nothing res_k
-  = discardResult (unifyKind res_k liftedTypeKind)
+  = checkKind res_k liftedTypeKind
       --             type family F a 
       -- defaults to type family F a :: *
-kcResultKind (Just k ) res_k
+kcResultKind (Just k) res_k
   = do { k' <- tcLHsKind k
-       ; discardResult (unifyKind k' res_k) }
+       ; checkKind  k' res_k }
 
 -------------------------
 -- Kind check type patterns and kind annotate the embedded type variables.
@@ -1042,7 +1042,9 @@ tcConArg new_or_data bty
   = do  { traceTc "tcConArg 1" (ppr bty)
         ; arg_ty <- tcHsConArgType new_or_data bty
         ; traceTc "tcConArg 2" (ppr bty)
-        ; strict_mark <- chooseBoxingStrategy arg_ty (getBangStrictness bty)
+        ; dflags <- getDynFlags
+        ; let strict_mark = chooseBoxingStrategy dflags arg_ty (getBangStrictness bty)
+                            -- Must be computed lazily
 	; return (arg_ty, strict_mark) }
 
 tcConRes :: ResType (LHsType Name) -> TcM (ResType Type)
@@ -1178,28 +1180,29 @@ conRepresentibleWithH98Syntax
 --
 -- We have turned off unboxing of newtypes because coercions make unboxing 
 -- and reboxing more complicated
-chooseBoxingStrategy :: TcType -> HsBang -> TcM HsBang
-chooseBoxingStrategy arg_ty bang
-  = case bang of
-	HsNoBang -> return HsNoBang
-	HsStrict -> do { unbox_strict <- doptM Opt_UnboxStrictFields
-                       ; if unbox_strict then return (can_unbox HsStrict arg_ty)
-                                         else return HsStrict }
-	HsNoUnpack -> return HsStrict
-	HsUnpack -> do { omit_prags <- doptM Opt_OmitInterfacePragmas
-                       ; let bang = can_unbox HsUnpackFailed arg_ty
-                       ; if omit_prags && bang == HsUnpack
-                            then return HsStrict
-                            else return bang }
-            -- Do not respect UNPACK pragmas if OmitInterfacePragmas is on
-	    -- See Trac #5252: unpacking means we must not conceal the
-	    --                 representation of the argument type
-            -- However: even when OmitInterfacePragmas is on, we still want
-            -- to know if we have HsUnpackFailed, because we omit a
-            -- warning in that case (#3966)
-        HsUnpackFailed -> pprPanic "chooseBoxingStrategy" (ppr arg_ty)
-		       	  -- Source code never has shtes
+chooseBoxingStrategy :: DynFlags -> TcType -> HsBang -> HsBang
+chooseBoxingStrategy dflags arg_ty bang
+  = case initial_choice of
+      HsUnpack | dopt Opt_OmitInterfacePragmas dflags
+               -> HsStrict
+      _other   -> initial_choice
+       -- Do not respect UNPACK pragmas if OmitInterfacePragmas is on
+       -- See Trac #5252: unpacking means we must not conceal the
+       --                 representation of the argument type
+       -- However: even when OmitInterfacePragmas is on, we still want
+       -- to know if we have HsUnpackFailed, because we omit a
+       -- warning in that case (#3966)
   where
+    initial_choice = case bang of
+	               HsNoBang -> HsNoBang
+	               HsStrict | dopt Opt_UnboxStrictFields dflags
+                                -> can_unbox HsStrict arg_ty
+                                | otherwise -> HsStrict
+                       HsNoUnpack -> HsStrict
+	               HsUnpack   -> can_unbox HsUnpackFailed arg_ty
+                       HsUnpackFailed -> pprPanic "chooseBoxingStrategy" (ppr arg_ty)
+		                    	  -- Source code never has HsUnpackFailed
+
     can_unbox :: HsBang -> TcType -> HsBang
     -- Returns   HsUnpack  if we can unpack arg_ty
     -- 		 fail_bang if we know what arg_ty is but we can't unpack it
@@ -1303,8 +1306,8 @@ checkValidTyCon tc
   | Just cl <- tyConClass_maybe tc
   = checkValidClass cl
 
-  | isSynTyCon tc 
-  = case synTyConRhs tc of
+  | Just syn_rhs <- synTyConRhs_maybe tc 
+  = case syn_rhs of
       SynFamilyTyCon {} -> return ()
       SynonymTyCon ty   -> checkValidType syn_ctxt ty
 

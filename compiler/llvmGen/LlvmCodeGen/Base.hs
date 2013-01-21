@@ -41,7 +41,6 @@ import LlvmCodeGen.Regs
 
 import CLabel
 import CgUtils ( activeStgRegs )
-import Constants
 import DynFlags
 import FastString
 import OldCmm

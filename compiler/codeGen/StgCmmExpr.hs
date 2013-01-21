@@ -166,9 +166,7 @@ cgLetNoEscapeClosure bndr cc_slot _unused_cc args body
    code = forkProc $ do
                   { restoreCurrentCostCentre cc_slot
                   ; arg_regs <- bindArgsToRegs args
-                  ; void $ altHeapCheck arg_regs (cgExpr body) }
-                        -- Using altHeapCheck just reduces
-                        -- instructions to save on stack
+                  ; void $ noEscapeHeapCheck arg_regs (cgExpr body) }
 
 
 ------------------------------------------------------------------------
@@ -515,7 +513,7 @@ cgAlts gc_plan bndr (AlgAlt tycon) alts
               bndr_reg = CmmLocal (idToReg dflags bndr)
 
                     -- Is the constructor tag in the node reg?
-        ; if isSmallFamily fam_sz
+        ; if isSmallFamily dflags fam_sz
           then do
                 let   -- Yes, bndr_reg has constr. tag in ls bits
                    tag_expr = cmmConstrTag1 dflags (CmmReg bndr_reg)

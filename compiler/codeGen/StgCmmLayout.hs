@@ -61,6 +61,7 @@ import Util
 import Data.List
 import Outputable
 import FastString
+import Control.Monad
 
 ------------------------------------------------------------------------
 --		Call and return sequences
@@ -84,9 +85,11 @@ emitReturn results
        ; case sequel of
            Return _ ->
              do { adjustHpBackwards
-                ; emit (mkReturnSimple dflags results updfr_off) }
+                ; let e = CmmLoad (CmmStackSlot Old updfr_off) (gcWord dflags)
+                ; emit (mkReturn dflags (entryCode dflags e) results updfr_off)
+                }
            AssignTo regs adjust ->
-             do { if adjust then adjustHpBackwards else return ()
+             do { when adjust adjustHpBackwards
                 ; emitMultiAssign  regs results }
        ; return AssignedDirectly
        }
@@ -387,8 +390,8 @@ argRepSizeW :: DynFlags -> ArgRep -> WordOff                -- Size in words
 argRepSizeW _      N = 1
 argRepSizeW _      P = 1
 argRepSizeW _      F = 1
-argRepSizeW dflags L = wORD64_SIZE `quot` wORD_SIZE dflags
-argRepSizeW dflags D = dOUBLE_SIZE `quot` wORD_SIZE dflags
+argRepSizeW dflags L = wORD64_SIZE        `quot` wORD_SIZE dflags
+argRepSizeW dflags D = dOUBLE_SIZE dflags `quot` wORD_SIZE dflags
 argRepSizeW _      V = 0
 
 idArgRep :: Id -> ArgRep
@@ -469,7 +472,7 @@ mkArgDescr _nm args
        let arg_bits = argBits dflags arg_reps
            arg_reps = filter isNonV (map idArgRep args)
            -- Getting rid of voids eases matching of standard patterns
-       case stdPattern arg_reps of
+       case stdPattern dflags arg_reps of
            Just spec_id -> return (ArgSpec spec_id)
            Nothing      -> return (ArgGen arg_bits)
 
@@ -480,9 +483,10 @@ argBits dflags (arg : args) = take (argRepSizeW dflags arg) (repeat True)
                     ++ argBits dflags args
 
 ----------------------
-stdPattern :: [ArgRep] -> Maybe StgHalfWord
-stdPattern reps 
-  = case reps of
+stdPattern :: DynFlags -> [ArgRep] -> Maybe StgHalfWord
+stdPattern dflags reps
+  = fmap (toStgHalfWord dflags)
+  $ case reps of
 	[]  -> Just ARG_NONE	-- just void args, probably
 	[N] -> Just ARG_N
 	[P] -> Just ARG_P
@@ -578,7 +582,7 @@ stdInfoTableSizeB dflags = stdInfoTableSizeW dflags * wORD_SIZE dflags
 stdSrtBitmapOffset :: DynFlags -> ByteOff
 -- Byte offset of the SRT bitmap half-word which is 
 -- in the *higher-addressed* part of the type_lit
-stdSrtBitmapOffset dflags = stdInfoTableSizeB dflags - hALF_WORD_SIZE
+stdSrtBitmapOffset dflags = stdInfoTableSizeB dflags - hALF_WORD_SIZE dflags
 
 stdClosureTypeOffset :: DynFlags -> ByteOff
 -- Byte offset of the closure type half-word 
@@ -586,7 +590,7 @@ stdClosureTypeOffset dflags = stdInfoTableSizeB dflags - wORD_SIZE dflags
 
 stdPtrsOffset, stdNonPtrsOffset :: DynFlags -> ByteOff
 stdPtrsOffset    dflags = stdInfoTableSizeB dflags - 2 * wORD_SIZE dflags
-stdNonPtrsOffset dflags = stdInfoTableSizeB dflags - 2 * wORD_SIZE dflags + hALF_WORD_SIZE
+stdNonPtrsOffset dflags = stdInfoTableSizeB dflags - 2 * wORD_SIZE dflags + hALF_WORD_SIZE dflags
 
 -------------------------------------------------------------------------
 --

@@ -459,7 +459,7 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
                 ; enterCostCentreFun cc
                     (CmmMachOp (mo_wordSub dflags)
                          [ CmmReg nodeReg
-                         , mkIntExpr dflags (funTag cl_info) ])
+                         , mkIntExpr dflags (funTag dflags cl_info) ])
                 ; whenC node_points (ldvEnterClosure cl_info)
                 ; granYield arg_regs node_points
 
@@ -468,8 +468,7 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
                 { fv_bindings <- mapM bind_fv fv_details
                 -- Load free vars out of closure *after*
                 -- heap check, to reduce live vars over check
-                ; if node_points then load_fvs node lf_info fv_bindings
-                                 else return ()
+                ; when node_points $ load_fvs node lf_info fv_bindings
                 ; void $ cgExpr body
                 }}
   }
@@ -482,8 +481,8 @@ bind_fv (id, off) = do { reg <- rebindToReg id; return (reg, off) }
 load_fvs :: LocalReg -> LambdaFormInfo -> [(LocalReg, WordOff)] -> FCode ()
 load_fvs node lf_info = mapM_ (\ (reg, off) ->
    do dflags <- getDynFlags
+      let tag = lfDynTag dflags lf_info
       emit $ mkTaggedObjectLoad dflags reg node off tag)
-  where tag = lfDynTag lf_info
 
 -----------------------------------------
 -- The "slow entry" code for a function.  This entry point takes its
