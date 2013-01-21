@@ -122,9 +122,8 @@ llvmFunSig' lbl link
   = do let toParams x | isPointer x = (x, [NoAlias, NoCapture])
                       | otherwise   = (x, [])
        dflags <- getDynFlags
-       let platform = targetPlatform dflags
        return $ LlvmFunctionDecl lbl link (llvmGhcCC dflags) LMVoid FixedArgs
-                                 (map (toParams . getVarType) (llvmFunArgs platform))
+                                 (map (toParams . getVarType) (llvmFunArgs dflags))
                                  llvmFunAlign
 
 -- | Create a Haskell function in LLVM.
@@ -133,8 +132,7 @@ mkLlvmFunc :: CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
 mkLlvmFunc lbl link sec blks
   = do funDec <- llvmFunSig lbl link
        dflags <- getDynFlags
-       let platform = targetPlatform dflags
-           funArgs = map (fsLit . Outp.showSDoc dflags . ppPlainName) (llvmFunArgs platform)
+       let funArgs = map (fsLit . Outp.showSDoc dflags . ppPlainName) (llvmFunArgs dflags)
        return $ LlvmFunction funDec funArgs llvmStdFunAttrs sec blks
 
 -- | Alignment to use for functions
@@ -146,8 +144,9 @@ llvmInfAlign :: LMAlign
 llvmInfAlign = Just wORD_SIZE
 
 -- | A Function's arguments
-llvmFunArgs :: Platform -> [LlvmVar]
-llvmFunArgs platform = map lmGlobalRegArg (activeStgRegs platform)
+llvmFunArgs :: DynFlags -> [LlvmVar]
+llvmFunArgs dflags = map (lmGlobalRegArg dflags) (activeStgRegs platform)
+    where platform = targetPlatform dflags
 
 -- | Position of a register in function arguments
 llvmRegArgPos :: DynFlags -> GlobalReg -> Maybe Int
@@ -303,12 +302,12 @@ getMetaUniqueId = LlvmM $ \env -> return (envFreshMeta env, env { envFreshMeta =
 -- internally. (Main offender is treating return type as 'void' instead of
 -- 'void *'). Fixes trac #5486.
 ghcInternalFunctions :: LlvmM ()
-ghcInternalFunctions = sequence_
-    [ mk "memcpy" i8Ptr [i8Ptr, i8Ptr, llvmWord]
-    , mk "memmove" i8Ptr [i8Ptr, i8Ptr, llvmWord]
-    , mk "memset" i8Ptr [i8Ptr, llvmWord, llvmWord]
-    , mk "newSpark" llvmWord [i8Ptr, i8Ptr]
-    ]
+ghcInternalFunctions = do
+    dflags <- getDynFlags
+    mk "memcpy" i8Ptr [i8Ptr, i8Ptr, llvmWord dflags]
+    mk "memmove" i8Ptr [i8Ptr, i8Ptr, llvmWord dflags]
+    mk "memset" i8Ptr [i8Ptr, llvmWord dflags, llvmWord dflags]
+    mk "newSpark" (llvmWord dflags) [i8Ptr, i8Ptr]
   where
     mk n ret args = do
       let n' = fsLit n
@@ -452,13 +451,14 @@ getGlobalPtr llvmLbl = do
 generateAliases :: LlvmM ([LMGlobal], [LlvmType])
 generateAliases = do
   delayed <- fmap (uniqSetToList . envDelayedTypes) getEnv
+  dflags <- getDynFlags
   defss <- flip mapM delayed $ \lbl -> do
     -- Defined by now?
     m_ty <- funLookup lbl
     let mkVar ty link = LMGlobalVar lbl (LMPointer ty) link Nothing Nothing Global
         (defs, ty, var) = case m_ty of
           Just ty -> ([], ty, mkVar ty ExternallyVisible)
-          Nothing -> let ty = LMArray 0 llvmWord
+          Nothing -> let ty = LMArray 0 (llvmWord dflags)
                          var = mkVar ty External
                      in ([LMGlobal var Nothing], ty, var)
         aliasLbl = lbl `appendFS` fsLit "_alias"

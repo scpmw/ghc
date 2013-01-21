@@ -429,8 +429,8 @@ typeToMeta' ty = case ty of
     , LMMetaString $ mkFastString $ showSDoc df $ ppr ty -- Name
     , nullLit                                         -- File reference
     , mkI32 0                                         -- Line number
-    , mkI64 $ fromIntegral $ llvmWidthInBits ty       -- Width in bits
-    , mkI64 $ fromIntegral $ llvmWidthInBits llvmWord -- Alignment in bits
+    , mkI64 $ fromIntegral $ llvmWidthInBits df ty    -- Width in bits
+    , mkI64 $ fromIntegral $ llvmWidthInBits df (llvmWord df) -- Alignment in bits
     , mkI64 0                                         -- Offset in bits
     ] ++ fields
   baseType enc = mkType dW_TAG_base_type

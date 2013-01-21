@@ -97,15 +97,17 @@ genStaticLit cmm@(CmmLabel l) = do
     return $ LMPtoI ptr lmty
 
 genStaticLit (CmmLabelOff label off) = do
+    dflags <- getDynFlags
     var <- genStaticLit (CmmLabel label)
-    let offset = LMStaticLit $ LMIntLit (toInteger off) llvmWord
+    let offset = LMStaticLit $ LMIntLit (toInteger off) (llvmWord dflags)
     return $ LMAdd var offset
 
 genStaticLit (CmmLabelDiffOff l1 l2 off) = do
+    dflags <- getDynFlags
     var1 <- genStaticLit (CmmLabel l1)
     var2 <- genStaticLit (CmmLabel l2)
     let var = LMSub var1 var2
-        offset = LMStaticLit $ LMIntLit (toInteger off) llvmWord
+        offset = LMStaticLit $ LMIntLit (toInteger off) (llvmWord dflags)
     return $ LMAdd var offset
 
 genStaticLit (CmmBlock b) = genStaticLit $ CmmLabel $ infoTblLbl b

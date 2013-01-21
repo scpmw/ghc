@@ -14,6 +14,7 @@ import Numeric
 import Outputable
 
 import Constants
+import DynFlags
 import FastString
 import Unique
 
@@ -335,24 +336,24 @@ isGlobal (LMGlobalVar _ _ _ _ _ _) = True
 isGlobal _                         = False
 
 -- | Width in bits of an 'LlvmType', returns 0 if not applicable
-llvmWidthInBits :: LlvmType -> Int
-llvmWidthInBits (LMInt n)       = n
-llvmWidthInBits (LMFloat)       = 32
-llvmWidthInBits (LMDouble)      = 64
-llvmWidthInBits (LMFloat80)     = 80
-llvmWidthInBits (LMFloat128)    = 128
+llvmWidthInBits :: DynFlags -> LlvmType -> Int
+llvmWidthInBits _      (LMInt n)       = n
+llvmWidthInBits _      (LMFloat)       = 32
+llvmWidthInBits _      (LMDouble)      = 64
+llvmWidthInBits _      (LMFloat80)     = 80
+llvmWidthInBits _      (LMFloat128)    = 128
 -- Could return either a pointer width here or the width of what
 -- it points to. We will go with the former for now.
--- PMW: At least the way LLVM outputs constants, pointers should
---      use the former, but arrays the latter.
-llvmWidthInBits (LMPointer _)   = llvmWidthInBits llvmWord
-llvmWidthInBits (LMArray n t)   = n * llvmWidthInBits t
-llvmWidthInBits LMLabel         = 0
-llvmWidthInBits LMVoid          = 0
-llvmWidthInBits (LMStruct tys)  = sum $ map llvmWidthInBits tys
-llvmWidthInBits (LMFunction  _) = 0
-llvmWidthInBits (LMAlias (_,t)) = llvmWidthInBits t
-llvmWidthInBits (LMMetaType)    = error "llvm metadata has no runtime representation!"
+-- PMW: At least judging by the way LLVM outputs constants, pointers
+--      should use the former, but arrays the latter.
+llvmWidthInBits dflags (LMPointer _)   = llvmWidthInBits dflags (llvmWord dflags)
+llvmWidthInBits dflags (LMArray n t)   = n * llvmWidthInBits dflags t
+llvmWidthInBits _      LMLabel         = 0
+llvmWidthInBits _      LMVoid          = 0
+llvmWidthInBits dflags (LMStruct tys)  = sum $ map (llvmWidthInBits dflags) tys
+llvmWidthInBits _      (LMFunction  _) = 0
+llvmWidthInBits dflags (LMAlias (_,t)) = llvmWidthInBits dflags t
+llvmWidthInBits _      (LMMetaType)    = error "llvm metadata has no runtime representation!"
 
 
 -- -----------------------------------------------------------------------------
@@ -369,9 +370,9 @@ i1    = LMInt   1
 i8Ptr = pLift i8
 
 -- | The target architectures word size
-llvmWord, llvmWordPtr :: LlvmType
-llvmWord    = LMInt (wORD_SIZE * 8)
-llvmWordPtr = pLift llvmWord
+llvmWord, llvmWordPtr :: DynFlags -> LlvmType
+llvmWord    _      = LMInt (wORD_SIZE * 8)
+llvmWordPtr dflags = pLift (llvmWord dflags)
 
 -- -----------------------------------------------------------------------------
 -- * LLVM Function Types

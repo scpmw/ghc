@@ -208,12 +208,13 @@ genCall t@(CmmPrim op _) [] args' CmmMayReturn
    op == MO_Memset ||
    op == MO_Memmove = do
     ver <- getLlvmVer
+    dflags <- getDynFlags
     let (args, alignVal) = splitAlignVal args'
         (isVolTy, isVolVal)
               | ver >= 28       = ([i1], [mkIntLit i1 0]) 
               | otherwise       = ([], [])
-        argTy | op == MO_Memset = [i8Ptr, i8,    llvmWord, i32] ++ isVolTy
-              | otherwise       = [i8Ptr, i8Ptr, llvmWord, i32] ++ isVolTy
+        argTy | op == MO_Memset = [i8Ptr, i8,    llvmWord dflags, i32] ++ isVolTy
+              | otherwise       = [i8Ptr, i8Ptr, llvmWord dflags, i32] ++ isVolTy
         funTy = \name -> LMFunction $ LlvmFunctionDecl name ExternallyVisible
                              CC_Ccc LMVoid FixedArgs (tysToParams argTy) Nothing
 
@@ -414,7 +415,7 @@ castVar v t | getVarType v == t
                       (LMInt n, LMInt m)
                           -> if n < m then LM_Sext else LM_Trunc
                       (vt, _) | isFloat vt && isFloat t
-                          -> if llvmWidthInBits vt < llvmWidthInBits t
+                          -> if llvmWidthInBits dflags vt < llvmWidthInBits dflags t
                                 then LM_Fpext else LM_Fptrunc
                       (vt, _) | isInt vt && isFloat t       -> LM_Sitofp
                       (vt, _) | isFloat vt && isInt t       -> LM_Fptosi
@@ -434,9 +435,9 @@ cmmPrimOpFunctions mop = do
   ver <- getLlvmVer
   dflags <- getDynFlags
   let intrinTy1 = (if ver >= 28
-                       then "p0i8.p0i8." else "") ++ showSDoc dflags (ppr llvmWord)
+                       then "p0i8.p0i8." else "") ++ showSDoc dflags (ppr $ llvmWord dflags)
       intrinTy2 = (if ver >= 28
-                       then "p0i8." else "") ++ showSDoc dflags (ppr llvmWord)
+                       then "p0i8." else "") ++ showSDoc dflags (ppr $ llvmWord dflags)
       unsupported = panic ("cmmPrimOpFunctions: " ++ show mop
                         ++ " not supported here")
 
@@ -535,7 +536,8 @@ genAssign reg val = do
     let stmts = stmts2
 
     let ty = (pLower . getVarType) vreg
-    case isPointer ty && getVarType vval == llvmWord of
+    dflags <- getDynFlags
+    case isPointer ty && getVarType vval == llvmWord dflags of
          -- Some registers are pointer types, so need to cast value to pointer
          True -> do
              (v, s1) <- doExpr ty $ Cast LM_Inttoptr vval ty
@@ -583,9 +585,10 @@ genStore addr val
 genStore_fast :: CmmExpr -> GlobalReg -> Int -> CmmExpr
               -> LlvmM StmtData
 genStore_fast addr r n val
-  = do (gv, grt, s1) <- getCmmRegVal (CmmGlobal r)
+  = do dflags <- getDynFlags
+       (gv, grt, s1) <- getCmmRegVal (CmmGlobal r)
        meta          <- getTBAARegMeta r
-       let (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
+       let (ix,rem) = n `divMod` ((llvmWidthInBits dflags . pLower) grt  `div` 8)
        case isPointer grt && rem == 0 of
             True -> do
                 (vval,  stmts, top) <- exprToVar val
@@ -619,9 +622,10 @@ genStore_slow addr val meta = do
     (vval,  stmts2, top2) <- exprToVar val
 
     let stmts = stmts1 `appOL` stmts2
+    dflags <- getDynFlags
     case getVarType vaddr of
         -- sometimes we need to cast an int to a pointer before storing
-        LMPointer ty@(LMPointer _) | getVarType vval == llvmWord -> do
+        LMPointer ty@(LMPointer _) | getVarType vval == llvmWord dflags -> do
             (v, s1) <- doExpr ty $ Cast LM_Inttoptr vval ty
             let s2 = MetaStmt meta $ Store v vaddr
             return (stmts `snocOL` s1 `snocOL` s2, top1 ++ top2)
@@ -630,18 +634,17 @@ genStore_slow addr val meta = do
             let s1 = MetaStmt meta $ Store vval vaddr
             return (stmts `snocOL` s1, top1 ++ top2)
 
-        i@(LMInt _) | i == llvmWord -> do
+        i@(LMInt _) | i == llvmWord dflags -> do
             let vty = pLift $ getVarType vval
             (vptr, s1) <- doExpr vty $ Cast LM_Inttoptr vaddr vty
             let s2 = MetaStmt meta $ Store vval vptr
             return (stmts `snocOL` s1 `snocOL` s2, top1 ++ top2)
 
-        other -> do
-            dflags <- getDynFlags
+        other ->
             pprPanic "genStore: ptr not right type!"
                     (PprCmm.pprExpr addr <+> text (
                         "Size of Ptr: " ++ show (llvmPtrBits dflags) ++
-                        ", Size of var: " ++ show (llvmWidthInBits other) ++
+                        ", Size of var: " ++ show (llvmWidthInBits dflags other) ++
                         ", Var: " ++ showSDoc dflags (ppr vaddr)))
 
 
@@ -710,14 +713,15 @@ data EOption = EOption {
 i1Option :: EOption
 i1Option = EOption (Just i1)
 
-wordOption :: EOption
-wordOption = EOption (Just llvmWord)
+wordOption :: DynFlags -> EOption
+wordOption dflags = EOption (Just (llvmWord dflags))
 
 
 -- | Convert a CmmExpr to a list of LlvmStatements with the result of the
 -- expression being stored in the returned LlvmVar.
 exprToVar :: CmmExpr -> LlvmM ExprData
-exprToVar = exprToVarOpt wordOption
+exprToVar e = do dflags <- getDynFlags
+                 exprToVarOpt (wordOption dflags) e
 
 exprToVarOpt :: EOption -> CmmExpr -> LlvmM ExprData
 exprToVarOpt opt e = case e of
@@ -735,7 +739,8 @@ exprToVarOpt opt e = case e of
         case isPointer ty of
              True  -> do
                  -- Cmm wants the value, so pointer types must be cast to ints
-                 (v2, s2) <- doExpr llvmWord $ Cast LM_Ptrtoint v1 llvmWord
+                 dflags <- getDynFlags
+                 (v2, s2) <- doExpr (llvmWord dflags) $ Cast LM_Ptrtoint v1 (llvmWord dflags)
                  return (v2, s1 `snocOL` s2, [])
 
              False -> return (v1, s1, [])
@@ -838,7 +843,8 @@ genMachOp _ op [x] = case op of
             let sameConv' op = do
                 (v1, s1) <- doExpr ty $ Cast op vx ty
                 return (v1, stmts `snocOL` s1, top)
-            let toWidth = llvmWidthInBits ty
+            dflags <- getDynFlags
+            let toWidth = llvmWidthInBits dflags ty
             -- LLVM doesn't like trying to convert to same width, so
             -- need to check for that as we do get Cmm code doing it.
             case widthInBits from  of
@@ -867,11 +873,12 @@ genMachOp_fast :: EOption -> MachOp -> GlobalReg -> Int -> [CmmExpr]
                -> LlvmM ExprData
 genMachOp_fast opt op r n e
   = do (gv, grt, s1) <- getCmmRegVal (CmmGlobal r)
-       let (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
+       dflags <- getDynFlags
+       let (ix,rem) = n `divMod` ((llvmWidthInBits dflags . pLower) grt  `div` 8)
        case isPointer grt && rem == 0 of
             True -> do
                 (ptr, s2) <- doExpr grt $ GetElemPtr True gv [toI32 ix]
-                (var, s3) <- doExpr llvmWord $ Cast LM_Ptrtoint ptr llvmWord
+                (var, s3) <- doExpr (llvmWord dflags) $ Cast LM_Ptrtoint ptr (llvmWord dflags)
                 return (var, s1 `snocOL` s2 `snocOL` s3, [])
 
             False -> genMachOp_slow opt op e
@@ -1002,11 +1009,12 @@ genMachOp_slow opt op [x, y] = case op of
             (vx, stmts1, top1) <- exprToVar x
             (vy, stmts2, top2) <- exprToVar y
 
+            dflags <- getDynFlags
             let word  = getVarType vx
-            let word2 = LMInt $ 2 * (llvmWidthInBits $ getVarType vx)
-            let shift = llvmWidthInBits word
-            let shift1 = toIWord (shift - 1)
-            let shift2 = toIWord shift
+            let word2 = LMInt $ 2 * (llvmWidthInBits dflags $ getVarType vx)
+            let shift = llvmWidthInBits dflags word
+            let shift1 = toIWord dflags (shift - 1)
+            let shift2 = toIWord dflags shift
 
             if isInt word
                 then do
@@ -1023,8 +1031,7 @@ genMachOp_slow opt op [x, y] = case op of
                     return (dst, stmts1 `appOL` stmts2 `appOL` stmts,
                         top1 ++ top2)
 
-                else do
-                    dflags <- getDynFlags
+                else
                     panic $ "isSMulOK: Not bit type! (" ++ showSDoc dflags (ppr word) ++ ")"
 
         panicOp = panic $ "LLVM.CodeGen.genMachOp_slow: unary op encourntered"
@@ -1070,10 +1077,11 @@ genLoad e ty
 genLoad_fast :: CmmExpr -> GlobalReg -> Int -> CmmType
                 -> LlvmM ExprData
 genLoad_fast e r n ty = do
+    dflags <- getDynFlags
     (gv, grt, s1) <- getCmmRegVal (CmmGlobal r)
     meta          <- getTBAARegMeta r
     let ty'      = cmmToLlvmType ty
-        (ix,rem) = n `divMod` ((llvmWidthInBits . pLower) grt  `div` 8)
+        (ix,rem) = n `divMod` ((llvmWidthInBits dflags . pLower) grt  `div` 8)
     case isPointer grt && rem == 0 of
             True  -> do
                 (ptr, s2) <- doExpr grt $ GetElemPtr True gv [toI32 ix]
@@ -1103,13 +1111,14 @@ genLoad_fast e r n ty = do
 genLoad_slow :: CmmExpr -> CmmType -> [MetaData] -> LlvmM ExprData
 genLoad_slow e ty meta = do
     (iptr, stmts, tops) <- exprToVar e
+    dflags <- getDynFlags
     case getVarType iptr of
          LMPointer _ -> do
                     (dvar, load) <- doExpr (cmmToLlvmType ty)
                                            (MetaExpr meta $ Load iptr)
                     return (dvar, stmts `snocOL` load, tops)
 
-         i@(LMInt _) | i == llvmWord -> do
+         i@(LMInt _) | i == llvmWord dflags -> do
                     let pty = LMPointer $ cmmToLlvmType ty
                     (ptr, cast)  <- doExpr pty $ Cast LM_Inttoptr iptr pty
                     (dvar, load) <- doExpr (cmmToLlvmType ty)
@@ -1120,7 +1129,7 @@ genLoad_slow e ty meta = do
                      pprPanic "exprToVar: CmmLoad expression is not right type!"
                         (PprCmm.pprExpr e <+> text (
                             "Size of Ptr: " ++ show (llvmPtrBits dflags) ++
-                            ", Size of var: " ++ show (llvmWidthInBits other) ++
+                            ", Size of var: " ++ show (llvmWidthInBits dflags other) ++
                             ", Var: " ++ showSDoc dflags (ppr iptr)))
 
 
@@ -1142,7 +1151,7 @@ getCmmReg (CmmGlobal g)
   = do onStack <- checkStackReg g
        dflags <- getDynFlags
        if onStack
-         then return (lmGlobalRegVar g)
+         then return (lmGlobalRegVar dflags g)
          else fail $ "getCmmReg: Cmm register " ++ showSDoc dflags (ppr g) ++ " not stack-allocated!"
 
 -- | Return the value of a given register, as well as its type. Might
@@ -1152,8 +1161,9 @@ getCmmRegVal reg =
   case reg of
     CmmGlobal g -> do
       onStack <- checkStackReg g
+      dflags <- getDynFlags
       if onStack then loadFromStack else do
-        let r = lmGlobalRegArg g
+        let r = lmGlobalRegArg dflags g
         return (r, getVarType r, nilOL)
     _ -> loadFromStack
  where loadFromStack = do
@@ -1187,23 +1197,25 @@ genLit cmm@(CmmLabel l)
   = do var <- getGlobalPtr =<< strCLabel_llvm l
        dflags <- getDynFlags
        let lmty = cmmToLlvmType $ cmmLitType dflags cmm
-       (v1, s1) <- doExpr lmty $ Cast LM_Ptrtoint var llvmWord
+       (v1, s1) <- doExpr lmty $ Cast LM_Ptrtoint var (llvmWord dflags)
        return (v1, unitOL s1, [])
 
 genLit (CmmLabelOff label off) = do
+    dflags <- getDynFlags
     (vlbl, stmts, stat) <- genLit (CmmLabel label)
-    let voff = toIWord off
+    let voff = toIWord dflags off
     (v1, s1) <- doExpr (getVarType vlbl) $ LlvmOp LM_MO_Add vlbl voff
     return (v1, stmts `snocOL` s1, stat)
 
 genLit (CmmLabelDiffOff l1 l2 off) = do
+    dflags <- getDynFlags
     (vl1, stmts1, stat1) <- genLit (CmmLabel l1)
     (vl2, stmts2, stat2) <- genLit (CmmLabel l2)
-    let voff = toIWord off
+    let voff = toIWord dflags off
     let ty1 = getVarType vl1
     let ty2 = getVarType vl2
     if (isInt ty1) && (isInt ty2)
-       && (llvmWidthInBits ty1 == llvmWidthInBits ty2)
+       && (llvmWidthInBits dflags ty1 == llvmWidthInBits dflags ty2)
 
        then do
             (v1, s1) <- doExpr (getVarType vl1) $ LlvmOp LM_MO_Sub vl1 vl2
@@ -1253,6 +1265,7 @@ funPrologue cmmBlocks scopeId = do
       getRegsBlock (BasicBlock _ xs)     = concatMap getAssignedRegs xs
       assignedRegs = nub $ concatMap getRegsBlock cmmBlocks
 
+  dflags <- getDynFlags
   stmtss <- flip mapM assignedRegs $ \reg ->
     case reg of
       CmmLocal (LocalReg un _) -> do
@@ -1260,8 +1273,8 @@ funPrologue cmmBlocks scopeId = do
         varInsert un (pLower $ getVarType newv)
         return stmts
       CmmGlobal r -> do
-        let reg   = lmGlobalRegVar r
-            arg   = lmGlobalRegArg r
+        let reg   = lmGlobalRegVar dflags r
+            arg   = lmGlobalRegArg dflags r
             alloc = Assignment reg $ Alloca (pLower $ getVarType reg) 1
         markStackReg r
         return $ toOL [alloc, Store arg reg]
@@ -1324,11 +1337,12 @@ funEpilogue live = do
 
     -- Set to value or "undef" depending on whether the register is
     -- actually live
+    dflags <- getDynFlags
     let loadExpr r = do
           (v, _, s) <- getCmmRegVal (CmmGlobal r)
           return (v, s)
         loadUndef r = do
-          let ty = (pLower . getVarType $ lmGlobalRegVar r)
+          let ty = (pLower . getVarType $ lmGlobalRegVar dflags r)
           return (LMLitVar $ LMUndefLit ty, unitOL Nop)
     platform <- getDynFlag targetPlatform
     loads <- flip mapM (activeStgRegs platform) $ \r -> case liveRegs of
@@ -1419,9 +1433,11 @@ mkIntLit :: Integral a => LlvmType -> a -> LlvmVar
 mkIntLit ty i = LMLitVar $ LMIntLit (toInteger i) ty
 
 -- | Convert int type to a LLvmVar of word or i32 size
-toI32, toIWord :: Integral a => a -> LlvmVar
+toI32 :: Integral a => a -> LlvmVar
 toI32 = mkIntLit i32
-toIWord = mkIntLit llvmWord
+
+toIWord :: Integral a => DynFlags -> a -> LlvmVar
+toIWord dflags = mkIntLit (llvmWord dflags)
 
 
 -- | Error functions
