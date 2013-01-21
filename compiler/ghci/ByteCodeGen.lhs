@@ -22,7 +22,10 @@ import ByteCodeAsm
 import ByteCodeLink
 import LibFFI
 
+import Constants
+import DynFlags
 import Outputable
+import Platform
 import Name
 import MkId
 import Id
@@ -40,7 +43,6 @@ import TyCon
 import Util
 import VarSet
 import TysPrim
-import DynFlags
 import ErrUtils
 import Unique
 import FastString
@@ -49,7 +51,6 @@ import SMRep
 import ClosureInfo
 import Bitmap
 import OrdList
-import Constants
 
 import Data.List
 import Foreign
@@ -152,7 +153,8 @@ ppBCEnv p
 -- Create a BCO and do a spot of peephole optimisation on the insns
 -- at the same time.
 mkProtoBCO
-   :: name
+   :: DynFlags
+   -> name
    -> BCInstrList
    -> Either  [AnnAlt Id VarSet] (AnnExpr Id VarSet)
    -> Int
@@ -161,10 +163,10 @@ mkProtoBCO
    -> Bool      -- True <=> is a return point, rather than a function
    -> [BcPtr]
    -> ProtoBCO name
-mkProtoBCO nm instrs_ordlist origin arity bitmap_size bitmap is_ret mallocd_blocks
+mkProtoBCO dflags nm instrs_ordlist origin arity bitmap_size bitmap is_ret mallocd_blocks
    = ProtoBCO {
         protoBCOName = nm,
-        protoBCOInstrs = maybe_with_stack_check,
+        protoBCOInstrs = maybe_with_stack_check dflags,
         protoBCOBitmap = bitmap,
         protoBCOBitmapSize = bitmap_size,
         protoBCOArity = arity,
@@ -179,8 +181,8 @@ mkProtoBCO nm instrs_ordlist origin arity bitmap_size bitmap is_ret mallocd_bloc
         -- BCO anyway, so we only need to add an explicit one in the
         -- (hopefully rare) cases when the (overestimated) stack use
         -- exceeds iNTERP_STACK_CHECK_THRESH.
-        maybe_with_stack_check
-           | is_ret && stack_usage < fromIntegral aP_STACK_SPLIM = peep_d
+        maybe_with_stack_check dflags
+           | is_ret && stack_usage < fromIntegral (aP_STACK_SPLIM dflags) = peep_d
                 -- don't do stack checks at return points,
                 -- everything is aggregated up to the top BCO
                 -- (which must be a function).
@@ -223,6 +225,7 @@ schemeTopBind :: (Id, AnnExpr Id VarSet) -> BcM (ProtoBCO Name)
 schemeTopBind (id, rhs)
   | Just data_con <- isDataConWorkId_maybe id,
     isNullaryRepDataCon data_con = do
+    dflags <- getDynFlags
         -- Special case for the worker of a nullary data con.
         -- It'll look like this:        Nil = /\a -> Nil a
         -- If we feed it into schemeR, we'll get
@@ -231,7 +234,7 @@ schemeTopBind (id, rhs)
         -- by just re-using the single top-level definition.  So
         -- for the worker itself, we must allocate it directly.
     -- ioToBc (putStrLn $ "top level BCO")
-    emitBc (mkProtoBCO (getName id) (toOL [PACK data_con 0, ENTER])
+    emitBc (mkProtoBCO dflags (getName id) (toOL [PACK data_con 0, ENTER])
                        (Right rhs) 0 0 [{-no bitmap-}] False{-not alts-})
 
   | otherwise
@@ -281,7 +284,9 @@ collect (_, e) = go [] e
 
 schemeR_wrk :: [Id] -> Id -> AnnExpr Id VarSet -> ([Var], AnnExpr' Var VarSet) -> BcM (ProtoBCO Name)
 schemeR_wrk fvs nm original_body (args, body)
-   = let
+   = do
+     dflags <- getDynFlags
+     let
          all_args  = reverse args ++ fvs
          arity     = length all_args
          -- all_args are the args in reverse order.  We're compiling a function
@@ -295,11 +300,10 @@ schemeR_wrk fvs nm original_body (args, body)
          -- make the arg bitmap
          bits = argBits (reverse (map idCgRep all_args))
          bitmap_size = genericLength bits
-         bitmap = mkBitmap bits
-     in do
+         bitmap = mkBitmap dflags bits
      body_code <- schemeER_wrk szw_args p_init body
 
-     emitBc (mkProtoBCO (getName nm) body_code (Right original_body)
+     emitBc (mkProtoBCO dflags (getName nm) body_code (Right original_body)
                  arity bitmap_size bitmap False{-not alts-})
 
 -- introduce break instructions for ticked expressions
@@ -772,7 +776,9 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
   | UbxTupleRep _ <- repType (idType bndr)
   = unboxedTupleException
   | otherwise
-  = let
+  = do
+     dflags <- getDynFlags
+     let
         -- Top of stack is the return itbl, as usual.
         -- underneath it is the pointer to the alt_code BCO.
         -- When an alt is entered, it assumes the returned value is
@@ -875,7 +881,7 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
         bitmap_size = trunc16 $ d-s
         bitmap_size' :: Int
         bitmap_size' = fromIntegral bitmap_size
-        bitmap = intsToReverseBitmap bitmap_size'{-size-}
+        bitmap = intsToReverseBitmap dflags bitmap_size'{-size-}
                         (sort (filter (< bitmap_size') rel_slots))
           where
           binds = Map.toList p
@@ -886,13 +892,12 @@ doCase d s p (_,scrut) bndr alts is_unboxed_tuple
                               | otherwise                      = []
                 where rel_offset = trunc16 $ d - fromIntegral offset - 1
 
-     in do
      alt_stuff <- mapM codeAlt alts
      alt_final <- mkMultiBranch maybe_ncons alt_stuff
 
      let
          alt_bco_name = getName bndr
-         alt_bco = mkProtoBCO alt_bco_name alt_final (Left alts)
+         alt_bco = mkProtoBCO dflags alt_bco_name alt_final (Left alts)
                        0{-no arity-} bitmap_size bitmap True{-is alts-}
 --     trace ("case: bndr = " ++ showSDocDebug (ppr bndr) ++ "\ndepth = " ++ show d ++ "\nenv = \n" ++ showSDocDebug (ppBCEnv p) ++
 --            "\n      bitmap = " ++ show bitmap) $ do
@@ -1029,8 +1034,9 @@ generateCCall d0 s p (CCallSpec target cconv safety) fn args_r_to_l
             void marshall_code ( StgWord* ptr_to_top_of_stack )
          -}
          -- resolve static address
-         get_target_info
-            = case target of
+         get_target_info = do
+             dflags <- getDynFlags
+             case target of
                  DynamicTarget
                     -> return (False, panic "ByteCodeGen.generateCCall(dyn)")
 
@@ -1041,11 +1047,10 @@ generateCCall d0 s p (CCallSpec target cconv safety) fn args_r_to_l
                           return (True, res)
                    where
                       stdcall_adj_target
-#ifdef mingw32_TARGET_OS
-                          | StdCallConv <- cconv
+                          | OSMinGW32 <- platformOS (targetPlatform dflags)
+                          , StdCallConv <- cconv
                           = let size = fromIntegral a_reps_sizeW * wORD_SIZE in
                             mkFastString (unpackFS target ++ '@':show size)
-#endif
                           | otherwise
                           = target
 

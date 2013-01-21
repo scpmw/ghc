@@ -93,33 +93,34 @@ addIdReps ids = [(idCgRep id, id) | id <- ids]
 
 cgLit :: Literal -> FCode CmmLit
 cgLit (MachStr s) = newByteStringCLit (bytesFB s)
-cgLit other_lit   = return (mkSimpleLit other_lit)
+cgLit other_lit   = do dflags <- getDynFlags
+                       return (mkSimpleLit dflags other_lit)
 
-mkSimpleLit :: Literal -> CmmLit
-mkSimpleLit (MachChar   c)    = CmmInt (fromIntegral (ord c)) wordWidth
-mkSimpleLit MachNullAddr      = zeroCLit
-mkSimpleLit (MachInt i)       = CmmInt i wordWidth
-mkSimpleLit (MachInt64 i)     = CmmInt i W64
-mkSimpleLit (MachWord i)      = CmmInt i wordWidth
-mkSimpleLit (MachWord64 i)    = CmmInt i W64
-mkSimpleLit (MachFloat r)     = CmmFloat r W32
-mkSimpleLit (MachDouble r)    = CmmFloat r W64
-mkSimpleLit (MachLabel fs ms fod)
+mkSimpleLit :: DynFlags -> Literal -> CmmLit
+mkSimpleLit dflags (MachChar   c)    = CmmInt (fromIntegral (ord c)) (wordWidth dflags)
+mkSimpleLit dflags MachNullAddr      = zeroCLit dflags
+mkSimpleLit dflags (MachInt i)       = CmmInt i (wordWidth dflags)
+mkSimpleLit _      (MachInt64 i)     = CmmInt i W64
+mkSimpleLit dflags (MachWord i)      = CmmInt i (wordWidth dflags)
+mkSimpleLit _      (MachWord64 i)    = CmmInt i W64
+mkSimpleLit _      (MachFloat r)     = CmmFloat r W32
+mkSimpleLit _      (MachDouble r)    = CmmFloat r W64
+mkSimpleLit _      (MachLabel fs ms fod)
         = CmmLabel (mkForeignLabel fs ms labelSrc fod)
         where
                 -- TODO: Literal labels might not actually be in the current package...
                 labelSrc = ForeignLabelInThisPackage
-mkSimpleLit (MachStr _) = panic "mkSimpleLit: MachStr"
+mkSimpleLit _ (MachStr _) = panic "mkSimpleLit: MachStr"
 -- No LitInteger's should be left by the time this is called. CorePrep
 -- should have converted them all to a real core representation.
-mkSimpleLit (LitInteger {}) = panic "mkSimpleLit: LitInteger"
+mkSimpleLit _ (LitInteger {}) = panic "mkSimpleLit: LitInteger"
 
 mkLtOp :: DynFlags -> Literal -> MachOp
 -- On signed literals we must do a signed comparison
-mkLtOp _      (MachInt _)    = MO_S_Lt wordWidth
+mkLtOp dflags (MachInt _)    = MO_S_Lt (wordWidth dflags)
 mkLtOp _      (MachFloat _)  = MO_F_Lt W32
 mkLtOp _      (MachDouble _) = MO_F_Lt W64
-mkLtOp dflags lit            = MO_U_Lt (typeWidth (cmmLitType dflags (mkSimpleLit lit)))
+mkLtOp dflags lit            = MO_U_Lt (typeWidth (cmmLitType dflags (mkSimpleLit dflags lit)))
 
 
 ---------------------------------------------------
@@ -298,11 +299,11 @@ callerSaveVolatileRegs dflags vols = (caller_save, caller_load)
 
     vol_list = case vols of Nothing -> all_of_em; Just regs -> regs
 
-    all_of_em = [ VanillaReg n VNonGcPtr | n <- [0..mAX_Vanilla_REG] ]
+    all_of_em = [ VanillaReg n VNonGcPtr | n <- [0 .. mAX_Vanilla_REG dflags] ]
                         -- The VNonGcPtr is a lie, but I don't think it matters
-             ++ [ FloatReg   n | n <- [0..mAX_Float_REG] ]
-             ++ [ DoubleReg  n | n <- [0..mAX_Double_REG] ]
-             ++ [ LongReg    n | n <- [0..mAX_Long_REG] ]
+             ++ [ FloatReg   n | n <- [0 .. mAX_Float_REG dflags] ]
+             ++ [ DoubleReg  n | n <- [0 .. mAX_Double_REG dflags] ]
+             ++ [ LongReg    n | n <- [0 .. mAX_Long_REG dflags] ]
 
     callerSaveGlobalReg reg next
         | callerSaves platform reg =
@@ -322,42 +323,42 @@ callerSaveVolatileRegs dflags vols = (caller_save, caller_load)
 -- -----------------------------------------------------------------------------
 -- Information about global registers
 
-baseRegOffset :: GlobalReg -> Int
+baseRegOffset :: DynFlags -> GlobalReg -> Int
 
-baseRegOffset (VanillaReg 1 _)    = oFFSET_StgRegTable_rR1
-baseRegOffset (VanillaReg 2 _)    = oFFSET_StgRegTable_rR2
-baseRegOffset (VanillaReg 3 _)    = oFFSET_StgRegTable_rR3
-baseRegOffset (VanillaReg 4 _)    = oFFSET_StgRegTable_rR4
-baseRegOffset (VanillaReg 5 _)    = oFFSET_StgRegTable_rR5
-baseRegOffset (VanillaReg 6 _)    = oFFSET_StgRegTable_rR6
-baseRegOffset (VanillaReg 7 _)    = oFFSET_StgRegTable_rR7
-baseRegOffset (VanillaReg 8 _)    = oFFSET_StgRegTable_rR8
-baseRegOffset (VanillaReg 9 _)    = oFFSET_StgRegTable_rR9
-baseRegOffset (VanillaReg 10 _)   = oFFSET_StgRegTable_rR10
-baseRegOffset (VanillaReg n _)    = panic ("Registers above R10 are not supported (tried to use R" ++ show n ++ ")")
-baseRegOffset (FloatReg  1)       = oFFSET_StgRegTable_rF1
-baseRegOffset (FloatReg  2)       = oFFSET_StgRegTable_rF2
-baseRegOffset (FloatReg  3)       = oFFSET_StgRegTable_rF3
-baseRegOffset (FloatReg  4)       = oFFSET_StgRegTable_rF4
-baseRegOffset (FloatReg  n)       = panic ("Registers above F4 are not supported (tried to use F" ++ show n ++ ")")
-baseRegOffset (DoubleReg 1)       = oFFSET_StgRegTable_rD1
-baseRegOffset (DoubleReg 2)       = oFFSET_StgRegTable_rD2
-baseRegOffset (DoubleReg n)       = panic ("Registers above D2 are not supported (tried to use D" ++ show n ++ ")")
-baseRegOffset Sp                  = oFFSET_StgRegTable_rSp
-baseRegOffset SpLim               = oFFSET_StgRegTable_rSpLim
-baseRegOffset (LongReg 1)         = oFFSET_StgRegTable_rL1
-baseRegOffset (LongReg n)         = panic ("Registers above L1 are not supported (tried to use L" ++ show n ++ ")")
-baseRegOffset Hp                  = oFFSET_StgRegTable_rHp
-baseRegOffset HpLim               = oFFSET_StgRegTable_rHpLim
-baseRegOffset CCCS                = oFFSET_StgRegTable_rCCCS
-baseRegOffset CurrentTSO          = oFFSET_StgRegTable_rCurrentTSO
-baseRegOffset CurrentNursery      = oFFSET_StgRegTable_rCurrentNursery
-baseRegOffset HpAlloc             = oFFSET_StgRegTable_rHpAlloc
-baseRegOffset EagerBlackholeInfo  = oFFSET_stgEagerBlackholeInfo
-baseRegOffset GCEnter1            = oFFSET_stgGCEnter1
-baseRegOffset GCFun               = oFFSET_stgGCFun
-baseRegOffset BaseReg             = panic "baseRegOffset:BaseReg"
-baseRegOffset PicBaseReg          = panic "baseRegOffset:PicBaseReg"
+baseRegOffset dflags (VanillaReg 1 _)    = oFFSET_StgRegTable_rR1 dflags
+baseRegOffset dflags (VanillaReg 2 _)    = oFFSET_StgRegTable_rR2 dflags
+baseRegOffset dflags (VanillaReg 3 _)    = oFFSET_StgRegTable_rR3 dflags
+baseRegOffset dflags (VanillaReg 4 _)    = oFFSET_StgRegTable_rR4 dflags
+baseRegOffset dflags (VanillaReg 5 _)    = oFFSET_StgRegTable_rR5 dflags
+baseRegOffset dflags (VanillaReg 6 _)    = oFFSET_StgRegTable_rR6 dflags
+baseRegOffset dflags (VanillaReg 7 _)    = oFFSET_StgRegTable_rR7 dflags
+baseRegOffset dflags (VanillaReg 8 _)    = oFFSET_StgRegTable_rR8 dflags
+baseRegOffset dflags (VanillaReg 9 _)    = oFFSET_StgRegTable_rR9 dflags
+baseRegOffset dflags (VanillaReg 10 _)   = oFFSET_StgRegTable_rR10 dflags
+baseRegOffset _      (VanillaReg n _)    = panic ("Registers above R10 are not supported (tried to use R" ++ show n ++ ")")
+baseRegOffset dflags (FloatReg  1)       = oFFSET_StgRegTable_rF1 dflags
+baseRegOffset dflags (FloatReg  2)       = oFFSET_StgRegTable_rF2 dflags
+baseRegOffset dflags (FloatReg  3)       = oFFSET_StgRegTable_rF3 dflags
+baseRegOffset dflags (FloatReg  4)       = oFFSET_StgRegTable_rF4 dflags
+baseRegOffset _      (FloatReg  n)       = panic ("Registers above F4 are not supported (tried to use F" ++ show n ++ ")")
+baseRegOffset dflags (DoubleReg 1)       = oFFSET_StgRegTable_rD1 dflags
+baseRegOffset dflags (DoubleReg 2)       = oFFSET_StgRegTable_rD2 dflags
+baseRegOffset _      (DoubleReg n)       = panic ("Registers above D2 are not supported (tried to use D" ++ show n ++ ")")
+baseRegOffset dflags Sp                  = oFFSET_StgRegTable_rSp dflags
+baseRegOffset dflags SpLim               = oFFSET_StgRegTable_rSpLim dflags
+baseRegOffset dflags (LongReg 1)         = oFFSET_StgRegTable_rL1 dflags
+baseRegOffset _      (LongReg n)         = panic ("Registers above L1 are not supported (tried to use L" ++ show n ++ ")")
+baseRegOffset dflags Hp                  = oFFSET_StgRegTable_rHp dflags
+baseRegOffset dflags HpLim               = oFFSET_StgRegTable_rHpLim dflags
+baseRegOffset dflags CCCS                = oFFSET_StgRegTable_rCCCS dflags
+baseRegOffset dflags CurrentTSO          = oFFSET_StgRegTable_rCurrentTSO dflags
+baseRegOffset dflags CurrentNursery      = oFFSET_StgRegTable_rCurrentNursery dflags
+baseRegOffset dflags HpAlloc             = oFFSET_StgRegTable_rHpAlloc dflags
+baseRegOffset dflags EagerBlackholeInfo  = oFFSET_stgEagerBlackholeInfo dflags
+baseRegOffset dflags GCEnter1            = oFFSET_stgGCEnter1 dflags
+baseRegOffset dflags GCFun               = oFFSET_stgGCFun dflags
+baseRegOffset _      BaseReg             = panic "baseRegOffset:BaseReg"
+baseRegOffset _      PicBaseReg          = panic "baseRegOffset:PicBaseReg"
 
 
 -------------------------------------------------------------------------
@@ -478,13 +479,14 @@ mk_switch _tag_expr [(_tag,stmts)] Nothing _lo_tag _hi_tag _via_C
         -- can't happen, so no need to test
 
 -- SINGLETON BRANCH: one equality check to do
-mk_switch tag_expr [(tag,stmts)] (Just deflt) _lo_tag _hi_tag _via_C
-  = do branch <- getBranchInline stmts
-       return (CmmCondBranch cond deflt `consCgStmt` branch)
-  where
-    cond  =  cmmNeWord tag_expr (CmmLit (mkIntCLit tag))
+mk_switch tag_expr [(tag,stmts)] (Just deflt) _lo_tag _hi_tag _via_C = do
+  dflags <- getDynFlags
+  let
+    cond  =  cmmNeWord dflags tag_expr (CmmLit (mkIntCLit dflags tag))
         -- We have lo_tag < hi_tag, but there's only one branch,
         -- so there must be a default
+  branch <- getBranchInline stmts
+  return (CmmCondBranch cond deflt `consCgStmt` branch)
 
 -- ToDo: we might want to check for the two branch case, where one of
 -- the branches is the tag 0, because comparing '== 0' is likely to be
@@ -522,8 +524,9 @@ mk_switch tag_expr branches mb_deflt lo_tag hi_tag via_C
 
   -- if we can knock off a bunch of default cases with one if, then do so
   | Just deflt <- mb_deflt, (lowest_branch - lo_tag) >= n_branches
-  = do { (assign_tag, tag_expr') <- assignTemp' tag_expr
-       ; let cond = cmmULtWord tag_expr' (CmmLit (mkIntCLit lowest_branch))
+  = do { dflags <- getDynFlags
+       ; (assign_tag, tag_expr') <- assignTemp' tag_expr
+       ; let cond = cmmULtWord dflags tag_expr' (CmmLit (mkIntCLit dflags lowest_branch))
              branch = CmmCondBranch cond deflt
        ; stmts <- mk_switch tag_expr' branches mb_deflt
                         lowest_branch hi_tag via_C
@@ -531,8 +534,9 @@ mk_switch tag_expr branches mb_deflt lo_tag hi_tag via_C
        }
 
   | Just deflt <- mb_deflt, (hi_tag - highest_branch) >= n_branches
-  = do { (assign_tag, tag_expr') <- assignTemp' tag_expr
-       ; let cond = cmmUGtWord tag_expr' (CmmLit (mkIntCLit highest_branch))
+  = do { dflags <- getDynFlags
+       ; (assign_tag, tag_expr') <- assignTemp' tag_expr
+       ; let cond = cmmUGtWord dflags tag_expr' (CmmLit (mkIntCLit dflags highest_branch))
              branch = CmmCondBranch cond deflt
        ; stmts <- mk_switch tag_expr' branches mb_deflt
                         lo_tag highest_branch via_C
@@ -540,14 +544,15 @@ mk_switch tag_expr branches mb_deflt lo_tag hi_tag via_C
        }
 
   | otherwise   -- Use an if-tree
-  = do  { (assign_tag, tag_expr') <- assignTemp' tag_expr
+  = do  { dflags <- getDynFlags
+        ; (assign_tag, tag_expr') <- assignTemp' tag_expr
                 -- To avoid duplication
         ; lo_stmts <- mk_switch tag_expr' lo_branches mb_deflt
                                 lo_tag (mid_tag-1) via_C
         ; hi_stmts <- mk_switch tag_expr' hi_branches mb_deflt
                                 mid_tag hi_tag via_C
         ; hi_id <- forkCgStmts hi_stmts
-        ; let cond = cmmUGeWord tag_expr' (CmmLit (mkIntCLit mid_tag))
+        ; let cond = cmmUGeWord dflags tag_expr' (CmmLit (mkIntCLit dflags mid_tag))
               branch_stmt = CmmCondBranch cond hi_id
         ; return (assign_tag `consCgStmt` (branch_stmt `consCgStmt` lo_stmts))
         }
@@ -641,7 +646,7 @@ mk_lit_switch :: CmmExpr -> BlockId
               -> FCode CgStmts
 mk_lit_switch scrut deflt_blk_id [(lit,blk)]
   = do dflags <- getDynFlags
-       let cmm_lit = mkSimpleLit lit
+       let cmm_lit = mkSimpleLit dflags lit
            rep     = cmmLitType dflags cmm_lit
            ne      = if isFloatType rep then MO_F_Ne else MO_Ne
            cond    = CmmMachOp (ne (typeWidth rep)) [scrut, CmmLit cmm_lit]
@@ -664,7 +669,7 @@ mk_lit_switch scrut deflt_blk_id branches
     is_lo (t,_) = t < mid_lit
 
     cond dflags = CmmMachOp (mkLtOp dflags mid_lit)
-                            [scrut, CmmLit (mkSimpleLit mid_lit)]
+                            [scrut, CmmLit (mkSimpleLit dflags mid_lit)]
 
 -------------------------------------------------------------------------
 --
@@ -791,6 +796,7 @@ possiblySameLoc _  _    _          _    = True  -- Conservative
 
 getSRTInfo :: FCode C_SRT
 getSRTInfo = do
+  dflags <- getDynFlags
   srt_lbl <- getSRTLabel
   srt <- getSRT
   case srt of
@@ -804,8 +810,8 @@ getSRTInfo = do
             let srt_desc_lbl = mkLargeSRTLabel id
             emitRODataLits "getSRTInfo" srt_desc_lbl
              ( cmmLabelOffW srt_lbl off
-               : mkWordCLit (fromIntegral len)
-               : map mkWordCLit bmp)
+               : mkWordCLit dflags (fromIntegral len)
+               : map (mkWordCLit dflags) bmp)
             return (C_SRT srt_desc_lbl 0 srt_escape)
 
       | otherwise
@@ -826,22 +832,22 @@ srt_escape = -1
 -- a GlobalReg, get_GlobalReg_addr always produces the
 -- register table address for it.
 get_GlobalReg_addr :: DynFlags -> GlobalReg -> CmmExpr
-get_GlobalReg_addr _      BaseReg = regTableOffset 0
+get_GlobalReg_addr dflags BaseReg = regTableOffset dflags 0
 get_GlobalReg_addr dflags mid
     = get_Regtable_addr_from_offset dflags
-                                    (globalRegType dflags mid) (baseRegOffset mid)
+                                    (globalRegType dflags mid) (baseRegOffset dflags mid)
 
 -- Calculate a literal representing an offset into the register table.
 -- Used when we don't have an actual BaseReg to offset from.
-regTableOffset :: Int -> CmmExpr
-regTableOffset n =
-  CmmLit (CmmLabelOff mkMainCapabilityLabel (oFFSET_Capability_r + n))
+regTableOffset :: DynFlags -> Int -> CmmExpr
+regTableOffset dflags n =
+  CmmLit (CmmLabelOff mkMainCapabilityLabel (oFFSET_Capability_r dflags + n))
 
 get_Regtable_addr_from_offset :: DynFlags -> CmmType -> Int -> CmmExpr
 get_Regtable_addr_from_offset dflags _ offset =
     if haveRegBase (targetPlatform dflags)
     then CmmRegOff (CmmGlobal BaseReg) offset
-    else regTableOffset offset
+    else regTableOffset dflags offset
 
 -- | Fixup global registers so that they assign to locations within the
 -- RegTable if they aren't pinned for the current target.
@@ -923,10 +929,10 @@ fixStgRegExpr dflags expr
             -- expand it and defer to the above code.
             case reg `elem` activeStgRegs platform of
                 True  -> expr
-                False -> fixStgRegExpr dflags (CmmMachOp (MO_Add wordWidth) [
+                False -> fixStgRegExpr dflags (CmmMachOp (MO_Add (wordWidth dflags)) [
                                     CmmReg (CmmGlobal reg),
                                     CmmLit (CmmInt (fromIntegral offset)
-                                                wordWidth)])
+                                                (wordWidth dflags))])
 
         -- CmmLit, CmmReg (CmmLocal), CmmStackSlot
         _other -> expr

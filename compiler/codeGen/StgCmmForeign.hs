@@ -222,7 +222,7 @@ emitForeignCall safety results target args _ret
     let (off, copyout) = copyInOflow dflags NativeReturn (Young k) results
        -- see Note [safe foreign call convention]
     emit $
-           (    mkStore (CmmStackSlot (Young k) (widthInBytes wordWidth))
+           (    mkStore (CmmStackSlot (Young k) (widthInBytes (wordWidth dflags)))
                         (CmmLit (CmmBlock k))
             <*> mkLast (CmmForeignCall { tgt  = temp_target
                                        , res  = results
@@ -315,7 +315,7 @@ loadThreadState dflags tso stack = do
         mkAssign sp (CmmLoad (cmmOffset dflags (CmmReg (CmmLocal stack)) (stack_SP dflags)) (bWord dflags)),
         -- SpLim = stack->stack + RESERVED_STACK_WORDS;
         mkAssign spLim (cmmOffsetW dflags (cmmOffset dflags (CmmReg (CmmLocal stack)) (stack_STACK dflags))
-                                    rESERVED_STACK_WORDS),
+                                    (rESERVED_STACK_WORDS dflags)),
         openNursery dflags,
         -- and load the current cost centre stack from the TSO when profiling:
         if dopt Opt_SccProfilingOn dflags then
@@ -337,10 +337,10 @@ openNursery dflags = catAGraphs [
             (cmmOffsetExpr dflags
                 (CmmLoad (nursery_bdescr_start dflags) (bWord dflags))
                 (cmmOffset dflags
-                  (CmmMachOp mo_wordMul [
-                    CmmMachOp (MO_SS_Conv W32 wordWidth)
+                  (CmmMachOp (mo_wordMul dflags) [
+                    CmmMachOp (MO_SS_Conv W32 (wordWidth dflags))
                       [CmmLoad (nursery_bdescr_blocks dflags) b32],
-                    mkIntExpr bLOCK_SIZE
+                    mkIntExpr dflags (bLOCK_SIZE dflags)
                    ])
                   (-1)
                 )
@@ -351,15 +351,15 @@ emitOpenNursery = do dflags <- getDynFlags
                      emit $ openNursery dflags
 
 nursery_bdescr_free, nursery_bdescr_start, nursery_bdescr_blocks :: DynFlags -> CmmExpr
-nursery_bdescr_free   dflags = cmmOffset dflags stgCurrentNursery oFFSET_bdescr_free
-nursery_bdescr_start  dflags = cmmOffset dflags stgCurrentNursery oFFSET_bdescr_start
-nursery_bdescr_blocks dflags = cmmOffset dflags stgCurrentNursery oFFSET_bdescr_blocks
+nursery_bdescr_free   dflags = cmmOffset dflags stgCurrentNursery (oFFSET_bdescr_free dflags)
+nursery_bdescr_start  dflags = cmmOffset dflags stgCurrentNursery (oFFSET_bdescr_start dflags)
+nursery_bdescr_blocks dflags = cmmOffset dflags stgCurrentNursery (oFFSET_bdescr_blocks dflags)
 
 tso_stackobj, tso_CCCS, stack_STACK, stack_SP :: DynFlags -> ByteOff
-tso_stackobj dflags = closureField dflags oFFSET_StgTSO_stackobj
-tso_CCCS     dflags = closureField dflags oFFSET_StgTSO_cccs
-stack_STACK  dflags = closureField dflags oFFSET_StgStack_stack
-stack_SP     dflags = closureField dflags oFFSET_StgStack_sp
+tso_stackobj dflags = closureField dflags (oFFSET_StgTSO_stackobj dflags)
+tso_CCCS     dflags = closureField dflags (oFFSET_StgTSO_cccs dflags)
+stack_STACK  dflags = closureField dflags (oFFSET_StgStack_stack dflags)
+stack_SP     dflags = closureField dflags (oFFSET_StgStack_sp dflags)
 
 
 closureField :: DynFlags -> ByteOff -> ByteOff

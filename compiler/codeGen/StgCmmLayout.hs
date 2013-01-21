@@ -608,7 +608,7 @@ getConstrTag :: DynFlags -> CmmExpr -> CmmExpr
 -- This lives in the SRT field of the info table
 -- (constructors don't need SRTs).
 getConstrTag dflags closure_ptr
-  = CmmMachOp (MO_UU_Conv (halfWordWidth dflags) wordWidth) [infoTableConstrTag dflags info_table]
+  = CmmMachOp (MO_UU_Conv (halfWordWidth dflags) (wordWidth dflags)) [infoTableConstrTag dflags info_table]
   where
     info_table = infoTable dflags (closureInfoPtr dflags closure_ptr)
 
@@ -616,7 +616,7 @@ cmmGetClosureType :: DynFlags -> CmmExpr -> CmmExpr
 -- Takes a closure pointer, and return the closure type
 -- obtained from the info table
 cmmGetClosureType dflags closure_ptr
-  = CmmMachOp (MO_UU_Conv (halfWordWidth dflags) wordWidth) [infoTableClosureType dflags info_table]
+  = CmmMachOp (MO_UU_Conv (halfWordWidth dflags) (wordWidth dflags)) [infoTableClosureType dflags info_table]
   where
     info_table = infoTable dflags (closureInfoPtr dflags closure_ptr)
 
@@ -659,7 +659,7 @@ funInfoTable :: DynFlags -> CmmExpr -> CmmExpr
 -- in the info table.
 funInfoTable dflags info_ptr
   | tablesNextToCode dflags
-  = cmmOffsetB dflags info_ptr (- stdInfoTableSizeB dflags - sIZEOF_StgFunInfoExtraRev)
+  = cmmOffsetB dflags info_ptr (- stdInfoTableSizeB dflags - sIZEOF_StgFunInfoExtraRev dflags)
   | otherwise
   = cmmOffsetW dflags info_ptr (1 + stdInfoTableSizeW dflags)
 				-- Past the entry code pointer

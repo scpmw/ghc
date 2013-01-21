@@ -243,7 +243,7 @@ mkRhsClosure    dflags bndr _cc _bi
                             (StgApp selectee [{-no args-}]))])
   |  the_fv == scrutinee                -- Scrutinee is the only free variable
   && maybeToBool maybe_offset           -- Selectee is a component of the tuple
-  && offset_into_int <= mAX_SPEC_SELECTEE_SIZE  -- Offset is small enough
+  && offset_into_int <= mAX_SPEC_SELECTEE_SIZE dflags -- Offset is small enough
   = -- NOT TRUE: ASSERT(is_single_constructor)
     -- The simplifier may have statically determined that the single alternative
     -- is the only possible case and eliminated the others, even if there are
@@ -272,7 +272,7 @@ mkRhsClosure    dflags bndr _cc _bi
   | args `lengthIs` (arity-1)
         && all (isGcPtrRep . idPrimRep . stripNV) fvs
         && isUpdatable upd_flag
-        && arity <= mAX_SPEC_AP_SIZE
+        && arity <= mAX_SPEC_AP_SIZE dflags
         && not (dopt Opt_SccProfilingOn dflags)
                                   -- not when profiling: we don't want to
                                   -- lose information about this particular
@@ -458,9 +458,9 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
                       node' = if node_points then Just node else Nothing
                 ; tickyEnterFun cl_info
                 ; enterCostCentreFun cc
-                    (CmmMachOp mo_wordSub
+                    (CmmMachOp (mo_wordSub dflags)
                          [ CmmReg nodeReg
-                         , mkIntExpr (funTag cl_info) ])
+                         , mkIntExpr dflags (funTag cl_info) ])
                 ; whenC node_points (ldvEnterClosure cl_info)
                 ; granYield arg_regs node_points
 
@@ -508,7 +508,7 @@ mkSlowEntryCode cl_info arg_regs -- function closure is already in `Node'
            jump = mkDirectJump dflags
                                (mkLblExpr fast_lbl)
                                (map (CmmReg . CmmLocal) arg_regs)
-                               initUpdFrameOff
+                               (initUpdFrameOff dflags)
        emitProcWithConvention Slow Nothing slow_lbl arg_regs jump
   | otherwise = return ()
 
@@ -635,8 +635,8 @@ pushUpdateFrame lbl updatee body
        dflags <- getDynFlags
        let
            hdr         = fixedHdrSize dflags * wORD_SIZE
-           frame       = updfr + hdr + sIZEOF_StgUpdateFrame_NoHdr
-           off_updatee = hdr + oFFSET_StgUpdateFrame_updatee
+           frame       = updfr + hdr + sIZEOF_StgUpdateFrame_NoHdr dflags
+           off_updatee = hdr + oFFSET_StgUpdateFrame_updatee dflags
        --
        emitStore (CmmStackSlot Old frame) (mkLblExpr lbl)
        emitStore (CmmStackSlot Old (frame - off_updatee)) updatee
@@ -716,7 +716,7 @@ link_caf node _is_upd = do
   -- see Note [atomic CAF entry] in rts/sm/Storage.c
   ; updfr  <- getUpdFrameOff
   ; emit =<< mkCmmIfThen
-      (CmmMachOp mo_wordEq [ CmmReg (CmmLocal ret), CmmLit zeroCLit])
+      (CmmMachOp (mo_wordEq dflags) [ CmmReg (CmmLocal ret), CmmLit (zeroCLit dflags)])
         -- re-enter R1.  Doing this directly is slightly dodgy; we're
         -- assuming lots of things, like the stack pointer hasn't
         -- moved since we entered the CAF.
