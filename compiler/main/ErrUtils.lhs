@@ -50,6 +50,7 @@ import Data.List
 import qualified Data.Set as Set
 import Data.IORef
 import Data.Ord
+import Data.Time
 import Control.Monad
 import System.IO
 
@@ -205,9 +206,9 @@ dumpIfSet dflags flag hdr doc
   | not flag   = return ()
   | otherwise  = log_action dflags dflags SevDump noSrcSpan defaultDumpStyle (mkDumpDoc hdr doc)
 
-dumpIfSet_dyn :: DynFlags -> GeneralFlag -> String -> SDoc -> IO ()
+dumpIfSet_dyn :: DynFlags -> DumpFlag -> String -> SDoc -> IO ()
 dumpIfSet_dyn dflags flag hdr doc
-  | gopt flag dflags || verbosity dflags >= 4
+  | dopt flag dflags
   = dumpSDoc dflags flag hdr doc
   | otherwise
   = return ()
@@ -228,13 +229,10 @@ mkDumpDoc hdr doc
 -- 
 -- When hdr is empty, we print in a more compact format (no separators and
 -- blank lines)
-dumpSDoc :: DynFlags -> GeneralFlag -> String -> SDoc -> IO ()
+dumpSDoc :: DynFlags -> DumpFlag -> String -> SDoc -> IO ()
 dumpSDoc dflags flag hdr doc
  = do let mFile = chooseDumpFile dflags flag
       case mFile of
-            -- write the dump to a file
-            -- don't add the header in this case, we can see what kind
-            -- of dump it is from the filename.
             Just fileName
                  -> do
                         let gdref = generatedDumps dflags
@@ -245,9 +243,13 @@ dumpSDoc dflags flag hdr doc
                             writeIORef gdref (Set.insert fileName gd)
                         createDirectoryIfMissing True (takeDirectory fileName)
                         handle <- openFile fileName mode
-                        let doc'
-                              | null hdr  = doc
-                              | otherwise = doc $$ blankLine
+                        doc' <- if null hdr
+                                then return doc
+                                else do t <- getCurrentTime
+                                        let d = text (show t)
+                                             $$ blankLine
+                                             $$ doc
+                                        return $ mkDumpDoc hdr d
                         defaultLogActionHPrintDoc dflags handle doc' defaultDumpStyle
                         hClose handle
 
@@ -261,7 +263,7 @@ dumpSDoc dflags flag hdr doc
 
 -- | Choose where to put a dump file based on DynFlags
 --
-chooseDumpFile :: DynFlags -> GeneralFlag -> Maybe String
+chooseDumpFile :: DynFlags -> DumpFlag -> Maybe String
 chooseDumpFile dflags flag
 
         | gopt Opt_DumpToFile dflags
@@ -287,11 +289,13 @@ chooseDumpFile dflags flag
                          Nothing ->       f
 
 -- | Build a nice file name from name of a GeneralFlag constructor
-beautifyDumpName :: GeneralFlag -> String
+beautifyDumpName :: DumpFlag -> String
 beautifyDumpName flag
- = let str  = show flag
-       cut  = if isPrefixOf "Opt_D_" str then drop 6 str else str
-       dash = map (\c -> if c == '_' then '-' else c) cut
+ = let str = show flag
+       suff = case stripPrefix "Opt_D_" str of
+              Just x -> x
+              Nothing -> panic ("Bad flag name: " ++ str)
+       dash = map (\c -> if c == '_' then '-' else c) suff
    in dash
 
 

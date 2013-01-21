@@ -13,6 +13,7 @@
 
 module DynFlags (
         -- * Dynamic flags and associated configuration types
+        DumpFlag(..),
         GeneralFlag(..),
         WarningFlag(..),
         ExtensionFlag(..),
@@ -21,15 +22,10 @@ module DynFlags (
         FatalMessager, LogAction, FlushOut(..), FlushErr(..),
         ProfAuto(..),
         glasgowExtsFlags,
-        gopt,
-        gopt_set,
-        gopt_unset,
-        wopt,
-        wopt_set,
-        wopt_unset,
-        xopt,
-        xopt_set,
-        xopt_unset,
+        dopt,
+        gopt, gopt_set, gopt_unset,
+        wopt, wopt_set, wopt_unset,
+        xopt, xopt_set, xopt_unset,
         lang_set,
         DynFlags(..),
         HasDynFlags(..), ContainsDynFlags(..),
@@ -169,8 +165,7 @@ import qualified Data.IntSet as IntSet
 -- -----------------------------------------------------------------------------
 -- DynFlags
 
--- | Enumerates the simple on-or-off dynamic flags
-data GeneralFlag
+data DumpFlag
 
    -- debugging flags
    = Opt_D_dump_cmm
@@ -181,23 +176,16 @@ data GeneralFlag
    | Opt_D_dump_cmmz_cfg
    | Opt_D_dump_cmmz_cbe
    | Opt_D_dump_cmmz_proc
-   | Opt_D_dump_cmmz_spills
    | Opt_D_dump_cmmz_rewrite
-   | Opt_D_dump_cmmz_dead
-   | Opt_D_dump_cmmz_stub
    | Opt_D_dump_cmmz_sp
    | Opt_D_dump_cmmz_procmap
    | Opt_D_dump_cmmz_split
-   | Opt_D_dump_cmmz_lower
    | Opt_D_dump_cmmz_info
-   | Opt_D_dump_cmmz_cafs
    -- end cmmz subflags
    | Opt_D_dump_cps_cmm
-   | Opt_D_dump_cvt_cmm
    | Opt_D_dump_asm
    | Opt_D_dump_asm_native
    | Opt_D_dump_asm_liveness
-   | Opt_D_dump_asm_coalesce
    | Opt_D_dump_asm_regalloc
    | Opt_D_dump_asm_regalloc_stages
    | Opt_D_dump_asm_conflicts
@@ -205,10 +193,8 @@ data GeneralFlag
    | Opt_D_dump_asm_expanded
    | Opt_D_dump_llvm
    | Opt_D_dump_core_stats
-   | Opt_D_dump_cpranal
    | Opt_D_dump_deriv
    | Opt_D_dump_ds
-   | Opt_D_dump_flatC
    | Opt_D_dump_foreign
    | Opt_D_dump_inlinings
    | Opt_D_dump_rule_firings
@@ -240,20 +226,24 @@ data GeneralFlag
    | Opt_D_dump_splices
    | Opt_D_dump_BCOs
    | Opt_D_dump_vect
-   | Opt_D_dump_avoid_vect
    | Opt_D_dump_ticked
    | Opt_D_dump_rtti
    | Opt_D_source_stats
-   | Opt_D_verbose_core2core
    | Opt_D_verbose_stg2stg
    | Opt_D_dump_hi
    | Opt_D_dump_hi_diffs
-   | Opt_D_dump_minimal_imports
    | Opt_D_dump_mod_cycles
    | Opt_D_dump_view_pattern_commoning
+   | Opt_D_verbose_core2core
+
+   deriving (Eq, Show, Enum)
+
+-- | Enumerates the simple on-or-off dynamic flags
+data GeneralFlag
+
+   = Opt_DumpToFile                     -- ^ Append dump output to files instead of stdout.
    | Opt_D_faststring_stats
-   | Opt_DumpToFile                     -- ^ Append dump output to files instead of stdout.
-   | Opt_D_no_debug_output
+   | Opt_D_dump_minimal_imports
    | Opt_DoCoreLinting
    | Opt_DoStgLinting
    | Opt_DoCmmLinting
@@ -650,7 +640,8 @@ data DynFlags = DynFlags {
   generatedDumps        :: IORef (Set FilePath),
 
   -- hsc dynamic flags
-  flags                 :: IntSet,
+  dumpFlags             :: IntSet,
+  generalFlags          :: IntSet,
   warningFlags          :: IntSet,
   -- Don't change this without updating extensionFlags:
   language              :: Maybe Language,
@@ -1205,7 +1196,8 @@ defaultDynFlags mySettings =
         filesToNotIntermediateClean = panic "defaultDynFlags: No filesToNotIntermediateClean",
         generatedDumps = panic "defaultDynFlags: No generatedDumps",
         haddockOptions = Nothing,
-        flags = IntSet.fromList (map fromEnum (defaultFlags mySettings)),
+        dumpFlags = IntSet.empty,
+        generalFlags = IntSet.fromList (map fromEnum (defaultFlags mySettings)),
         warningFlags = IntSet.fromList (map fromEnum standardWarnings),
         ghciScripts = [],
         language = Nothing,
@@ -1354,17 +1346,50 @@ languageExtensions (Just Haskell2010)
        Opt_DoAndIfThenElse,
        Opt_RelaxedPolyRec]
 
+-- | Test whether a 'DumpFlag' is set
+dopt :: DumpFlag -> DynFlags -> Bool
+dopt f dflags = (fromEnum f `IntSet.member` dumpFlags dflags)
+             || (verbosity dflags >= 4 && enableIfVerbose f)
+    where enableIfVerbose Opt_D_dump_tc_trace               = False
+          enableIfVerbose Opt_D_dump_rn_trace               = False
+          enableIfVerbose Opt_D_dump_cs_trace               = False
+          enableIfVerbose Opt_D_dump_if_trace               = False
+          enableIfVerbose Opt_D_dump_vt_trace               = False
+          enableIfVerbose Opt_D_dump_tc                     = False
+          enableIfVerbose Opt_D_dump_rn                     = False
+          enableIfVerbose Opt_D_dump_rn_stats               = False
+          enableIfVerbose Opt_D_dump_hi_diffs               = False
+          enableIfVerbose Opt_D_verbose_core2core           = False
+          enableIfVerbose Opt_D_verbose_stg2stg             = False
+          enableIfVerbose Opt_D_dump_splices                = False
+          enableIfVerbose Opt_D_dump_rule_firings           = False
+          enableIfVerbose Opt_D_dump_rule_rewrites          = False
+          enableIfVerbose Opt_D_dump_rtti                   = False
+          enableIfVerbose Opt_D_dump_inlinings              = False
+          enableIfVerbose Opt_D_dump_core_stats             = False
+          enableIfVerbose Opt_D_dump_asm_stats              = False
+          enableIfVerbose Opt_D_dump_types                  = False
+          enableIfVerbose Opt_D_dump_simpl_iterations       = False
+          enableIfVerbose Opt_D_dump_ticked                 = False
+          enableIfVerbose Opt_D_dump_view_pattern_commoning = False
+          enableIfVerbose Opt_D_dump_mod_cycles             = False
+          enableIfVerbose _                                 = True
+
+-- | Set a 'DumpFlag'
+dopt_set :: DynFlags -> DumpFlag -> DynFlags
+dopt_set dfs f = dfs{ dumpFlags = IntSet.insert (fromEnum f) (dumpFlags dfs) }
+
 -- | Test whether a 'GeneralFlag' is set
 gopt :: GeneralFlag -> DynFlags -> Bool
-gopt f dflags  = fromEnum f `IntSet.member` flags dflags
+gopt f dflags  = fromEnum f `IntSet.member` generalFlags dflags
 
 -- | Set a 'GeneralFlag'
 gopt_set :: DynFlags -> GeneralFlag -> DynFlags
-gopt_set dfs f = dfs{ flags = IntSet.insert (fromEnum f) (flags dfs) }
+gopt_set dfs f = dfs{ generalFlags = IntSet.insert (fromEnum f) (generalFlags dfs) }
 
 -- | Unset a 'GeneralFlag'
 gopt_unset :: DynFlags -> GeneralFlag -> DynFlags
-gopt_unset dfs f = dfs{ flags = IntSet.delete (fromEnum f) (flags dfs) }
+gopt_unset dfs f = dfs{ generalFlags = IntSet.delete (fromEnum f) (generalFlags dfs) }
 
 -- | Test whether a 'WarningFlag' is set
 wopt :: WarningFlag -> DynFlags -> Bool
@@ -1969,24 +1994,17 @@ dynamic_flags = [
   , Flag "ddump-cmmz"              (setDumpFlag Opt_D_dump_cmmz)
   , Flag "ddump-cmmz-cfg"          (setDumpFlag Opt_D_dump_cmmz_cfg)
   , Flag "ddump-cmmz-cbe"          (setDumpFlag Opt_D_dump_cmmz_cbe)
-  , Flag "ddump-cmmz-spills"       (setDumpFlag Opt_D_dump_cmmz_spills)
   , Flag "ddump-cmmz-proc"         (setDumpFlag Opt_D_dump_cmmz_proc)
   , Flag "ddump-cmmz-rewrite"      (setDumpFlag Opt_D_dump_cmmz_rewrite)
-  , Flag "ddump-cmmz-dead"         (setDumpFlag Opt_D_dump_cmmz_dead)
-  , Flag "ddump-cmmz-stub"         (setDumpFlag Opt_D_dump_cmmz_stub)
   , Flag "ddump-cmmz-sp"           (setDumpFlag Opt_D_dump_cmmz_sp)
   , Flag "ddump-cmmz-procmap"      (setDumpFlag Opt_D_dump_cmmz_procmap)
   , Flag "ddump-cmmz-split"        (setDumpFlag Opt_D_dump_cmmz_split)
-  , Flag "ddump-cmmz-lower"        (setDumpFlag Opt_D_dump_cmmz_lower)
   , Flag "ddump-cmmz-info"         (setDumpFlag Opt_D_dump_cmmz_info)
-  , Flag "ddump-cmmz-cafs"         (setDumpFlag Opt_D_dump_cmmz_cafs)
   , Flag "ddump-core-stats"        (setDumpFlag Opt_D_dump_core_stats)
   , Flag "ddump-cps-cmm"           (setDumpFlag Opt_D_dump_cps_cmm)
-  , Flag "ddump-cvt-cmm"           (setDumpFlag Opt_D_dump_cvt_cmm)
   , Flag "ddump-asm"               (setDumpFlag Opt_D_dump_asm)
   , Flag "ddump-asm-native"        (setDumpFlag Opt_D_dump_asm_native)
   , Flag "ddump-asm-liveness"      (setDumpFlag Opt_D_dump_asm_liveness)
-  , Flag "ddump-asm-coalesce"      (setDumpFlag Opt_D_dump_asm_coalesce)
   , Flag "ddump-asm-regalloc"      (setDumpFlag Opt_D_dump_asm_regalloc)
   , Flag "ddump-asm-conflicts"     (setDumpFlag Opt_D_dump_asm_conflicts)
   , Flag "ddump-asm-regalloc-stages" (setDumpFlag Opt_D_dump_asm_regalloc_stages)
@@ -1994,10 +2012,8 @@ dynamic_flags = [
   , Flag "ddump-asm-expanded"      (setDumpFlag Opt_D_dump_asm_expanded)
   , Flag "ddump-llvm"              (NoArg (do setObjTarget HscLlvm
                                               setDumpFlag' Opt_D_dump_llvm))
-  , Flag "ddump-cpranal"           (setDumpFlag Opt_D_dump_cpranal)
   , Flag "ddump-deriv"             (setDumpFlag Opt_D_dump_deriv)
   , Flag "ddump-ds"                (setDumpFlag Opt_D_dump_ds)
-  , Flag "ddump-flatC"             (setDumpFlag Opt_D_dump_flatC)
   , Flag "ddump-foreign"           (setDumpFlag Opt_D_dump_foreign)
   , Flag "ddump-inlinings"         (setDumpFlag Opt_D_dump_inlinings)
   , Flag "ddump-rule-firings"      (setDumpFlag Opt_D_dump_rule_firings)
@@ -2033,14 +2049,13 @@ dynamic_flags = [
                                               setVerboseCore2Core))
   , Flag "dverbose-stg2stg"        (setDumpFlag Opt_D_verbose_stg2stg)
   , Flag "ddump-hi"                (setDumpFlag Opt_D_dump_hi)
-  , Flag "ddump-minimal-imports"   (setDumpFlag Opt_D_dump_minimal_imports)
+  , Flag "ddump-minimal-imports"   (NoArg (setGeneralFlag Opt_D_dump_minimal_imports))
   , Flag "ddump-vect"              (setDumpFlag Opt_D_dump_vect)
-  , Flag "ddump-avoid-vect"        (setDumpFlag Opt_D_dump_avoid_vect)
   , Flag "ddump-hpc"               (setDumpFlag Opt_D_dump_ticked) -- back compat
   , Flag "ddump-ticked"            (setDumpFlag Opt_D_dump_ticked)
   , Flag "ddump-mod-cycles"        (setDumpFlag Opt_D_dump_mod_cycles)
   , Flag "ddump-view-pattern-commoning" (setDumpFlag Opt_D_dump_view_pattern_commoning)
-  , Flag "ddump-to-file"           (setDumpFlag Opt_DumpToFile)
+  , Flag "ddump-to-file"           (NoArg (setGeneralFlag Opt_DumpToFile))
   , Flag "ddump-hi-diffs"          (setDumpFlag Opt_D_dump_hi_diffs)
   , Flag "ddump-rtti"              (setDumpFlag Opt_D_dump_rtti)
   , Flag "dcore-lint"              (NoArg (setGeneralFlag Opt_DoCoreLinting))
@@ -2807,7 +2822,7 @@ optIntSuffixM :: (Maybe Int -> DynFlags -> DynP DynFlags)
               -> OptKind (CmdLineP DynFlags)
 optIntSuffixM fn = OptIntSuffix (\mi -> updM (fn mi))
 
-setDumpFlag :: GeneralFlag -> OptKind (CmdLineP DynFlags)
+setDumpFlag :: DumpFlag -> OptKind (CmdLineP DynFlags)
 setDumpFlag dump_flag = NoArg (setDumpFlag' dump_flag)
 
 --------------------------
@@ -2852,16 +2867,15 @@ alterSettings :: (Settings -> Settings) -> DynFlags -> DynFlags
 alterSettings f dflags = dflags { settings = f (settings dflags) }
 
 --------------------------
-setDumpFlag' :: GeneralFlag -> DynP ()
+setDumpFlag' :: DumpFlag -> DynP ()
 setDumpFlag' dump_flag
-  = do setGeneralFlag dump_flag
+  = do upd (\dfs -> dopt_set dfs dump_flag)
        when want_recomp forceRecompile
-  where
-        -- Certain dumpy-things are really interested in what's going
-        -- on during recompilation checking, so in those cases we
-        -- don't want to turn it off.
-    want_recomp = dump_flag `notElem` [Opt_D_dump_if_trace,
-                                       Opt_D_dump_hi_diffs]
+    where -- Certain dumpy-things are really interested in what's going
+          -- on during recompilation checking, so in those cases we
+          -- don't want to turn it off.
+          want_recomp = dump_flag `notElem` [Opt_D_dump_if_trace,
+                                             Opt_D_dump_hi_diffs]
 
 forceRecompile :: DynP ()
 -- Whenver we -ddump, force recompilation (by switching off the
@@ -2874,8 +2888,7 @@ forceRecompile = do dfs <- liftEwM getCmdLineState
           force_recomp dfs = isOneShot (ghcMode dfs)
 
 setVerboseCore2Core :: DynP ()
-setVerboseCore2Core = do forceRecompile
-                         setGeneralFlag Opt_D_verbose_core2core
+setVerboseCore2Core = do setDumpFlag' Opt_D_verbose_core2core
                          upd (\dfs -> dfs { shouldDumpSimplPhase = Nothing })
 
 setDumpSimplPhases :: String -> DynP ()
