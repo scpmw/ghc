@@ -640,7 +640,7 @@ genStore_slow addr val meta = do
             dflags <- getDynFlags
             pprPanic "genStore: ptr not right type!"
                     (PprCmm.pprExpr addr <+> text (
-                        "Size of Ptr: " ++ show llvmPtrBits ++
+                        "Size of Ptr: " ++ show (llvmPtrBits dflags) ++
                         ", Size of var: " ++ show (llvmWidthInBits other) ++
                         ", Var: " ++ showSDoc dflags (ppr vaddr)))
 
@@ -1119,7 +1119,7 @@ genLoad_slow e ty meta = do
          other -> do dflags <- getDynFlags
                      pprPanic "exprToVar: CmmLoad expression is not right type!"
                         (PprCmm.pprExpr e <+> text (
-                            "Size of Ptr: " ++ show llvmPtrBits ++
+                            "Size of Ptr: " ++ show (llvmPtrBits dflags) ++
                             ", Size of var: " ++ show (llvmWidthInBits other) ++
                             ", Var: " ++ showSDoc dflags (ppr iptr)))
 
