@@ -492,7 +492,7 @@ cmmPrimOpFunctions mop = do
     MO_Touch         -> unsupported
 
 -- | Tail function calls
-genJump :: CmmExpr -> Maybe [GlobalReg] -> LlvmM StmtData
+genJump :: CmmExpr -> [GlobalReg] -> LlvmM StmtData
 
 -- Call to known function
 genJump (CmmLit (CmmLabel lbl)) live = do
@@ -1327,12 +1327,12 @@ debugDeclareValue varMeta val = do
 
 -- | Function epilogue. Load STG variables to use as argument for call.
 -- STG Liveness optimisation done here.
-funEpilogue :: Maybe [GlobalReg] -> LlvmM ([LlvmVar], LlvmStatements)
+funEpilogue :: [GlobalReg] -> LlvmM ([LlvmVar], LlvmStatements)
 funEpilogue live = do
 
     -- Have information and liveness optimisation is enabled?
     doRegLiveness <- getDynFlag (gopt Opt_RegLiveness)
-    let liveRegs = if doRegLiveness then fmap (alwaysLive ++) live else Nothing
+    let liveRegs = if doRegLiveness then alwaysLive ++ live else []
 
     -- Set to value or "undef" depending on whether the register is
     -- actually live
@@ -1344,10 +1344,9 @@ funEpilogue live = do
           let ty = (pLower . getVarType $ lmGlobalRegVar dflags r)
           return (LMLitVar $ LMUndefLit ty, unitOL Nop)
     platform <- getDynFlag targetPlatform
-    loads <- flip mapM (activeStgRegs platform) $ \r -> case liveRegs of
-      Nothing               -> loadExpr r
-      Just rs | r `elem` rs -> loadExpr r
-              | otherwise   -> loadUndef r
+    loads <- flip mapM (activeStgRegs platform) $ \r ->
+      if r `elem` liveRegs then loadExpr r
+                           else loadUndef r
 
     let (vars, stmts) = unzip loads
     return (vars, concatOL stmts)
