@@ -23,7 +23,6 @@ import VarSet
 import Data.List
 import FastString
 import HscTypes
-import StaticFlags
 import TyCon
 import Unique
 import BasicTypes
@@ -91,7 +90,7 @@ addTicksToBinds dflags mod mod_loc exports tyCons binds =
                       , this_mod     = mod
                       , tickishType  = case hscTarget dflags of
                           HscInterpreted          -> Breakpoints
-                          _ | opt_Hpc             -> HpcTicks
+                          _ | dopt Opt_Hpc dflags -> HpcTicks
                             | dopt Opt_SccProfilingOn dflags
                                                   -> ProfNotes
                             | otherwise           -> SourceNotes
@@ -146,7 +145,7 @@ mkModBreaks count entries = do
 
 writeMixEntries :: DynFlags -> Module -> Int -> [MixEntry_] -> FilePath -> IO Int
 writeMixEntries dflags mod count entries filename
-  | not opt_Hpc = return 0
+  | not (dopt Opt_Hpc dflags) = return 0
   | otherwise   = do
         let
             hpc_dir = hpcDir dflags
@@ -184,7 +183,7 @@ data TickDensity
 
 mkDensity :: DynFlags -> TickDensity
 mkDensity dflags
-  | opt_Hpc                              = TickForCoverage
+  | dopt Opt_Hpc dflags                  = TickForCoverage
   | HscInterpreted  <- hscTarget dflags  = TickForBreakPoints
   | ProfAutoAll     <- profAuto dflags   = TickAllFunctions
   | ProfAutoTop     <- profAuto dflags   = TickTopFunctions
@@ -1189,8 +1188,8 @@ static void hpc_init_Main(void)
  hs_hpc_module("Main",8,1150288664,_hpc_tickboxes_Main_hpc);}
 
 \begin{code}
-hpcInitCode :: Module -> ModLocation -> HpcInfo -> SDoc
-hpcInitCode this_mod mod_loc hpc_info
+hpcInitCode :: DynFlags -> Module -> ModLocation -> HpcInfo -> SDoc
+hpcInitCode dflags this_mod mod_loc hpc_info
  = vcat
     [ text "static void hpc_init_" <> ppr this_mod
          <> text "(void) __attribute__((constructor));"
@@ -1203,12 +1202,12 @@ hpcInitCode this_mod mod_loc hpc_info
               doubleQuotes mod_loc_str,
               int tickCount, -- really StgWord32
               int hashNo,    -- really StgWord32
-              if opt_Hpc then tickboxes else int 0
+              if dopt Opt_Hpc dflags then tickboxes else int 0
             ])) <> semi
        ])
     ]
   where
-    do_hpc | not opt_Hpc               = False
+    do_hpc | not (dopt Opt_Hpc dflags) = False
            | NoHpcInfo {} <- hpc_info  = False
            | otherwise                 = True
     (tickCount, hashNo)
@@ -1217,8 +1216,8 @@ hpcInitCode this_mod mod_loc hpc_info
 
     tickboxes = ppr (mkHpcTicksLabel $ this_mod)
     tickboxes_decl
-      | opt_Hpc   = ptext (sLit "extern StgWord64 ") <> tickboxes <> ptext (sLit "[]") <> semi
-      | otherwise = empty
+      | dopt Opt_Hpc dflags  = ptext (sLit "extern StgWord64 ") <> tickboxes <> ptext (sLit "[]") <> semi
+      | otherwise            = empty
 
     module_name  = hcat (map (text.charToC) $
                          bytesFS (moduleNameFS (Module.moduleName this_mod)))

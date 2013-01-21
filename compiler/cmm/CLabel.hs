@@ -13,6 +13,7 @@ module CLabel (
 
         mkClosureLabel,
         mkSRTLabel,
+        mkModSRTLabel,
         mkInfoTableLabel,
         mkEntryLabel,
         mkSlowEntryLabel,
@@ -105,7 +106,6 @@ module CLabel (
     ) where
 
 import IdInfo
-import StaticFlags
 import BasicTypes
 import Packages
 import DataCon
@@ -121,6 +121,8 @@ import DynFlags
 import Platform
 import UniqSet
 import PprCore ( {- instances -} )
+
+import Data.Maybe (isJust)
 
 -- -----------------------------------------------------------------------------
 -- The CLabel type
@@ -220,6 +222,9 @@ data CLabel
   -- | Per-module debug data
   | HpcDebugData Module
 
+  -- | Static reference table
+  | SRTLabel (Maybe Module) !Unique
+
   -- | Label of an StgLargeSRT
   | LargeSRTLabel
         {-# UNPACK #-} !Unique
@@ -277,7 +282,9 @@ pprDebugCLabel lbl
 
 data IdLabelInfo
   = Closure             -- ^ Label for closure
-  | SRT                 -- ^ Static reference table
+  | SRT                 -- ^ Static reference table (TODO: could be removed
+                        -- with the old code generator, but might be needed
+                        -- when we implement the New SRT Plan)
   | InfoTable           -- ^ Info tables for closures; always read-only
   | Entry               -- ^ Entry point
   | Slow                -- ^ Slow entry point
@@ -352,6 +359,9 @@ data DynamicLinkerLabelInfo
 -- These are always local:
 mkSlowEntryLabel :: Name -> CafInfo -> CLabel
 mkSlowEntryLabel        name c         = IdLabel name  c Slow
+
+mkModSRTLabel     :: Maybe Module -> Unique -> CLabel
+mkModSRTLabel mb_mod u = SRTLabel mb_mod u
 
 mkSRTLabel        :: Name -> CafInfo -> CLabel
 mkRednCountsLabel :: Name -> CafInfo -> CLabel
@@ -588,7 +598,7 @@ needsCDecl :: CLabel -> Bool
   -- False <=> it's pre-declared; don't bother
   -- don't bother declaring SRT & Bitmap labels, we always make sure
   -- they are defined before use.
-needsCDecl (IdLabel _ _ SRT)            = False
+needsCDecl (SRTLabel _ _)               = False
 needsCDecl (LargeSRTLabel _)            = False
 needsCDecl (LargeBitmapLabel _)         = False
 needsCDecl (IdLabel _ _ _)              = True
@@ -738,6 +748,7 @@ externallyVisibleCLabel (DynamicLinkerLabel _ _)  = False
 externallyVisibleCLabel (HpcTicksLabel _)	    = True
 externallyVisibleCLabel (HpcDebugData _)	    = True
 externallyVisibleCLabel (LargeBitmapLabel _)    = False
+externallyVisibleCLabel (SRTLabel mb_mod _)     = isJust mb_mod
 externallyVisibleCLabel (LargeSRTLabel _)       = False
 externallyVisibleCLabel (PicBaseLabel {}) = panic "externallyVisibleCLabel PicBaseLabel"
 externallyVisibleCLabel (DeadStripPreventer {}) = panic "externallyVisibleCLabel DeadStripPreventer"
@@ -785,6 +796,7 @@ labelType (RtsLabel (RtsApFast _))              = CodeLabel
 labelType (CaseLabel _ CaseReturnInfo)          = DataLabel
 labelType (CaseLabel _ _)                       = CodeLabel
 labelType (PlainModuleInitLabel _)              = CodeLabel
+labelType (SRTLabel _ _)                        = CodeLabel
 labelType (LargeSRTLabel _)                     = DataLabel
 labelType (LargeBitmapLabel _)                  = DataLabel
 labelType (ForeignLabel _ _ _ IsFunction)       = CodeLabel
@@ -816,15 +828,15 @@ labelDynamic :: DynFlags -> PackageId -> CLabel -> Bool
 labelDynamic dflags this_pkg lbl =
   case lbl of
    -- is the RTS in a DLL or not?
-   RtsLabel _           -> not opt_Static && (this_pkg /= rtsPackageId)
+   RtsLabel _           -> not (dopt Opt_Static dflags) && (this_pkg /= rtsPackageId)
 
-   IdLabel n _ _        -> isDllName this_pkg n
+   IdLabel n _ _        -> isDllName dflags this_pkg n
 
    -- When compiling in the "dyn" way, each package is to be linked into
    -- its own shared library.
    CmmLabel pkg _ _
     | os == OSMinGW32 ->
-       not opt_Static && (this_pkg /= pkg)
+       not (dopt Opt_Static dflags) && (this_pkg /= pkg)
     | otherwise ->
        True
 
@@ -842,14 +854,14 @@ labelDynamic dflags this_pkg lbl =
             -- When compiling in the "dyn" way, each package is to be
             -- linked into its own DLL.
             ForeignLabelInPackage pkgId ->
-                (not opt_Static) && (this_pkg /= pkgId)
+                (not (dopt Opt_Static dflags)) && (this_pkg /= pkgId)
 
        else -- On Mac OS X and on ELF platforms, false positives are OK,
             -- so we claim that all foreign imports come from dynamic
             -- libraries
             True
 
-   PlainModuleInitLabel m -> not opt_Static && this_pkg /= (modulePackageId m)
+   PlainModuleInitLabel m -> not (dopt Opt_Static dflags) && this_pkg /= (modulePackageId m)
 
    -- Note that DynamicLinkerLabels do NOT require dynamic linking themselves.
    _                 -> False
@@ -986,6 +998,11 @@ pprCLbl (CaseLabel u (CaseAlt tag))
   = hcat [pprUnique u, pp_cSEP, int tag, ptext (sLit "_alt")]
 pprCLbl (CaseLabel u CaseDefault)
   = hcat [pprUnique u, ptext (sLit "_dflt")]
+
+pprCLbl (SRTLabel mb_mod u)
+  = pp_mod <> pprUnique u <> pp_cSEP <> ptext (sLit "srt")
+  where pp_mod | Just mod <- mb_mod = ppr mod <> pp_cSEP
+               | otherwise          = empty
 
 pprCLbl (LargeSRTLabel u)  = pprUnique u <> pp_cSEP <> ptext (sLit "srtd")
 pprCLbl (LargeBitmapLabel u)  = text "b" <> pprUnique u <> pp_cSEP <> ptext (sLit "btm")

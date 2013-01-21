@@ -43,7 +43,7 @@ cmmPipeline hsc_env topSRT prog =
 
      tops <- {-# SCC "tops" #-} mapM (cpsTop hsc_env) prog
 
-     (topSRT, cmms) <- {-# SCC "toTops" #-} doSRTs topSRT tops
+     (topSRT, cmms) <- {-# SCC "doSRTs" #-} doSRTs topSRT tops
      dumpIfSet_dyn dflags Opt_D_dump_cps_cmm "Post CPS Cmm" (ppr cmms)
 
      return (topSRT, cmms)
@@ -105,6 +105,7 @@ cpsTop hsc_env (CmmProc h@(TopInfo {stack_info=StackInfo {arg_space=entry_off}})
 
        ------------- CAF analysis ----------------------------------------------
        let cafEnv = {-# SCC "cafAnal" #-} cafAnal g
+       dumpIfSet_dyn dflags Opt_D_dump_cmmz "CAFEnv" (ppr cafEnv)
 
        if splitting_proc_points
           then do

@@ -45,7 +45,6 @@ module CgUtils (
   ) where
 
 #include "HsVersions.h"
-#include "../includes/stg/HaskellMachRegs.h"
 
 import BlockId
 import CodeGen.Platform
@@ -308,14 +307,15 @@ callerSaveVolatileRegs dflags vols = (caller_save, caller_load)
 
     callerSaveGlobalReg reg next
         | callerSaves platform reg =
-                CmmStore (get_GlobalReg_addr reg)
+                CmmStore (get_GlobalReg_addr platform reg)
                          (CmmReg (CmmGlobal reg)) : next
         | otherwise = next
 
     callerRestoreGlobalReg reg next
         | callerSaves platform reg =
                 CmmAssign (CmmGlobal reg)
-                          (CmmLoad (get_GlobalReg_addr reg) (globalRegType reg))
+                          (CmmLoad (get_GlobalReg_addr platform reg)
+                                   (globalRegType reg))
                         : next
         | otherwise = next
 
@@ -819,10 +819,11 @@ srt_escape = -1
 -- to real machine registers or stored as offsets from BaseReg.  Given
 -- a GlobalReg, get_GlobalReg_addr always produces the
 -- register table address for it.
-get_GlobalReg_addr :: GlobalReg -> CmmExpr
-get_GlobalReg_addr BaseReg = regTableOffset 0
-get_GlobalReg_addr mid     = get_Regtable_addr_from_offset
-                                (globalRegType mid) (baseRegOffset mid)
+get_GlobalReg_addr :: Platform -> GlobalReg -> CmmExpr
+get_GlobalReg_addr _        BaseReg = regTableOffset 0
+get_GlobalReg_addr platform mid
+    = get_Regtable_addr_from_offset platform
+                                    (globalRegType mid) (baseRegOffset mid)
 
 -- Calculate a literal representing an offset into the register table.
 -- Used when we don't have an actual BaseReg to offset from.
@@ -830,13 +831,11 @@ regTableOffset :: Int -> CmmExpr
 regTableOffset n =
   CmmLit (CmmLabelOff mkMainCapabilityLabel (oFFSET_Capability_r + n))
 
-get_Regtable_addr_from_offset   :: CmmType -> Int -> CmmExpr
-get_Regtable_addr_from_offset _ offset =
-#ifdef REG_Base
-  CmmRegOff (CmmGlobal BaseReg) offset
-#else
-  regTableOffset offset
-#endif
+get_Regtable_addr_from_offset :: Platform -> CmmType -> Int -> CmmExpr
+get_Regtable_addr_from_offset platform _ offset =
+    if haveRegBase platform
+    then CmmRegOff (CmmGlobal BaseReg) offset
+    else regTableOffset offset
 
 -- | Fixup global registers so that they assign to locations within the
 -- RegTable if they aren't pinned for the current target.
@@ -857,7 +856,7 @@ fixStgRegStmt platform stmt
   = case stmt of
         CmmAssign (CmmGlobal reg) src ->
             let src' = fixStgRegExpr platform src
-                baseAddr = get_GlobalReg_addr reg
+                baseAddr = get_GlobalReg_addr platform reg
             in case reg `elem` activeStgRegs platform of
                 True  -> CmmAssign (CmmGlobal reg) src'
                 False -> CmmStore baseAddr src'
@@ -905,7 +904,7 @@ fixStgRegExpr platform expr
             case reg `elem` activeStgRegs platform of
                 True  -> expr
                 False ->
-                    let baseAddr = get_GlobalReg_addr reg
+                    let baseAddr = get_GlobalReg_addr platform reg
                     in case reg of
                         BaseReg -> fixStgRegExpr platform baseAddr
                         _other  -> fixStgRegExpr platform

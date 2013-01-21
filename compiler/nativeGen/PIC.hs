@@ -65,6 +65,7 @@ import Reg
 import NCGMonad
 
 
+import Hoopl
 import OldCmm
 import CLabel           ( CLabel, ForeignLabelSource(..), pprCLabel,
                           mkDynamicLinkerLabel, DynamicLinkerLabelInfo(..),
@@ -74,7 +75,6 @@ import CLabel           ( CLabel, ForeignLabelSource(..), pprCLabel,
 import CLabel           ( mkForeignLabel )
 
 
-import StaticFlags	( opt_Static )
 import BasicTypes
 
 import Outputable
@@ -160,7 +160,7 @@ cmmMakePicReference dflags lbl
 	= CmmLit $ CmmLabel lbl
 
 
-	| (dopt Opt_PIC dflags || not opt_Static) && absoluteLabel lbl 
+	| (dopt Opt_PIC dflags || not (dopt Opt_Static dflags)) && absoluteLabel lbl 
 	= CmmMachOp (MO_Add wordWidth) 
 		[ CmmReg (CmmGlobal PicBaseReg)
 		, CmmLit $ picRelative 
@@ -213,14 +213,14 @@ howToAccessLabel
 -- To access the function at SYMBOL from our local module, we just need to
 -- dereference the local __imp_SYMBOL.
 --
--- If opt_Static is set then we assume that all our code will be linked
+-- If Opt_Static is set then we assume that all our code will be linked
 -- into the same .exe file. In this case we always access symbols directly, 
 -- and never use __imp_SYMBOL.
 --
 howToAccessLabel dflags _ OSMinGW32 _ lbl
 
 	-- Assume all symbols will be in the same PE, so just access them directly.
-	| opt_Static
+	| dopt Opt_Static dflags
 	= AccessDirectly
 	
 	-- If the target symbol is in another PE we need to access it via the
@@ -306,7 +306,7 @@ howToAccessLabel dflags _ os _ _
 	--           if we don't dynamically link to Haskell code,
 	--           it actually manages to do so without messing thins up.
 	| osElfTarget os
-	, not (dopt Opt_PIC dflags) && opt_Static 
+	, not (dopt Opt_PIC dflags) && dopt Opt_Static dflags
 	= AccessDirectly
 
 howToAccessLabel dflags arch os DataReference lbl
@@ -428,12 +428,12 @@ needImportedSymbols dflags arch os
 	-- PowerPC Linux: -fPIC or -dynamic
 	| osElfTarget os
 	, arch	== ArchPPC
-	= dopt Opt_PIC dflags || not opt_Static
+	= dopt Opt_PIC dflags || not (dopt Opt_Static dflags)
 
 	-- i386 (and others?): -dynamic but not -fPIC
 	| osElfTarget os
 	, arch	/= ArchPPC_64
-	= not opt_Static && not (dopt Opt_PIC dflags)
+	= not (dopt Opt_Static dflags) && not (dopt Opt_PIC dflags)
 
 	| otherwise
 	= False
@@ -622,7 +622,7 @@ pprImportedSymbol _ (Platform { platformOS = OSDarwin }) _
 --    section.
 --    The "official" GOT mechanism (label@got) isn't intended to be used
 --    in position dependent code, so we have to create our own "fake GOT"
---    when not Opt_PIC && not opt_Static.
+--    when not Opt_PIC && not (dopt Opt_Static dflags).
 --
 -- 2) PowerPC Linux is just plain broken.
 --    While it's theoretically possible to use GOT offsets larger
@@ -752,18 +752,37 @@ initializePicBase_x86
 	-> NatM [NatCmmDecl (Alignment, CmmStatics) X86.Instr]
 
 initializePicBase_x86 ArchX86 os picReg 
-	(CmmProc info lab (ListGraph blocks) : statics)
+        (CmmProc info lab (ListGraph blocks) : statics)
     | osElfTarget os
-    = return (CmmProc info lab (ListGraph (b':tail blocks)) : statics)
-    where BasicBlock bID insns = head blocks
-          b' = BasicBlock bID (X86.FETCHGOT picReg : insns)
+    = return (CmmProc info lab (ListGraph blocks') : statics)
+    where blocks' = case blocks of
+                     [] -> []
+                     (b:bs) -> fetchGOT b : map maybeFetchGOT bs
+
+          -- we want to add a FETCHGOT instruction to the beginning of
+          -- every block that is an entry point, which corresponds to
+          -- the blocks that have entries in the info-table mapping.
+          maybeFetchGOT b@(BasicBlock bID _)
+            | bID `mapMember` info = fetchGOT b
+            | otherwise            = b
+
+          fetchGOT (BasicBlock bID insns) =
+             BasicBlock bID (X86.FETCHGOT picReg : insns)
 
 initializePicBase_x86 ArchX86 OSDarwin picReg
 	(CmmProc info lab (ListGraph blocks) : statics)
-	= return (CmmProc info lab (ListGraph (b':tail blocks)) : statics)
+        = return (CmmProc info lab (ListGraph blocks') : statics)
 
-	where 	BasicBlock bID insns = head blocks
-          	b' = BasicBlock bID (X86.FETCHPC picReg : insns)
+    where blocks' = case blocks of
+                     [] -> []
+                     (b:bs) -> fetchPC b : map maybeFetchPC bs
+
+          maybeFetchPC b@(BasicBlock bID _)
+            | bID `mapMember` info = fetchPC b
+            | otherwise            = b
+
+          fetchPC (BasicBlock bID insns) =
+             BasicBlock bID (X86.FETCHPC picReg : insns)
 
 initializePicBase_x86 _ _ _ _
 	= panic "initializePicBase_x86: not needed"

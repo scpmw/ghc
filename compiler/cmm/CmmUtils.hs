@@ -1,10 +1,4 @@
 {-# LANGUAGE GADTs #-}
-{-# OPTIONS -fno-warn-tabs #-}
--- The above warning supression flag is a temporary kludge.
--- While working on this module you are encouraged to remove it and
--- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
--- for details
 
 {-# OPTIONS_GHC -fno-warn-deprecations #-}
 -- Warnings from deprecated blockToNodeList
@@ -18,36 +12,37 @@
 --
 -----------------------------------------------------------------------------
 
-module CmmUtils( 
+module CmmUtils(
         -- CmmType
-	primRepCmmType, primRepForeignHint,
-	typeCmmType, typeForeignHint,
+        primRepCmmType, primRepForeignHint,
+        typeCmmType, typeForeignHint,
 
-	-- CmmLit
-	zeroCLit, mkIntCLit, 
-	mkWordCLit, packHalfWordsCLit,
-	mkByteStringCLit, 
+        -- CmmLit
+        zeroCLit, mkIntCLit,
+        mkWordCLit, packHalfWordsCLit,
+        mkByteStringCLit,
         mkDataLits, mkRODataLits,
 
-	-- CmmExpr
-	mkLblExpr,
-	cmmRegOff,  cmmOffset,  cmmLabelOff,  cmmOffsetLit,  cmmOffsetExpr, 
-	cmmRegOffB, cmmOffsetB, cmmLabelOffB, cmmOffsetLitB, cmmOffsetExprB,
-	cmmRegOffW, cmmOffsetW, cmmLabelOffW, cmmOffsetLitW, cmmOffsetExprW,
-	cmmIndex, cmmIndexExpr, cmmLoadIndex, cmmLoadIndexW,
-	cmmNegate, 
-  	cmmULtWord, cmmUGeWord, cmmUGtWord, cmmSubWord,
-  	cmmNeWord, cmmEqWord, cmmOrWord, cmmAndWord,
-  	cmmUShrWord, cmmAddWord, cmmMulWord,
+        -- CmmExpr
+        mkIntExpr, zeroExpr,
+        mkLblExpr,
+        cmmRegOff,  cmmOffset,  cmmLabelOff,  cmmOffsetLit,  cmmOffsetExpr,
+        cmmRegOffB, cmmOffsetB, cmmLabelOffB, cmmOffsetLitB, cmmOffsetExprB,
+        cmmRegOffW, cmmOffsetW, cmmLabelOffW, cmmOffsetLitW, cmmOffsetExprW,
+        cmmIndex, cmmIndexExpr, cmmLoadIndex, cmmLoadIndexW,
+        cmmNegate,
+        cmmULtWord, cmmUGeWord, cmmUGtWord, cmmSubWord,
+        cmmNeWord, cmmEqWord, cmmOrWord, cmmAndWord,
+        cmmUShrWord, cmmAddWord, cmmMulWord, cmmQuotWord,
 
-	isTrivialCmmExpr, hasNoGlobalRegs,
-	
-	-- Statics
-	blankWord,
+        isTrivialCmmExpr, hasNoGlobalRegs,
 
-	-- Tagging
-	cmmTagMask, cmmPointerMask, cmmUntag, cmmGetTag, cmmIsTagged,
-	cmmConstrTag, cmmConstrTag1,
+        -- Statics
+        blankWord,
+
+        -- Tagging
+        cmmTagMask, cmmPointerMask, cmmUntag, cmmGetTag, cmmIsTagged,
+        cmmConstrTag, cmmConstrTag1,
 
         -- Liveness and bitmaps
         mkLiveness,
@@ -59,7 +54,7 @@ module CmmUtils(
         ofBlockMap, toBlockMap, insertBlock,
         ofBlockList, toBlockList, bodyToBlockList,
         foldGraphBlocks, mapGraphNodes, postorderDfs, mapGraphNodes1,
-      
+
         analFwd, analBwd, analRewFwd, analRewBwd,
         dataflowPassFwd, dataflowPassBwd, dataflowAnalFwd, dataflowAnalBwd,
         dataflowAnalFwdBlocks
@@ -67,8 +62,8 @@ module CmmUtils(
 
 #include "HsVersions.h"
 
-import TyCon	( PrimRep(..) )
-import Type	( UnaryType, typePrimRep )
+import TyCon    ( PrimRep(..) )
+import Type     ( UnaryType, typePrimRep )
 
 import SMRep
 import Cmm
@@ -87,15 +82,15 @@ import Hoopl
 
 ---------------------------------------------------
 --
---	CmmTypes
+--      CmmTypes
 --
 ---------------------------------------------------
 
 primRepCmmType :: PrimRep -> CmmType
 primRepCmmType VoidRep    = panic "primRepCmmType:VoidRep"
 primRepCmmType PtrRep     = gcWord
-primRepCmmType IntRep	  = bWord
-primRepCmmType WordRep	  = bWord
+primRepCmmType IntRep     = bWord
+primRepCmmType WordRep    = bWord
 primRepCmmType Int64Rep   = b64
 primRepCmmType Word64Rep  = b64
 primRepCmmType AddrRep    = bWord
@@ -106,33 +101,39 @@ typeCmmType :: UnaryType -> CmmType
 typeCmmType ty = primRepCmmType (typePrimRep ty)
 
 primRepForeignHint :: PrimRep -> ForeignHint
-primRepForeignHint VoidRep	= panic "primRepForeignHint:VoidRep"
-primRepForeignHint PtrRep	= AddrHint
-primRepForeignHint IntRep	= SignedHint
-primRepForeignHint WordRep	= NoHint
-primRepForeignHint Int64Rep	= SignedHint
-primRepForeignHint Word64Rep	= NoHint
+primRepForeignHint VoidRep      = panic "primRepForeignHint:VoidRep"
+primRepForeignHint PtrRep       = AddrHint
+primRepForeignHint IntRep       = SignedHint
+primRepForeignHint WordRep      = NoHint
+primRepForeignHint Int64Rep     = SignedHint
+primRepForeignHint Word64Rep    = NoHint
 primRepForeignHint AddrRep      = AddrHint -- NB! AddrHint, but NonPtrArg
-primRepForeignHint FloatRep	= NoHint
-primRepForeignHint DoubleRep	= NoHint
+primRepForeignHint FloatRep     = NoHint
+primRepForeignHint DoubleRep    = NoHint
 
 typeForeignHint :: UnaryType -> ForeignHint
 typeForeignHint = primRepForeignHint . typePrimRep
 
 ---------------------------------------------------
 --
---	CmmLit
+--      CmmLit
 --
 ---------------------------------------------------
 
 mkIntCLit :: Int -> CmmLit
 mkIntCLit i = CmmInt (toInteger i) wordWidth
 
+mkIntExpr :: Int -> CmmExpr
+mkIntExpr i = CmmLit $! mkIntCLit i
+
 zeroCLit :: CmmLit
 zeroCLit = CmmInt 0 wordWidth
 
+zeroExpr :: CmmExpr
+zeroExpr = CmmLit zeroCLit
+
 mkByteStringCLit :: Unique -> [Word8] -> (CmmLit, GenCmmDecl CmmStatics info stmt)
--- We have to make a top-level decl for the string, 
+-- We have to make a top-level decl for the string,
 -- and return a literal pointing to it
 mkByteStringCLit uniq bytes
   = (CmmLabel lbl, CmmData ReadOnlyData $ Statics lbl [CmmString bytes])
@@ -147,7 +148,7 @@ mkRODataLits :: CLabel -> [CmmLit] -> GenCmmDecl CmmStatics info stmt
 -- Build a read-only data block
 mkRODataLits lbl lits
   = mkDataLits section lbl lits
-  where 
+  where
     section | any needsRelocation lits = RelocatableReadOnlyData
             | otherwise                = ReadOnlyData
     needsRelocation (CmmLabel _)      = True
@@ -159,22 +160,22 @@ mkWordCLit wd = CmmInt (fromIntegral wd) wordWidth
 
 packHalfWordsCLit :: (Integral a, Integral b) => a -> b -> CmmLit
 -- Make a single word literal in which the lower_half_word is
--- at the lower address, and the upper_half_word is at the 
+-- at the lower address, and the upper_half_word is at the
 -- higher address
 -- ToDo: consider using half-word lits instead
--- 	 but be careful: that's vulnerable when reversed
+--       but be careful: that's vulnerable when reversed
 packHalfWordsCLit lower_half_word upper_half_word
 #ifdef WORDS_BIGENDIAN
    = mkWordCLit ((fromIntegral lower_half_word `shiftL` hALF_WORD_SIZE_IN_BITS)
-		 .|. fromIntegral upper_half_word)
-#else 
-   = mkWordCLit ((fromIntegral lower_half_word) 
-		 .|. (fromIntegral upper_half_word `shiftL` hALF_WORD_SIZE_IN_BITS))
+                 .|. fromIntegral upper_half_word)
+#else
+   = mkWordCLit ((fromIntegral lower_half_word)
+                 .|. (fromIntegral upper_half_word `shiftL` hALF_WORD_SIZE_IN_BITS))
 #endif
 
 ---------------------------------------------------
 --
---	CmmExpr
+--      CmmExpr
 --
 ---------------------------------------------------
 
@@ -199,8 +200,8 @@ cmmOffset (CmmReg reg)      byte_off = cmmRegOff reg byte_off
 cmmOffset (CmmRegOff reg m) byte_off = cmmRegOff reg (m+byte_off)
 cmmOffset (CmmLit lit)      byte_off = CmmLit (cmmOffsetLit lit byte_off)
 cmmOffset (CmmMachOp (MO_Add rep) [expr, CmmLit (CmmInt byte_off1 _rep)]) byte_off2
-  = CmmMachOp (MO_Add rep) 
-	      [expr, CmmLit (CmmInt (byte_off1 + toInteger byte_off2) rep)]
+  = CmmMachOp (MO_Add rep)
+              [expr, CmmLit (CmmInt (byte_off1 + toInteger byte_off2) rep)]
 cmmOffset expr byte_off
   = CmmMachOp (MO_Add width) [expr, CmmLit (CmmInt (toInteger byte_off) width)]
   where
@@ -211,10 +212,10 @@ cmmRegOff :: CmmReg -> Int -> CmmExpr
 cmmRegOff reg byte_off = CmmRegOff reg byte_off
 
 cmmOffsetLit :: CmmLit -> Int -> CmmLit
-cmmOffsetLit (CmmLabel l)      byte_off = cmmLabelOff	l byte_off
-cmmOffsetLit (CmmLabelOff l m) byte_off = cmmLabelOff	l (m+byte_off)
+cmmOffsetLit (CmmLabel l)      byte_off = cmmLabelOff l byte_off
+cmmOffsetLit (CmmLabelOff l m) byte_off = cmmLabelOff l (m+byte_off)
 cmmOffsetLit (CmmInt m rep)    byte_off = CmmInt (m + fromIntegral byte_off) rep
-cmmOffsetLit _    	       byte_off = pprPanic "cmmOffsetLit" (ppr byte_off)
+cmmOffsetLit _                 byte_off = pprPanic "cmmOffsetLit" (ppr byte_off)
 
 cmmLabelOff :: CLabel -> Int -> CmmLit
 -- Smart constructor for CmmLabelOff
@@ -223,23 +224,23 @@ cmmLabelOff lbl byte_off = CmmLabelOff lbl byte_off
 
 -- | Useful for creating an index into an array, with a staticaly known offset.
 -- The type is the element type; used for making the multiplier
-cmmIndex :: Width	-- Width w
-	 -> CmmExpr	-- Address of vector of items of width w
-	 -> Int		-- Which element of the vector (0 based)
-	 -> CmmExpr	-- Address of i'th element
+cmmIndex :: Width       -- Width w
+         -> CmmExpr     -- Address of vector of items of width w
+         -> Int         -- Which element of the vector (0 based)
+         -> CmmExpr     -- Address of i'th element
 cmmIndex width base idx = cmmOffset base (idx * widthInBytes width)
 
 -- | Useful for creating an index into an array, with an unknown offset.
-cmmIndexExpr :: Width		-- Width w
-	     -> CmmExpr		-- Address of vector of items of width w
-	     -> CmmExpr		-- Which element of the vector (0 based)
-	     -> CmmExpr		-- Address of i'th element
+cmmIndexExpr :: Width           -- Width w
+             -> CmmExpr         -- Address of vector of items of width w
+             -> CmmExpr         -- Which element of the vector (0 based)
+             -> CmmExpr         -- Address of i'th element
 cmmIndexExpr width base (CmmLit (CmmInt n _)) = cmmIndex width base (fromInteger n)
 cmmIndexExpr width base idx =
   cmmOffsetExpr base byte_off
   where
     idx_w = cmmExprWidth idx
-    byte_off = CmmMachOp (MO_Shl idx_w) [idx, CmmLit (mkIntCLit (widthInLog width))]
+    byte_off = CmmMachOp (MO_Shl idx_w) [idx, mkIntExpr (widthInLog width)]
 
 cmmLoadIndex :: CmmType -> CmmExpr -> Int -> CmmExpr
 cmmLoadIndex ty expr ix = CmmLoad (cmmIndex (typeWidth ty) expr ix) ty
@@ -285,7 +286,7 @@ cmmLoadIndexW base off ty = CmmLoad (cmmOffsetW base off) ty
 -----------------------
 cmmULtWord, cmmUGeWord, cmmUGtWord, cmmSubWord,
   cmmNeWord, cmmEqWord, cmmOrWord, cmmAndWord,
-  cmmUShrWord, cmmAddWord, cmmMulWord
+  cmmUShrWord, cmmAddWord, cmmMulWord, cmmQuotWord
   :: CmmExpr -> CmmExpr -> CmmExpr
 cmmOrWord  e1 e2 = CmmMachOp mo_wordOr  [e1, e2]
 cmmAndWord e1 e2 = CmmMachOp mo_wordAnd [e1, e2]
@@ -299,47 +300,48 @@ cmmUShrWord e1 e2 = CmmMachOp mo_wordUShr [e1, e2]
 cmmAddWord e1 e2 = CmmMachOp mo_wordAdd [e1, e2]
 cmmSubWord e1 e2 = CmmMachOp mo_wordSub [e1, e2]
 cmmMulWord e1 e2 = CmmMachOp mo_wordMul [e1, e2]
+cmmQuotWord e1 e2 = CmmMachOp mo_wordUQuot [e1, e2]
 
 cmmNegate :: CmmExpr -> CmmExpr
 cmmNegate (CmmLit (CmmInt n rep)) = CmmLit (CmmInt (-n) rep)
-cmmNegate e			  = CmmMachOp (MO_S_Neg (cmmExprWidth e)) [e]
+cmmNegate e                       = CmmMachOp (MO_S_Neg (cmmExprWidth e)) [e]
 
 blankWord :: CmmStatic
 blankWord = CmmUninitialised wORD_SIZE
 
 ---------------------------------------------------
 --
---	CmmExpr predicates
+--      CmmExpr predicates
 --
 ---------------------------------------------------
 
 isTrivialCmmExpr :: CmmExpr -> Bool
-isTrivialCmmExpr (CmmLoad _ _)   = False
-isTrivialCmmExpr (CmmMachOp _ _) = False
-isTrivialCmmExpr (CmmLit _)      = True
-isTrivialCmmExpr (CmmReg _)      = True
-isTrivialCmmExpr (CmmRegOff _ _) = True
+isTrivialCmmExpr (CmmLoad _ _)      = False
+isTrivialCmmExpr (CmmMachOp _ _)    = False
+isTrivialCmmExpr (CmmLit _)         = True
+isTrivialCmmExpr (CmmReg _)         = True
+isTrivialCmmExpr (CmmRegOff _ _)    = True
 isTrivialCmmExpr (CmmStackSlot _ _) = panic "isTrivialCmmExpr CmmStackSlot"
 
 hasNoGlobalRegs :: CmmExpr -> Bool
-hasNoGlobalRegs (CmmLoad e _)   	   = hasNoGlobalRegs e
-hasNoGlobalRegs (CmmMachOp _ es) 	   = all hasNoGlobalRegs es
-hasNoGlobalRegs (CmmLit _)      	   = True
+hasNoGlobalRegs (CmmLoad e _)              = hasNoGlobalRegs e
+hasNoGlobalRegs (CmmMachOp _ es)           = all hasNoGlobalRegs es
+hasNoGlobalRegs (CmmLit _)                 = True
 hasNoGlobalRegs (CmmReg (CmmLocal _))      = True
 hasNoGlobalRegs (CmmRegOff (CmmLocal _) _) = True
 hasNoGlobalRegs _ = False
 
 ---------------------------------------------------
 --
---	Tagging
+--      Tagging
 --
 ---------------------------------------------------
 
 -- Tag bits mask
 --cmmTagBits = CmmLit (mkIntCLit tAG_BITS)
 cmmTagMask, cmmPointerMask :: CmmExpr
-cmmTagMask = CmmLit (mkIntCLit tAG_MASK)
-cmmPointerMask = CmmLit (mkIntCLit (complement tAG_MASK))
+cmmTagMask = mkIntExpr tAG_MASK
+cmmPointerMask = mkIntExpr (complement tAG_MASK)
 
 -- Used to untag a possibly tagged pointer
 -- A static label need not be untagged
@@ -353,10 +355,10 @@ cmmGetTag e = (e `cmmAndWord` cmmTagMask)
 -- Test if a closure pointer is untagged
 cmmIsTagged :: CmmExpr -> CmmExpr
 cmmIsTagged e = (e `cmmAndWord` cmmTagMask)
-                 `cmmNeWord` CmmLit zeroCLit
+                 `cmmNeWord` zeroExpr
 
 cmmConstrTag, cmmConstrTag1 :: CmmExpr -> CmmExpr
-cmmConstrTag e = (e `cmmAndWord` cmmTagMask) `cmmSubWord` (CmmLit (mkIntCLit 1))
+cmmConstrTag e = (e `cmmAndWord` cmmTagMask) `cmmSubWord` mkIntExpr 1
 -- Get constructor tag, but one based.
 cmmConstrTag1 e = e `cmmAndWord` cmmTagMask
 
@@ -369,8 +371,8 @@ cmmConstrTag1 e = e `cmmAndWord` cmmTagMask
 
 mkLiveness :: [Maybe LocalReg] -> Liveness
 mkLiveness [] = []
-mkLiveness (reg:regs) 
-  = take sizeW bits ++ mkLiveness regs 
+mkLiveness (reg:regs)
+  = take sizeW bits ++ mkLiveness regs
   where
     sizeW = case reg of
               Nothing -> 1

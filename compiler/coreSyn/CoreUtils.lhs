@@ -66,6 +66,7 @@ import Outputable
 import TysPrim
 import FastString
 import Maybes
+import Platform
 import Util
 import Pair
 import Data.Word
@@ -1748,7 +1749,7 @@ and 'execute' it rather than allocating it statically.
 -- | This function is called only on *top-level* right-hand sides.
 -- Returns @True@ if the RHS can be allocated statically in the output,
 -- with no thunks involved at all.
-rhsIsStatic :: (Name -> Bool) -> CoreExpr -> Bool
+rhsIsStatic :: Platform -> (Name -> Bool) -> CoreExpr -> Bool
 -- It's called (i) in TidyPgm.hasCafRefs to decide if the rhs is, or
 -- refers to, CAFs; (ii) in CoreToStg to decide whether to put an
 -- update flag on it and (iii) in DsExpr to decide how to expand
@@ -1803,7 +1804,7 @@ rhsIsStatic :: (Name -> Bool) -> CoreExpr -> Bool
 --
 --    c) don't look through unfolding of f in (f x).
 
-rhsIsStatic _is_dynamic_name rhs = is_static False rhs
+rhsIsStatic platform is_dynamic_name rhs = is_static False rhs
   where
   is_static :: Bool     -- True <=> in a constructor argument; must be atomic
             -> CoreExpr -> Bool
@@ -1828,9 +1829,8 @@ rhsIsStatic _is_dynamic_name rhs = is_static False rhs
   is_static in_arg other_expr = go other_expr 0
    where
     go (Var f) n_val_args
-#if mingw32_TARGET_OS
-        | not (_is_dynamic_name (idName f))
-#endif
+        | (platformOS platform /= OSMinGW32) ||
+          not (is_dynamic_name (idName f))
         =  saturated_data_con f n_val_args
         || (in_arg && n_val_args == 0)
                 -- A naked un-applied variable is *not* deemed a static RHS

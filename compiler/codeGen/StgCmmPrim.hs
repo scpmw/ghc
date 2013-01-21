@@ -49,6 +49,7 @@ import Outputable
 import Util
 
 import Control.Monad (liftM)
+import Data.Bits
 
 ------------------------------------------------------------------------
 --	Primitive operations and foreign calls
@@ -181,7 +182,7 @@ emitPrimOp [res_r,res_c] IntAddCOp [aa,bb]
 		    CmmMachOp mo_wordNot [CmmMachOp mo_wordXor [aa,bb]],
 		    CmmMachOp mo_wordXor [aa, CmmReg (CmmLocal res_r)]
 		], 
-	        CmmLit (mkIntCLit (wORD_SIZE_IN_BITS - 1))
+                mkIntExpr (wORD_SIZE_IN_BITS - 1)
 	  ]
      ]
 
@@ -204,7 +205,7 @@ emitPrimOp [res_r,res_c] IntSubCOp [aa,bb]
 		    CmmMachOp mo_wordXor [aa,bb],
 		    CmmMachOp mo_wordXor [aa, CmmReg (CmmLocal res_r)]
 		], 
-	        CmmLit (mkIntCLit (wORD_SIZE_IN_BITS - 1))
+                mkIntExpr (wORD_SIZE_IN_BITS - 1)
 	  ]
      ]
 
@@ -497,11 +498,16 @@ emitPrimOp [] SetByteArrayOp [ba,off,len,c] =
     doSetByteArrayOp ba off len c
 
 -- Population count
-emitPrimOp [res] PopCnt8Op [w] = emitPopCntCall res w W8
-emitPrimOp [res] PopCnt16Op [w] = emitPopCntCall res w W16
-emitPrimOp [res] PopCnt32Op [w] = emitPopCntCall res w W32
-emitPrimOp [res] PopCnt64Op [w] = emitPopCntCall res w W64
-emitPrimOp [res] PopCntOp [w] = emitPopCntCall res w wordWidth
+emitPrimOp [res] PopCnt8Op [w] =
+  emitPopCntCall res (CmmMachOp mo_WordTo8 [w]) W8
+emitPrimOp [res] PopCnt16Op [w] =
+  emitPopCntCall res (CmmMachOp mo_WordTo16 [w]) W16
+emitPrimOp [res] PopCnt32Op [w] =
+  emitPopCntCall res (CmmMachOp mo_WordTo32 [w]) W32
+emitPrimOp [res] PopCnt64Op [w] =
+  emitPopCntCall res w W64 -- arg always has type W64, no need to narrow
+emitPrimOp [res] PopCntOp [w] =
+  emitPopCntCall res w wordWidth
 
 -- The rest just translate straightforwardly
 emitPrimOp [res] op [arg]
@@ -624,8 +630,18 @@ genericWordQuotRem2Op _ _ = panic "genericWordQuotRem2Op"
 
 genericWordAdd2Op :: GenericOp
 genericWordAdd2Op [res_h, res_l] [arg_x, arg_y]
-  = do r1 <- newTemp (cmmExprType arg_x)
+  = do dflags <- getDynFlags
+       let platform = targetPlatform dflags
+       r1 <- newTemp (cmmExprType arg_x)
        r2 <- newTemp (cmmExprType arg_x)
+       let topHalf x = CmmMachOp (MO_U_Shr wordWidth) [x, hww]
+           toTopHalf x = CmmMachOp (MO_Shl wordWidth) [x, hww]
+           bottomHalf x = CmmMachOp (MO_And wordWidth) [x, hwm]
+           add x y = CmmMachOp (MO_Add wordWidth) [x, y]
+           or x y = CmmMachOp (MO_Or wordWidth) [x, y]
+           hww = CmmLit (CmmInt (fromIntegral (widthInBits (halfWordWidth platform)))
+                                wordWidth)
+           hwm = CmmLit (CmmInt (halfWordMask platform) wordWidth)
        emit $ catAGraphs
           [mkAssign (CmmLocal r1)
                (add (bottomHalf arg_x) (bottomHalf arg_y)),
@@ -637,25 +653,29 @@ genericWordAdd2Op [res_h, res_l] [arg_x, arg_y]
            mkAssign (CmmLocal res_l)
                (or (toTopHalf (CmmReg (CmmLocal r2)))
                    (bottomHalf (CmmReg (CmmLocal r1))))]
-   where topHalf x = CmmMachOp (MO_U_Shr wordWidth) [x, hww]
-         toTopHalf x = CmmMachOp (MO_Shl wordWidth) [x, hww]
-         bottomHalf x = CmmMachOp (MO_And wordWidth) [x, hwm]
-         add x y = CmmMachOp (MO_Add wordWidth) [x, y]
-         or x y = CmmMachOp (MO_Or wordWidth) [x, y]
-         hww = CmmLit (CmmInt (fromIntegral (widthInBits halfWordWidth))
-                              wordWidth)
-         hwm = CmmLit (CmmInt halfWordMask wordWidth)
 genericWordAdd2Op _ _ = panic "genericWordAdd2Op"
 
 genericWordMul2Op :: GenericOp
 genericWordMul2Op [res_h, res_l] [arg_x, arg_y]
- = do let t = cmmExprType arg_x
+ = do dflags <- getDynFlags
+      let platform = targetPlatform dflags
+          t = cmmExprType arg_x
       xlyl <- liftM CmmLocal $ newTemp t
       xlyh <- liftM CmmLocal $ newTemp t
       xhyl <- liftM CmmLocal $ newTemp t
       r    <- liftM CmmLocal $ newTemp t
       -- This generic implementation is very simple and slow. We might
       -- well be able to do better, but for now this at least works.
+      let topHalf x = CmmMachOp (MO_U_Shr wordWidth) [x, hww]
+          toTopHalf x = CmmMachOp (MO_Shl wordWidth) [x, hww]
+          bottomHalf x = CmmMachOp (MO_And wordWidth) [x, hwm]
+          add x y = CmmMachOp (MO_Add wordWidth) [x, y]
+          sum = foldl1 add
+          mul x y = CmmMachOp (MO_Mul wordWidth) [x, y]
+          or x y = CmmMachOp (MO_Or wordWidth) [x, y]
+          hww = CmmLit (CmmInt (fromIntegral (widthInBits (halfWordWidth platform)))
+                               wordWidth)
+          hwm = CmmLit (CmmInt (halfWordMask platform) wordWidth)
       emit $ catAGraphs
              [mkAssign xlyl
                   (mul (bottomHalf arg_x) (bottomHalf arg_y)),
@@ -675,16 +695,6 @@ genericWordMul2Op [res_h, res_l] [arg_x, arg_y]
                         topHalf (CmmReg xhyl),
                         topHalf (CmmReg xlyh),
                         topHalf (CmmReg r)])]
-   where topHalf x = CmmMachOp (MO_U_Shr wordWidth) [x, hww]
-         toTopHalf x = CmmMachOp (MO_Shl wordWidth) [x, hww]
-         bottomHalf x = CmmMachOp (MO_And wordWidth) [x, hwm]
-         add x y = CmmMachOp (MO_Add wordWidth) [x, y]
-         sum = foldl1 add
-         mul x y = CmmMachOp (MO_Mul wordWidth) [x, y]
-         or x y = CmmMachOp (MO_Or wordWidth) [x, y]
-         hww = CmmLit (CmmInt (fromIntegral (widthInBits halfWordWidth))
-                              wordWidth)
-         hwm = CmmLit (CmmInt halfWordMask wordWidth)
 genericWordMul2Op _ _ = panic "genericWordMul2Op"
 
 -- These PrimOps are NOPs in Cmm
@@ -912,7 +922,7 @@ doWritePtrArrayOp addr idx val
           (cmmOffsetExprW (cmmOffsetB addr (arrPtrsHdrSize dflags))
                          (loadArrPtrsSize dflags addr))
           (CmmMachOp mo_wordUShr [idx,
-                                  CmmLit (mkIntCLit mUT_ARR_PTRS_CARD_BITS)])
+                                  mkIntExpr mUT_ARR_PTRS_CARD_BITS])
          ) (CmmLit (CmmInt 1 W8))
        
 loadArrPtrsSize :: DynFlags -> CmmExpr -> CmmExpr
@@ -962,7 +972,7 @@ doCopyByteArrayOp = emitCopyByteArray copy
     -- Copy data (we assume the arrays aren't overlapping since
     -- they're of different types)
     copy _src _dst dst_p src_p bytes =
-        emitMemcpyCall dst_p src_p bytes (CmmLit (mkIntCLit 1))
+        emitMemcpyCall dst_p src_p bytes (mkIntExpr 1)
 
 -- | Takes a source 'MutableByteArray#', an offset in the source
 -- array, a destination 'MutableByteArray#', an offset into the
@@ -978,8 +988,8 @@ doCopyMutableByteArrayOp = emitCopyByteArray copy
     -- TODO: Optimize branch for common case of no aliasing.
     copy src dst dst_p src_p bytes = do
         [moveCall, cpyCall] <- forkAlts [
-            getCode $ emitMemmoveCall dst_p src_p bytes (CmmLit (mkIntCLit 1)),
-            getCode $ emitMemcpyCall  dst_p src_p bytes (CmmLit (mkIntCLit 1))
+            getCode $ emitMemmoveCall dst_p src_p bytes (mkIntExpr 1),
+            getCode $ emitMemcpyCall  dst_p src_p bytes (mkIntExpr 1)
             ]
         emit =<< mkCmmIfThenElse (cmmEqWord src dst) moveCall cpyCall
 
@@ -1004,7 +1014,7 @@ doSetByteArrayOp :: CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr
 doSetByteArrayOp ba off len c
     = do dflags <- getDynFlags
          p <- assignTempE $ cmmOffsetExpr (cmmOffsetB ba (arrWordsHdrSize dflags)) off
-         emitMemsetCall p c len (CmmLit (mkIntCLit 1))
+         emitMemsetCall p c len (mkIntExpr 1)
 
 -- ----------------------------------------------------------------------------
 -- Copying pointer arrays
@@ -1034,7 +1044,7 @@ doCopyArrayOp = emitCopyArray copy
     -- Copy data (we assume the arrays aren't overlapping since
     -- they're of different types)
     copy _src _dst dst_p src_p bytes =
-        emitMemcpyCall dst_p src_p bytes (CmmLit (mkIntCLit wORD_SIZE))
+        emitMemcpyCall dst_p src_p bytes (mkIntExpr wORD_SIZE)
 
 
 -- | Takes a source 'MutableArray#', an offset in the source array, a
@@ -1050,8 +1060,8 @@ doCopyMutableArrayOp = emitCopyArray copy
     -- TODO: Optimize branch for common case of no aliasing.
     copy src dst dst_p src_p bytes = do
         [moveCall, cpyCall] <- forkAlts [
-            getCode $ emitMemmoveCall dst_p src_p bytes (CmmLit (mkIntCLit wORD_SIZE)),
-            getCode $ emitMemcpyCall  dst_p src_p bytes (CmmLit (mkIntCLit wORD_SIZE))
+            getCode $ emitMemmoveCall dst_p src_p bytes (mkIntExpr wORD_SIZE),
+            getCode $ emitMemcpyCall  dst_p src_p bytes (mkIntExpr wORD_SIZE)
             ]
         emit =<< mkCmmIfThenElse (cmmEqWord src dst) moveCall cpyCall
 
@@ -1074,7 +1084,7 @@ emitCopyArray copy src0 src_off0 dst0 dst_off0 n0 = do
     dst_elems_p <- assignTempE $ cmmOffsetB dst (arrPtrsHdrSize dflags)
     dst_p <- assignTempE $ cmmOffsetExprW dst_elems_p dst_off
     src_p <- assignTempE $ cmmOffsetExprW (cmmOffsetB src (arrPtrsHdrSize dflags)) src_off
-    bytes <- assignTempE $ cmmMulWord n (CmmLit (mkIntCLit wORD_SIZE))
+    bytes <- assignTempE $ cmmMulWord n (mkIntExpr wORD_SIZE)
 
     copy src dst dst_p src_p bytes
 
@@ -1095,17 +1105,15 @@ emitCloneArray info_p res_r src0 src_off0 n0 = do
     src_off <- assignTempE src_off0
     n       <- assignTempE n0
 
-    card_words <- assignTempE $ (n `cmmUShrWord`
-                                (CmmLit (mkIntCLit mUT_ARR_PTRS_CARD_BITS)))
-                  `cmmAddWord` CmmLit (mkIntCLit 1)
-    size <- assignTempE $ n `cmmAddWord` card_words
+    card_bytes <- assignTempE $ cardRoundUp n
+    size <- assignTempE $ n `cmmAddWord` bytesToWordsRoundUp card_bytes
     dflags <- getDynFlags
     words <- assignTempE $ arrPtrsHdrSizeW dflags `cmmAddWord` size
 
     arr_r <- newTemp bWord
     emitAllocateCall arr_r myCapability words
-    tickyAllocPrim (CmmLit (mkIntCLit (arrPtrsHdrSize dflags))) (n `cmmMulWord` wordSize)
-        (CmmLit $ mkIntCLit 0)
+    tickyAllocPrim (mkIntExpr (arrPtrsHdrSize dflags)) (n `cmmMulWord` wordSize)
+                   zeroExpr
 
     let arr = CmmReg (CmmLocal arr_r)
     emitSetDynHdr arr (CmmLit (CmmLabel info_p)) curCCS
@@ -1118,19 +1126,17 @@ emitCloneArray info_p res_r src0 src_off0 n0 = do
     src_p <- assignTempE $ cmmOffsetExprW (cmmOffsetB src (arrPtrsHdrSize dflags))
              src_off
 
-    emitMemcpyCall dst_p src_p (n `cmmMulWord` wordSize) (CmmLit (mkIntCLit wORD_SIZE))
+    emitMemcpyCall dst_p src_p (n `cmmMulWord` wordSize) (mkIntExpr wORD_SIZE)
 
     emitMemsetCall (cmmOffsetExprW dst_p n)
-        (CmmLit (mkIntCLit 1))
-        (card_words `cmmMulWord` wordSize)
-        (CmmLit (mkIntCLit wORD_SIZE))
+        (mkIntExpr 1)
+        card_bytes
+        (mkIntExpr wORD_SIZE)
     emit $ mkAssign (CmmLocal res_r) arr
   where
-    arrPtrsHdrSizeW dflags = CmmLit $ mkIntCLit $ fixedHdrSize dflags +
-                                 (sIZEOF_StgMutArrPtrs_NoHdr `div` wORD_SIZE)
-    wordSize = CmmLit (mkIntCLit wORD_SIZE)
-    myCapability = CmmReg baseReg `cmmSubWord`
-                   CmmLit (mkIntCLit oFFSET_Capability_r)
+    arrPtrsHdrSizeW dflags = mkIntExpr (fixedHdrSize dflags +
+                                 (sIZEOF_StgMutArrPtrs_NoHdr `div` wORD_SIZE))
+    myCapability = CmmReg baseReg `cmmSubWord` mkIntExpr oFFSET_Capability_r
 
 -- | Takes and offset in the destination array, the base address of
 -- the card table, and the number of elements affected (*not* the
@@ -1139,13 +1145,24 @@ emitSetCards :: CmmExpr -> CmmExpr -> CmmExpr -> FCode ()
 emitSetCards dst_start dst_cards_start n = do
     start_card <- assignTempE $ card dst_start
     emitMemsetCall (dst_cards_start `cmmAddWord` start_card)
-        (CmmLit (mkIntCLit 1))
-        ((card (dst_start `cmmAddWord` n) `cmmSubWord` start_card)
-         `cmmAddWord` CmmLit (mkIntCLit 1))
-         (CmmLit (mkIntCLit wORD_SIZE))
-  where
-    -- Convert an element index to a card index
-    card i = i `cmmUShrWord` (CmmLit (mkIntCLit mUT_ARR_PTRS_CARD_BITS))
+        (mkIntExpr 1)
+        (cardRoundUp n)
+        (mkIntExpr 1) -- no alignment (1 byte)
+
+-- Convert an element index to a card index
+card :: CmmExpr -> CmmExpr
+card i = i `cmmUShrWord` mkIntExpr mUT_ARR_PTRS_CARD_BITS
+
+-- Convert a number of elements to a number of cards, rounding up
+cardRoundUp :: CmmExpr -> CmmExpr
+cardRoundUp i = card (i `cmmAddWord` (mkIntExpr ((1 `shiftL` mUT_ARR_PTRS_CARD_BITS) - 1)))
+
+bytesToWordsRoundUp :: CmmExpr -> CmmExpr
+bytesToWordsRoundUp e = (e `cmmAddWord` mkIntExpr (wORD_SIZE - 1))
+                        `cmmQuotWord` wordSize
+
+wordSize :: CmmExpr
+wordSize = mkIntExpr wORD_SIZE
 
 -- | Emit a call to @memcpy@.
 emitMemcpyCall :: CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr -> FCode ()

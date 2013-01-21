@@ -50,35 +50,45 @@
 #define GET_INFO(c)   ((c)->header.info)
 #define GET_ENTRY(c)  (ENTRY_CODE(GET_INFO(c)))
 
-#define get_itbl(c)   (INFO_PTR_TO_STRUCT((c)->header.info))
-#define get_ret_itbl(c) (RET_INFO_PTR_TO_STRUCT((c)->header.info))
-#define get_fun_itbl(c) (FUN_INFO_PTR_TO_STRUCT((c)->header.info))
-#define get_thunk_itbl(c) (THUNK_INFO_PTR_TO_STRUCT((c)->header.info))
-#define get_con_itbl(c) (CON_INFO_PTR_TO_STRUCT((c)->header.info))
-
 #define GET_TAG(con) (get_itbl(con)->srt_bitmap)
 
 #ifdef TABLES_NEXT_TO_CODE
-#define INFO_PTR_TO_STRUCT(info) ((StgInfoTable *)(info) - 1)
-#define RET_INFO_PTR_TO_STRUCT(info) ((StgRetInfoTable *)(info) - 1)
-#define FUN_INFO_PTR_TO_STRUCT(info) ((StgFunInfoTable *)(info) - 1)
-#define THUNK_INFO_PTR_TO_STRUCT(info) ((StgThunkInfoTable *)(info) - 1)
-#define CON_INFO_PTR_TO_STRUCT(info) ((StgConInfoTable *)(info) - 1)
-#define itbl_to_fun_itbl(i) ((StgFunInfoTable *)(((StgInfoTable *)(i) + 1)) - 1)
-#define itbl_to_ret_itbl(i) ((StgRetInfoTable *)(((StgInfoTable *)(i) + 1)) - 1)
-#define itbl_to_thunk_itbl(i) ((StgThunkInfoTable *)(((StgInfoTable *)(i) + 1)) - 1)
-#define itbl_to_con_itbl(i) ((StgConInfoTable *)(((StgInfoTable *)(i) + 1)) - 1)
+EXTERN_INLINE StgInfoTable *INFO_PTR_TO_STRUCT(const StgInfoTable *info);
+EXTERN_INLINE StgInfoTable *INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgInfoTable *)info - 1;}
+EXTERN_INLINE StgRetInfoTable *RET_INFO_PTR_TO_STRUCT(const StgInfoTable *info);
+EXTERN_INLINE StgRetInfoTable *RET_INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgRetInfoTable *)info - 1;}
+INLINE_HEADER StgFunInfoTable *FUN_INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgFunInfoTable *)info - 1;}
+INLINE_HEADER StgThunkInfoTable *THUNK_INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgThunkInfoTable *)info - 1;}
+INLINE_HEADER StgConInfoTable *CON_INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgConInfoTable *)info - 1;}
+INLINE_HEADER StgFunInfoTable *itbl_to_fun_itbl(const StgInfoTable *i) {return (StgFunInfoTable *)(i + 1) - 1;}
+INLINE_HEADER StgRetInfoTable *itbl_to_ret_itbl(const StgInfoTable *i) {return (StgRetInfoTable *)(i + 1) - 1;}
+INLINE_HEADER StgThunkInfoTable *itbl_to_thunk_itbl(const StgInfoTable *i) {return (StgThunkInfoTable *)(i + 1) - 1;}
+INLINE_HEADER StgConInfoTable *itbl_to_con_itbl(const StgInfoTable *i) {return (StgConInfoTable *)(i + 1) - 1;}
 #else
-#define INFO_PTR_TO_STRUCT(info) ((StgInfoTable *)info)
-#define RET_INFO_PTR_TO_STRUCT(info) ((StgRetInfoTable *)info)
-#define FUN_INFO_PTR_TO_STRUCT(info) ((StgFunInfoTable *)info)
-#define THUNK_INFO_PTR_TO_STRUCT(info) ((StgThunkInfoTable *)info)
-#define CON_INFO_PTR_TO_STRUCT(info) ((StgConInfoTable *)info)
-#define itbl_to_fun_itbl(i) ((StgFunInfoTable *)(i))
-#define itbl_to_ret_itbl(i) ((StgRetInfoTable *)(i))
-#define itbl_to_thunk_itbl(i) ((StgThunkInfoTable *)(i))
-#define itbl_to_con_itbl(i) ((StgConInfoTable *)(i))
+EXTERN_INLINE StgInfoTable *INFO_PTR_TO_STRUCT(const StgInfoTable *info);
+EXTERN_INLINE StgInfoTable *INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgInfoTable *)info;}
+EXTERN_INLINE StgRetInfoTable *RET_INFO_PTR_TO_STRUCT(const StgInfoTable *info);
+EXTERN_INLINE StgRetInfoTable *RET_INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgRetInfoTable *)info;}
+INLINE_HEADER StgFunInfoTable *FUN_INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgFunInfoTable *)info;}
+INLINE_HEADER StgThunkInfoTable *THUNK_INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgThunkInfoTable *)info;}
+INLINE_HEADER StgConInfoTable *CON_INFO_PTR_TO_STRUCT(const StgInfoTable *info) {return (StgConInfoTable *)info;}
+INLINE_HEADER StgFunInfoTable *itbl_to_fun_itbl(const StgInfoTable *i) {return (StgFunInfoTable *)i;}
+INLINE_HEADER StgRetInfoTable *itbl_to_ret_itbl(const StgInfoTable *i) {return (StgRetInfoTable *)i;}
+INLINE_HEADER StgThunkInfoTable *itbl_to_thunk_itbl(const StgInfoTable *i) {return (StgThunkInfoTable *)i;}
+INLINE_HEADER StgConInfoTable *itbl_to_con_itbl(const StgInfoTable *i) {return (StgConInfoTable *)i;}
 #endif
+
+EXTERN_INLINE StgInfoTable *get_itbl(const StgClosure *c);
+EXTERN_INLINE StgInfoTable *get_itbl(const StgClosure *c) {return INFO_PTR_TO_STRUCT(c->header.info);}
+
+EXTERN_INLINE StgRetInfoTable *get_ret_itbl(const StgClosure *c);
+EXTERN_INLINE StgRetInfoTable *get_ret_itbl(const StgClosure *c) {return RET_INFO_PTR_TO_STRUCT(c->header.info);}
+
+INLINE_HEADER StgFunInfoTable *get_fun_itbl(const StgClosure *c) {return FUN_INFO_PTR_TO_STRUCT(c->header.info);}
+
+INLINE_HEADER StgThunkInfoTable *get_thunk_itbl(const StgClosure *c) {return THUNK_INFO_PTR_TO_STRUCT(c->header.info);}
+
+INLINE_HEADER StgConInfoTable *get_con_itbl(const StgClosure *c) {return CON_INFO_PTR_TO_STRUCT((c)->header.info);}
 
 /* -----------------------------------------------------------------------------
    Macros for building closures
@@ -221,7 +231,7 @@ TAG_CLOSURE(StgWord tag,StgClosure * p)
 
 INLINE_HEADER rtsBool LOOKS_LIKE_INFO_PTR_NOT_NULL (StgWord p)
 {
-    StgInfoTable *info = INFO_PTR_TO_STRUCT(p);
+    StgInfoTable *info = INFO_PTR_TO_STRUCT((StgInfoTable *)p);
     return info->type != INVALID_OBJECT && info->type < N_CLOSURE_TYPES;
 }
 
@@ -419,20 +429,20 @@ EXTERN_INLINE StgWord stack_frame_sizeW( StgClosure *frame )
    -------------------------------------------------------------------------- */
 
 // The number of card bytes needed
-INLINE_HEADER lnat mutArrPtrsCards (lnat elems)
+INLINE_HEADER W_ mutArrPtrsCards (W_ elems)
 {
-    return (lnat)((elems + (1 << MUT_ARR_PTRS_CARD_BITS) - 1)
+    return (W_)((elems + (1 << MUT_ARR_PTRS_CARD_BITS) - 1)
                            >> MUT_ARR_PTRS_CARD_BITS);
 }
 
 // The number of words in the card table
-INLINE_HEADER lnat mutArrPtrsCardTableSize (lnat elems)
+INLINE_HEADER W_ mutArrPtrsCardTableSize (W_ elems)
 {
     return ROUNDUP_BYTES_TO_WDS(mutArrPtrsCards(elems));
 }
 
 // The address of the card for a particular card number
-INLINE_HEADER StgWord8 *mutArrPtrsCard (StgMutArrPtrs *a, lnat n)
+INLINE_HEADER StgWord8 *mutArrPtrsCard (StgMutArrPtrs *a, W_ n)
 {
     return ((StgWord8 *)&(a->payload[a->ptrs]) + n);
 }

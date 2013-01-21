@@ -34,6 +34,7 @@ import DynFlags
 import FastString
 
 import Control.Monad
+import Data.Bits
 
 -- ---------------------------------------------------------------------------
 -- Code generation for PrimOps
@@ -88,7 +89,7 @@ emitPrimOp [res_r,res_c] IntAddCOp [aa,bb] _
                     CmmMachOp mo_wordNot [CmmMachOp mo_wordXor [aa,bb]],
                     CmmMachOp mo_wordXor [aa, CmmReg (CmmLocal res_r)]
                 ],
-                CmmLit (mkIntCLit (wORD_SIZE_IN_BITS - 1))
+                mkIntExpr (wORD_SIZE_IN_BITS - 1)
           ]
      ]
 
@@ -111,7 +112,7 @@ emitPrimOp [res_r,res_c] IntSubCOp [aa,bb] _
                     CmmMachOp mo_wordXor [aa,bb],
                     CmmMachOp mo_wordXor [aa, CmmReg (CmmLocal res_r)]
                 ],
-                CmmLit (mkIntCLit (wORD_SIZE_IN_BITS - 1))
+                mkIntExpr (wORD_SIZE_IN_BITS - 1)
           ]
      ]
 
@@ -423,12 +424,21 @@ emitPrimOp [] CopyMutableByteArrayOp [src,src_off,dst,dst_off,n] live =
 emitPrimOp [] SetByteArrayOp [ba,off,len,c] live =
     doSetByteArrayOp ba off len c live
 
--- Population count
-emitPrimOp [res] PopCnt8Op [w] live = emitPopCntCall res w W8 live
-emitPrimOp [res] PopCnt16Op [w] live = emitPopCntCall res w W16 live
-emitPrimOp [res] PopCnt32Op [w] live = emitPopCntCall res w W32 live
-emitPrimOp [res] PopCnt64Op [w] live = emitPopCntCall res w W64 live
-emitPrimOp [res] PopCntOp [w] live = emitPopCntCall res w wordWidth live
+-- Population count.
+-- The type of the primop takes a Word#, so we have to be careful to narrow
+-- to the correct width before calling the primop.  Otherwise this can result
+-- in a crash e.g. when calling the helper hs_popcnt8() which assumes that the
+-- argument is <=0xff.
+emitPrimOp [res] PopCnt8Op [w] live =
+  emitPopCntCall res (CmmMachOp mo_WordTo8 [w]) W8 live
+emitPrimOp [res] PopCnt16Op [w] live =
+  emitPopCntCall res (CmmMachOp mo_WordTo16 [w]) W16 live
+emitPrimOp [res] PopCnt32Op [w] live =
+  emitPopCntCall res (CmmMachOp mo_WordTo32 [w]) W32 live
+emitPrimOp [res] PopCnt64Op [w] live =
+  emitPopCntCall res (CmmMachOp mo_WordTo64 [w]) W64 live
+emitPrimOp [res] PopCntOp [w] live =
+  emitPopCntCall res w wordWidth live
 
 -- The rest just translate straightforwardly
 emitPrimOp [res] op [arg] _
@@ -534,7 +544,9 @@ emitPrimOp [res_q, res_r] WordQuotRem2Op [arg_x_high, arg_x_low, arg_y] _
          stmtC stmt
 
 emitPrimOp [res_h, res_l] WordAdd2Op [arg_x, arg_y] _
- = do r1 <- newLocalReg (cmmExprType arg_x)
+ = do dflags <- getDynFlags
+      let platform = targetPlatform dflags
+      r1 <- newLocalReg (cmmExprType arg_x)
       r2 <- newLocalReg (cmmExprType arg_x)
       -- This generic implementation is very simple and slow. We might
       -- well be able to do better, but for now this at least works.
@@ -554,9 +566,9 @@ emitPrimOp [res_h, res_l] WordAdd2Op [arg_x, arg_y] _
                      bottomHalf x = CmmMachOp (MO_And wordWidth) [x, hwm]
                      add x y = CmmMachOp (MO_Add wordWidth) [x, y]
                      or x y = CmmMachOp (MO_Or wordWidth) [x, y]
-                     hww = CmmLit (CmmInt (fromIntegral (widthInBits halfWordWidth))
+                     hww = CmmLit (CmmInt (fromIntegral (widthInBits (halfWordWidth platform)))
                                           wordWidth)
-                     hwm = CmmLit (CmmInt halfWordMask wordWidth)
+                     hwm = CmmLit (CmmInt (halfWordMask platform) wordWidth)
           stmt = CmmCall (CmmPrim (MO_Add2 wordWidth) (Just genericImpl))
                          [CmmHinted res_h NoHint,
                           CmmHinted res_l NoHint]
@@ -565,7 +577,9 @@ emitPrimOp [res_h, res_l] WordAdd2Op [arg_x, arg_y] _
                          CmmMayReturn
       stmtC stmt
 emitPrimOp [res_h, res_l] WordMul2Op [arg_x, arg_y] _
- = do let t = cmmExprType arg_x
+ = do dflags <- getDynFlags
+      let platform = targetPlatform dflags
+          t = cmmExprType arg_x
       xlyl <- liftM CmmLocal $ newLocalReg t
       xlyh <- liftM CmmLocal $ newLocalReg t
       xhyl <- liftM CmmLocal $ newLocalReg t
@@ -598,9 +612,9 @@ emitPrimOp [res_h, res_l] WordMul2Op [arg_x, arg_y] _
                      sum = foldl1 add
                      mul x y = CmmMachOp (MO_Mul wordWidth) [x, y]
                      or x y = CmmMachOp (MO_Or wordWidth) [x, y]
-                     hww = CmmLit (CmmInt (fromIntegral (widthInBits halfWordWidth))
+                     hww = CmmLit (CmmInt (fromIntegral (widthInBits (halfWordWidth platform)))
                                           wordWidth)
-                     hwm = CmmLit (CmmInt halfWordMask wordWidth)
+                     hwm = CmmLit (CmmInt (halfWordMask platform) wordWidth)
           stmt = CmmCall (CmmPrim (MO_U_Mul2 wordWidth) (Just genericImpl))
                          [CmmHinted res_h NoHint,
                           CmmHinted res_l NoHint]
@@ -843,8 +857,7 @@ doWritePtrArrayOp addr idx val
           cmmOffsetExpr
            (cmmOffsetExprW (cmmOffsetB addr (arrPtrsHdrSize dflags))
                           (loadArrPtrsSize dflags addr))
-           (CmmMachOp mo_wordUShr [idx,
-                                   CmmLit (mkIntCLit mUT_ARR_PTRS_CARD_BITS)])
+           (card idx)
           ) (CmmLit (CmmInt 1 W8))
 
 loadArrPtrsSize :: DynFlags -> CmmExpr -> CmmExpr
@@ -1020,10 +1033,8 @@ emitCloneArray info_p res_r src0 src_off0 n0 live = do
     src_off <- assignTemp_ src_off0
     n <- assignTemp_ n0
 
-    card_words <- assignTemp $ (n `cmmUShrWord`
-                                (CmmLit (mkIntCLit mUT_ARR_PTRS_CARD_BITS)))
-                  `cmmAddWord` CmmLit (mkIntCLit 1)
-    size <- assignTemp $ n `cmmAddWord` card_words
+    card_bytes <- assignTemp $ cardRoundUp n
+    size <- assignTemp $ n `cmmAddWord` bytesToWordsRoundUp card_bytes
     words <- assignTemp $ arrPtrsHdrSizeW dflags `cmmAddWord` size
 
     arr_r <- newTemp bWord
@@ -1047,14 +1058,13 @@ emitCloneArray info_p res_r src0 src_off0 n0 live = do
 
     emitMemsetCall (cmmOffsetExprW dst_p n)
         (CmmLit (mkIntCLit 1))
-        (card_words `cmmMulWord` wordSize)
+        card_bytes
         (CmmLit (mkIntCLit wORD_SIZE))
         live
     stmtC $ CmmAssign (CmmLocal res_r) arr
   where
     arrPtrsHdrSizeW dflags = CmmLit $ mkIntCLit $ fixedHdrSize dflags +
                                  (sIZEOF_StgMutArrPtrs_NoHdr `div` wORD_SIZE)
-    wordSize = CmmLit (mkIntCLit wORD_SIZE)
     myCapability = CmmReg baseReg `cmmSubWord`
                    CmmLit (mkIntCLit oFFSET_Capability_r)
 
@@ -1066,13 +1076,24 @@ emitSetCards dst_start dst_cards_start n live = do
     start_card <- assignTemp $ card dst_start
     emitMemsetCall (dst_cards_start `cmmAddWord` start_card)
         (CmmLit (mkIntCLit 1))
-        ((card (dst_start `cmmAddWord` n) `cmmSubWord` start_card)
-         `cmmAddWord` CmmLit (mkIntCLit 1))
-        (CmmLit (mkIntCLit wORD_SIZE))
+        (cardRoundUp n)
+        (CmmLit (mkIntCLit 1)) -- no alignment (1 byte)
         live
-  where
-    -- Convert an element index to a card index
-    card i = i `cmmUShrWord` (CmmLit (mkIntCLit mUT_ARR_PTRS_CARD_BITS))
+
+-- Convert an element index to a card index
+card :: CmmExpr -> CmmExpr
+card i = i `cmmUShrWord` (CmmLit (mkIntCLit mUT_ARR_PTRS_CARD_BITS))
+
+-- Convert a number of elements to a number of cards, rounding up
+cardRoundUp :: CmmExpr -> CmmExpr
+cardRoundUp i = card (i `cmmAddWord` (CmmLit (mkIntCLit ((1 `shiftL` mUT_ARR_PTRS_CARD_BITS) - 1))))
+
+bytesToWordsRoundUp :: CmmExpr -> CmmExpr
+bytesToWordsRoundUp e = (e `cmmAddWord` CmmLit (mkIntCLit (wORD_SIZE - 1)))
+                        `cmmQuotWord` wordSize
+
+wordSize :: CmmExpr
+wordSize = CmmLit (mkIntCLit wORD_SIZE)
 
 -- | Emit a call to @memcpy@.
 emitMemcpyCall :: CmmExpr -> CmmExpr -> CmmExpr -> CmmExpr -> StgLiveVars
