@@ -13,7 +13,6 @@ import Data.Int
 import Numeric
 import Outputable
 
-import Constants
 import DynFlags
 import FastString
 import Unique
@@ -371,7 +370,7 @@ i8Ptr = pLift i8
 
 -- | The target architectures word size
 llvmWord, llvmWordPtr :: DynFlags -> LlvmType
-llvmWord    _      = LMInt (wORD_SIZE * 8)
+llvmWord    dflags = LMInt (wORD_SIZE dflags * 8)
 llvmWordPtr dflags = pLift (llvmWord dflags)
 
 -- -----------------------------------------------------------------------------

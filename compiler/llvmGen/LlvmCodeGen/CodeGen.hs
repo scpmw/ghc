@@ -293,7 +293,7 @@ genCall target res args ret = do
     let retTy = ret_type res
     let argTy = tysToParams $ map arg_type args
     let funTy = \name -> LMFunction $ LlvmFunctionDecl name ExternallyVisible
-                             lmconv retTy FixedArgs argTy llvmFunAlign
+                             lmconv retTy FixedArgs argTy (llvmFunAlign dflags)
 
 
     (argVars, stmts1, top1) <- arg_vars args ([], nilOL, [])

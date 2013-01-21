@@ -99,11 +99,12 @@ pprInfoTable :: Int -> CLabel -> CmmStatics -> LlvmM (SDoc, [LlvmVar])
 pprInfoTable count info_lbl stat
   = do (ldata, ltypes) <- genLlvmData (Text, stat)
 
+       dflags <- getDynFlags
        let setSection (LMGlobal (LMGlobalVar _ ty l _ _ c) d) = do
              lbl <- strCLabel_llvm info_lbl
              let sec = mkLayoutSection count
                  ilabel = lbl `appendFS` fsLit iTableSuf
-                 gv = LMGlobalVar ilabel ty l sec llvmInfAlign c
+                 gv = LMGlobalVar ilabel ty l sec (llvmInfAlign dflags) c
                  v = if l == Internal then [gv] else []
              funInsert ilabel ty
              return (LMGlobal gv d, v)

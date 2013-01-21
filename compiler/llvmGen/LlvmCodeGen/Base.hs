@@ -124,7 +124,7 @@ llvmFunSig' lbl link
        dflags <- getDynFlags
        return $ LlvmFunctionDecl lbl link (llvmGhcCC dflags) LMVoid FixedArgs
                                  (map (toParams . getVarType) (llvmFunArgs dflags))
-                                 llvmFunAlign
+                                 (llvmFunAlign dflags)
 
 -- | Create a Haskell function in LLVM.
 mkLlvmFunc :: CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
@@ -136,12 +136,12 @@ mkLlvmFunc lbl link sec blks
        return $ LlvmFunction funDec funArgs llvmStdFunAttrs sec blks
 
 -- | Alignment to use for functions
-llvmFunAlign :: LMAlign
-llvmFunAlign = Just wORD_SIZE
+llvmFunAlign :: DynFlags -> LMAlign
+llvmFunAlign dflags = Just (wORD_SIZE dflags)
 
 -- | Alignment to use for into tables
-llvmInfAlign :: LMAlign
-llvmInfAlign = Just wORD_SIZE
+llvmInfAlign :: DynFlags -> LMAlign
+llvmInfAlign dflags = Just (wORD_SIZE dflags)
 
 -- | A Function's arguments
 llvmFunArgs :: DynFlags -> [LlvmVar]
