@@ -66,6 +66,7 @@ module DynFlags (
 
         -- ** Manipulating DynFlags
         defaultDynFlags,                -- Settings -> DynFlags
+        defaultWays,
         initDynFlags,                   -- DynFlags -> IO DynFlags
         defaultFatalMessager,
         defaultLogAction,
@@ -494,7 +495,6 @@ data ExtensionFlag
    | Opt_MultiParamTypeClasses
    | Opt_FunctionalDependencies
    | Opt_UnicodeSyntax
-   | Opt_PolymorphicComponents
    | Opt_ExistentialQuantification
    | Opt_MagicHash
    | Opt_EmptyDataDecls
@@ -508,7 +508,6 @@ data ExtensionFlag
    | Opt_TupleSections
    | Opt_PatternGuards
    | Opt_LiberalTypeSynonyms
-   | Opt_Rank2Types
    | Opt_RankNTypes
    | Opt_ImpredicativeTypes
    | Opt_TypeOperators
@@ -1026,7 +1025,10 @@ wayGeneralFlags platform WayDyn =
             -- different from the current one.
             OSMinGW32 -> [Opt_PIC]
             OSDarwin  -> [Opt_PIC]
-            OSLinux   -> [Opt_PIC]
+            OSLinux   -> [Opt_PIC] -- This needs to be here for GHCi to work:
+                                   -- GHCi links objects into a .so before
+                                   -- loading the .so using the system linker.
+                                   -- Only PIC objects can be linked into a .so.
             _         -> []
 wayGeneralFlags _ WayProf     = [Opt_SccProfilingOn]
 wayGeneralFlags _ WayEventLog = []
@@ -1180,9 +1182,9 @@ defaultDynFlags mySettings =
         packageFlags            = [],
         pkgDatabase             = Nothing,
         pkgState                = panic "no package state yet: call GHC.setSessionDynFlags",
-        ways                    = [],
-        buildTag                = mkBuildTag [],
-        rtsBuildTag             = mkBuildTag [],
+        ways                    = defaultWays mySettings,
+        buildTag                = mkBuildTag (defaultWays mySettings),
+        rtsBuildTag             = mkBuildTag (defaultWays mySettings),
         splitInfo               = Nothing,
         settings                = mySettings,
         -- ghc -M values
@@ -1236,6 +1238,11 @@ defaultDynFlags mySettings =
         llvmVersion = panic "defaultDynFlags: No llvmVersion",
         interactivePrint = Nothing
       }
+
+defaultWays :: Settings -> [Way]
+defaultWays settings = if pc_dYNAMIC_BY_DEFAULT (sPlatformConstants settings)
+                       then [WayDyn]
+                       else []
 
 --------------------------------------------------------------------------
 
@@ -2438,7 +2445,6 @@ xFlags = [
   ( "PatternGuards",                    Opt_PatternGuards, nop ),
   ( "UnicodeSyntax",                    Opt_UnicodeSyntax, nop ),
   ( "MagicHash",                        Opt_MagicHash, nop ),
-  ( "PolymorphicComponents",            Opt_PolymorphicComponents, nop ),
   ( "ExistentialQuantification",        Opt_ExistentialQuantification, nop ),
   ( "KindSignatures",                   Opt_KindSignatures, nop ),
   ( "EmptyDataDecls",                   Opt_EmptyDataDecls, nop ),
@@ -2451,8 +2457,11 @@ xFlags = [
   ( "CApiFFI",                          Opt_CApiFFI, nop ),
   ( "GHCForeignImportPrim",             Opt_GHCForeignImportPrim, nop ),
   ( "LiberalTypeSynonyms",              Opt_LiberalTypeSynonyms, nop ),
-  ( "Rank2Types",                       Opt_Rank2Types, nop ),
+
+  ( "PolymorphicComponents",            Opt_RankNTypes, nop),
+  ( "Rank2Types",                       Opt_RankNTypes, nop),
   ( "RankNTypes",                       Opt_RankNTypes, nop ),
+
   ( "ImpredicativeTypes",               Opt_ImpredicativeTypes, nop),
   ( "TypeOperators",                    Opt_TypeOperators, nop ),
   ( "ExplicitNamespaces",               Opt_ExplicitNamespaces, nop ),
@@ -2550,12 +2559,7 @@ defaultFlags settings
     ++ [f | (ns,f) <- optLevelFlags, 0 `elem` ns]
              -- The default -O0 options
 
-    ++ (case platformOS platform of
-        OSDarwin ->
-            case platformArch platform of
-            ArchX86_64         -> [Opt_PIC]
-            _                  -> []
-        _ -> [])
+    ++ default_PIC platform
 
     ++ (if pc_dYNAMIC_BY_DEFAULT (sPlatformConstants settings)
         then wayGeneralFlags platform WayDyn
@@ -2563,14 +2567,18 @@ defaultFlags settings
 
     where platform = sTargetPlatform settings
 
+default_PIC :: Platform -> [GeneralFlag]
+default_PIC platform =
+  case (platformOS platform, platformArch platform) of
+    (OSDarwin, ArchX86_64) -> [Opt_PIC]
+    _                      -> []
+
 impliedFlags :: [(ExtensionFlag, TurnOnFlag, ExtensionFlag)]
 impliedFlags
   = [ (Opt_RankNTypes,                turnOn, Opt_ExplicitForAll)
-    , (Opt_Rank2Types,                turnOn, Opt_ExplicitForAll)
     , (Opt_ScopedTypeVariables,       turnOn, Opt_ExplicitForAll)
     , (Opt_LiberalTypeSynonyms,       turnOn, Opt_ExplicitForAll)
     , (Opt_ExistentialQuantification, turnOn, Opt_ExplicitForAll)
-    , (Opt_PolymorphicComponents,     turnOn, Opt_ExplicitForAll)
     , (Opt_FlexibleInstances,         turnOn, Opt_TypeSynonymInstances)
     , (Opt_FunctionalDependencies,    turnOn, Opt_MultiParamTypeClasses)
 
@@ -2719,7 +2727,6 @@ glasgowExtsFlags = [
            , Opt_MultiParamTypeClasses
            , Opt_FunctionalDependencies
            , Opt_MagicHash
-           , Opt_PolymorphicComponents
            , Opt_ExistentialQuantification
            , Opt_UnicodeSyntax
            , Opt_PostfixOperators
@@ -2834,7 +2841,14 @@ addWay w = do upd (\dfs -> dfs { ways = w : ways dfs })
               mapM_ setGeneralFlag $ wayGeneralFlags platform w
 
 removeWay :: Way -> DynP ()
-removeWay w = upd (\dfs -> dfs { ways = filter (w /=) (ways dfs) })
+removeWay w = do
+  upd (\dfs -> dfs { ways = filter (w /=) (ways dfs) })
+  dfs <- liftEwM getCmdLineState
+  let platform = targetPlatform dfs
+  -- XXX: wayExtras?
+  mapM_ unSetGeneralFlag $ wayGeneralFlags platform w
+  -- turn Opt_PIC back on if necessary for this platform:
+  mapM_ setGeneralFlag $ default_PIC platform
 
 --------------------------
 setGeneralFlag, unSetGeneralFlag :: GeneralFlag -> DynP ()

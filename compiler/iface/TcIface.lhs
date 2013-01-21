@@ -1366,7 +1366,7 @@ tcIfaceTyCon (IfaceTc name)
        ; case thing of    -- A "type constructor" can be a promoted data constructor
                           --           c.f. Trac #5881
            ATyCon   tc -> return tc
-           ADataCon dc -> return (buildPromotedDataCon dc)
+           ADataCon dc -> return (promoteDataCon dc)
            _ -> pprPanic "tcIfaceTyCon" (ppr name $$ ppr thing) }
 
 tcIfaceKindCon :: IfaceTyCon -> IfL TyCon
@@ -1376,7 +1376,7 @@ tcIfaceKindCon (IfaceTc name)
                           --           c.f. Trac #5881
            ATyCon tc 
              | isSuperKind (tyConKind tc) -> return tc   -- Mainly just '*' or 'AnyK'
-             | otherwise                  -> return (buildPromotedTyCon tc)
+             | otherwise                  -> return (promoteTyCon tc)
 
            _ -> pprPanic "tcIfaceKindCon" (ppr name $$ ppr thing) }
 

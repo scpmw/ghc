@@ -1,5 +1,5 @@
 %
-% (c) The University of Glasgow 2005-2006
+% (c) The University of Glasgow 2005-2012
 %
 \begin{code}
 -- | The dynamic linker for GHCi.
@@ -820,6 +820,11 @@ dynLoadObjs dflags objs = do
                       -- be calling dynLoadObjs with any objects that
                       -- need to be linked.
                       ldInputs = [],
+                      -- Even if we're e.g. profiling, we still want
+                      -- the vanilla dynamic libraries, so we set the
+                      -- ways / build tag to be just WayDyn.
+                      ways = [WayDyn],
+                      buildTag = mkBuildTag [WayDyn],
                       outputFile = Just soFile
                   }
     linkDynLib dflags2 objs []
@@ -1234,7 +1239,7 @@ searchForLibUsingGcc dflags so dirs = do
       else return (Just file)
 
 -- ----------------------------------------------------------------------------
--- Loading a dyanmic library (dlopen()-ish on Unix, LoadLibrary-ish on Win32)
+-- Loading a dynamic library (dlopen()-ish on Unix, LoadLibrary-ish on Win32)
 
 -- Darwin / MacOS X only: load a framework
 -- a framework is a dynamic library packaged inside a directory of the same
