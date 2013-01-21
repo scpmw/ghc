@@ -216,7 +216,6 @@ Library
         CgClosure
         CgCon
         CgExpr
-        CgExtCode
         CgForeignCall
         CgHeapery
         CgHpc
@@ -246,6 +245,7 @@ Library
         StgCmmProf
         StgCmmTicky
         StgCmmUtils
+        StgCmmExtCode
         ClosureInfo
         SMRep
         CoreArity
