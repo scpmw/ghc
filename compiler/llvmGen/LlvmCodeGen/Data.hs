@@ -91,8 +91,9 @@ genStaticLit (CmmFloat r w)
 -- Leave unresolved, will fix later
 genStaticLit cmm@(CmmLabel l) = do
     var <- getGlobalPtr =<< strCLabel_llvm l
+    dflags <- getDynFlags
     let ptr = LMStaticPointer var
-        lmty = cmmToLlvmType $ cmmLitType cmm
+        lmty = cmmToLlvmType $ cmmLitType dflags cmm
     return $ LMPtoI ptr lmty
 
 genStaticLit (CmmLabelOff label off) = do

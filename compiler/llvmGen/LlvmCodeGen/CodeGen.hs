@@ -244,10 +244,12 @@ genCall (CmmPrim _ (Just stmts)) _ _ _
 -- Handle all other foreign calls and prim ops.
 genCall target res args ret = do
 
+    dflags <- getDynFlags
+
     -- parameter types
     let arg_type (CmmHinted _ AddrHint) = i8Ptr
         -- cast pointers to i8*. Llvm equivalent of void*
-        arg_type (CmmHinted expr _    ) = cmmToLlvmType $ cmmExprType expr
+        arg_type (CmmHinted expr _    ) = cmmToLlvmType $ cmmExprType dflags expr
 
     -- ret type
     let ret_type ([]) = LMVoid
@@ -742,7 +744,8 @@ exprToVarOpt opt e = case e of
         -> genMachOp opt op exprs
 
     CmmRegOff r i
-        -> exprToVar $ expandCmmReg (r, i)
+        -> do dflags <- getDynFlags
+              exprToVar $ expandCmmReg dflags (r, i)
 
     CmmStackSlot _ _
         -> panic "exprToVar: CmmStackSlot not supported!"
@@ -1182,7 +1185,8 @@ genLit (CmmFloat r w)
 
 genLit cmm@(CmmLabel l)
   = do var <- getGlobalPtr =<< strCLabel_llvm l
-       let lmty = cmmToLlvmType $ cmmLitType cmm
+       dflags <- getDynFlags
+       let lmty = cmmToLlvmType $ cmmLitType dflags cmm
        (v1, s1) <- doExpr lmty $ Cast LM_Ptrtoint var llvmWord
        return (v1, unitOL s1, [])
 
@@ -1399,9 +1403,9 @@ doExpr ty expr = do
 
 
 -- | Expand CmmRegOff
-expandCmmReg :: (CmmReg, Int) -> CmmExpr
-expandCmmReg (reg, off)
-  = let width = typeWidth (cmmRegType reg)
+expandCmmReg :: DynFlags -> (CmmReg, Int) -> CmmExpr
+expandCmmReg dflags (reg, off)
+  = let width = typeWidth (cmmRegType dflags reg)
         voff  = CmmLit $ CmmInt (fromIntegral off) width
     in CmmMachOp (MO_Add width) [CmmReg reg, voff]
 
