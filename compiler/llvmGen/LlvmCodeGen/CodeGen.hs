@@ -14,7 +14,7 @@ import LlvmCodeGen.Regs
 import LlvmMeta ( genVariableMeta, LlvmAnnotator )
 
 import BlockId
-import CgUtils ( activeStgRegs, callerSaves )
+import CodeGen.Platform ( activeStgRegs, callerSaves )
 import CLabel
 import OldCmm
 import qualified OldPprCmm as PprCmm
