@@ -105,8 +105,8 @@ llvmGroupLlvmGens :: ModLocation -> (RawCmmGroup, TickMap) -> LlvmM TickMap
 llvmGroupLlvmGens location (cmm, tick_map) = do
 
         -- Insert functions into map, collect data
-        let split (CmmData s d' )   = return $ Just (s, d')
-            split p@(CmmProc _ l _) = do
+        let split (CmmData s d' )     = return $ Just (s, d')
+            split p@(CmmProc _ l _ _) = do
               let l' = case topInfoTable p of
                          Nothing                   -> l
                          Just (Statics info_lbl _) -> info_lbl
@@ -153,7 +153,7 @@ cmmProcLlvmGens _ [] _ _
 cmmProcLlvmGens mod_loc ((CmmData _ _) : cmms) tick_map count
  = cmmProcLlvmGens mod_loc cmms tick_map count
 
-cmmProcLlvmGens mod_loc ((CmmProc _ _ (ListGraph [])) : cmms) tick_map count
+cmmProcLlvmGens mod_loc ((CmmProc _ _ _ (ListGraph [])) : cmms) tick_map count
  = cmmProcLlvmGens mod_loc cmms tick_map count
 
 cmmProcLlvmGens mod_loc (cmm : cmms) tick_map count
@@ -163,7 +163,7 @@ cmmProcLlvmGens mod_loc (cmm : cmms) tick_map count
 
 -- | Complete LLVM code generation phase for a single top-level chunk of Cmm.
 cmmLlvmGen :: ModLocation -> TickMap -> Int -> RawCmmDecl -> LlvmM ()
-cmmLlvmGen mod_loc tick_map count cmm@(CmmProc _ lbl (ListGraph blocks)) = do
+cmmLlvmGen mod_loc tick_map count cmm@(CmmProc _ lbl _ (ListGraph blocks)) = do
 
     -- rewrite assignments to global regs
     dflags <- getDynFlag id

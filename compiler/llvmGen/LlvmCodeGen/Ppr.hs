@@ -73,7 +73,7 @@ pprLlvmCmmDecl :: Int -> LlvmCmmDecl -> LlvmM (SDoc, [LlvmVar])
 pprLlvmCmmDecl _ (CmmData _ lmdata)
   = return (vcat $ map pprLlvmData lmdata, [])
 
-pprLlvmCmmDecl count (CmmProc mb_info entry_lbl (ListGraph blks))
+pprLlvmCmmDecl count (CmmProc mb_info entry_lbl _ (ListGraph blks))
   = do (idoc, ivar) <- case mb_info of
                         Nothing -> return (empty, [])
                         Just (Statics info_lbl dat)

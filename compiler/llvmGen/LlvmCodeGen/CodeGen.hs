@@ -37,10 +37,10 @@ type LlvmStatements = OrdList LlvmStatement
 -- | Top-level of the LLVM proc Code generator
 --
 genLlvmProc :: RawCmmDecl -> LlvmAnnotator -> LlvmM [LlvmCmmDecl]
-genLlvmProc proc0@(CmmProc _ lbl (ListGraph blocks)) annotGen = do
+genLlvmProc proc0@(CmmProc _ lbl live (ListGraph blocks)) annotGen = do
     (lmblocks, lmdata) <- basicBlocksCodeGen blocks (annotGen lbl) annotGen
     let info = topInfoTable proc0
-        proc = CmmProc info lbl (ListGraph lmblocks)
+        proc = CmmProc info lbl live (ListGraph lmblocks)
     return (proc:lmdata)
 
 genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"

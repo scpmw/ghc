@@ -47,7 +47,7 @@ runCmmLint dflags l p =
      Right _  -> Nothing
 
 lintCmmDecl :: DynFlags -> GenCmmDecl h i CmmGraph -> CmmLint ()
-lintCmmDecl dflags (CmmProc _ lbl g)
+lintCmmDecl dflags (CmmProc _ lbl _ g)
   = addLintInfo (text "in proc " <> ppr lbl) $ lintCmmGraph dflags g
 lintCmmDecl _ (CmmData {})
   = return ()
