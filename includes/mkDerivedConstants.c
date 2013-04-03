@@ -30,6 +30,18 @@
 #include <stdio.h>
 #include <string.h>
 
+#if !defined(PRIdPTR)
+#if SIZEOF_VOID_P == SIZEOF_INT
+/* compiling for 32bit target */
+#define PRIdPTR "d"
+#elif SIZEOF_VOID_P == SIZEOF_LONG
+/* compiling for 64bit target */
+#define PRIdPTR "ld"
+#else
+#error Cannot find definition for PRIdPTR
+#endif
+#endif
+
 enum Mode { Gen_Haskell_Type, Gen_Haskell_Value, Gen_Haskell_Wrappers, Gen_Haskell_Exports, Gen_Header } mode;
 
 #define str(a,b) #a "_" #b
@@ -633,7 +645,10 @@ main(int argc, char *argv[])
         closure_field(StgTVarWatchQueue, next_queue_entry);
         closure_field(StgTVarWatchQueue, prev_queue_entry);
 
+        closure_size(StgTVar);
         closure_field(StgTVar, current_value);
+        closure_field(StgTVar, first_watch_queue_entry);
+        closure_field(StgTVar, num_updates);
 
         closure_size(StgWeak);
         closure_field(StgWeak,link);
