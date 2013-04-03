@@ -186,6 +186,9 @@ genCall (PrimTarget MO_WriteBarrier) _ _ = do
        | ver > 29   -> barrier
        | otherwise  -> oldBarrier
 
+genCall (PrimTarget MO_Touch) _ _
+ = return (nilOL, [])
+
 -- Handle popcnt function specifically since GHC only really has i32 and i64
 -- types and things like Word8 are backed by an i32 and just present a logical
 -- i8 range. So we must handle conversions from i32 to i8 explicitly as LLVM
