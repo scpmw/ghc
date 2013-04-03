@@ -2063,3 +2063,11 @@ stg_traceMarkerzh ( W_ msg )
    return ();
 }
 
+stg_traceTaskzh ( W_ msg )
+{
+#if defined(TRACING)
+
+   ccall traceUserMsg(MyCapability() "ptr", msg "ptr");
+
+#endif
+}

@@ -7,6 +7,7 @@
 module LlvmCodeGen.Base (
 
         LlvmCmmDecl, LlvmBasicBlock,
+        LiveGlobalRegs,
         LlvmUnresData, LlvmData, UnresLabel, UnresStatic,
 
         LlvmVersion, defaultLlvmVersion, minSupportLlvmVersion,
@@ -65,6 +66,9 @@ import Data.List  ( elemIndex )
 type LlvmCmmDecl = GenCmmDecl [LlvmData] (Maybe CmmStatics) (ListGraph LlvmStatement)
 type LlvmBasicBlock = GenBasicBlock LlvmStatement
 
+-- | Global registers live on proc entry
+type LiveGlobalRegs = [GlobalReg]
+
 -- | Unresolved code.
 -- Of the form: (data label, data type, unresolved data)
 type LlvmUnresData = (CLabel, Section, LlvmType, [UnresStatic])
@@ -107,31 +111,31 @@ llvmGhcCC dflags
  | otherwise                                      = CC_Ncc 10
 
 -- | Llvm Function type for Cmm function
-llvmFunTy :: LlvmM LlvmType
-llvmFunTy = return . LMFunction =<< llvmFunSig' (fsLit "a") ExternallyVisible
+llvmFunTy :: LiveGlobalRegs -> LlvmM LlvmType
+llvmFunTy live = return . LMFunction =<< llvmFunSig' live (fsLit "a") ExternallyVisible
 
 -- | Llvm Function signature
-llvmFunSig :: CLabel -> LlvmLinkageType -> LlvmM LlvmFunctionDecl
-llvmFunSig lbl link = do
+llvmFunSig :: LiveGlobalRegs ->  CLabel -> LlvmLinkageType -> LlvmM LlvmFunctionDecl
+llvmFunSig live lbl link = do
   lbl' <- strCLabel_llvm lbl
-  llvmFunSig' lbl' link
+  llvmFunSig' live lbl' link
 
-llvmFunSig' :: LMString -> LlvmLinkageType -> LlvmM LlvmFunctionDecl
-llvmFunSig' lbl link
+llvmFunSig' :: LiveGlobalRegs -> LMString -> LlvmLinkageType -> LlvmM LlvmFunctionDecl
+llvmFunSig' live lbl link
   = do let toParams x | isPointer x = (x, [NoAlias, NoCapture])
                       | otherwise   = (x, [])
        dflags <- getDynFlags
        return $ LlvmFunctionDecl lbl link (llvmGhcCC dflags) LMVoid FixedArgs
-                                 (map (toParams . getVarType) (llvmFunArgs dflags))
+                                 (map (toParams . getVarType) (llvmFunArgs dflags live))
                                  (llvmFunAlign dflags)
 
 -- | Create a Haskell function in LLVM.
-mkLlvmFunc :: CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
+mkLlvmFunc :: LiveGlobalRegs -> CLabel -> LlvmLinkageType -> LMSection -> LlvmBlocks
            -> LlvmM LlvmFunction
-mkLlvmFunc lbl link sec blks
-  = do funDec <- llvmFunSig lbl link
+mkLlvmFunc live lbl link sec blks
+  = do funDec <- llvmFunSig live lbl link
        dflags <- getDynFlags
-       let funArgs = map (fsLit . Outp.showSDoc dflags . ppPlainName) (llvmFunArgs dflags)
+       let funArgs = map (fsLit . Outp.showSDoc dflags . ppPlainName) (llvmFunArgs dflags live)
        return $ LlvmFunction funDec funArgs llvmStdFunAttrs sec blks
 
 -- | Alignment to use for functions
@@ -143,9 +147,14 @@ llvmInfAlign :: DynFlags -> LMAlign
 llvmInfAlign dflags = Just (wORD_SIZE dflags)
 
 -- | A Function's arguments
-llvmFunArgs :: DynFlags -> [LlvmVar]
-llvmFunArgs dflags = map (lmGlobalRegArg dflags) (activeStgRegs platform)
+llvmFunArgs :: DynFlags -> LiveGlobalRegs -> [LlvmVar]
+llvmFunArgs dflags live =
+    map (lmGlobalRegArg dflags) (filter isPassed (activeStgRegs platform))
     where platform = targetPlatform dflags
+          isPassed r = not (isFloat r) || r `elem` alwaysLive || r `elem` live
+          isFloat (FloatReg _)  = True
+          isFloat (DoubleReg _) = True
+          isFloat _             = False
 
 -- | Position of a register in function arguments
 llvmRegArgPos :: DynFlags -> GlobalReg -> Maybe Int

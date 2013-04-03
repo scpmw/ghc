@@ -97,7 +97,7 @@ fileN = mkMetaUnique (fsLit "LlvmMeta.fileN")
 
 -- | Often-used types to cache meta data for
 cachedTypeMeta :: LlvmM [(LlvmType, LMMetaUnique)]
-cachedTypeMeta = llvmFunTy >>= \funTy -> return
+cachedTypeMeta = llvmFunTy [] >>= \funTy -> return
   [ mk funTy       "llvmFunTy"
   , mk i8          "i8"
   , mk i32         "i32"
@@ -249,7 +249,7 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
   linkageName <- strCLabel_llvm entryLabel
   displayName <- strDisplayName_llvm entryLabel
 
-  funTy <- llvmFunTy
+  funTy <- llvmFunTy []
   funRef <- getGlobalPtr linkageName
   let local = not . externallyVisibleCLabel $ entryLabel
       procedureName = displayName

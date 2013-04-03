@@ -73,7 +73,7 @@ pprLlvmCmmDecl :: Int -> LlvmCmmDecl -> LlvmM (SDoc, [LlvmVar])
 pprLlvmCmmDecl _ (CmmData _ lmdata)
   = return (vcat $ map pprLlvmData lmdata, [])
 
-pprLlvmCmmDecl count (CmmProc mb_info entry_lbl _ (ListGraph blks))
+pprLlvmCmmDecl count (CmmProc mb_info entry_lbl live (ListGraph blks))
   = do (idoc, ivar) <- case mb_info of
                         Nothing -> return (empty, [])
                         Just (Statics info_lbl dat)
@@ -89,7 +89,7 @@ pprLlvmCmmDecl count (CmmProc mb_info entry_lbl _ (ListGraph blks))
            lmblocks = map (\(BasicBlock id stmts) ->
                                 LlvmBlock (getUnique id) stmts) blks
 
-       fun <- mkLlvmFunc lbl' link  sec' lmblocks
+       fun <- mkLlvmFunc live lbl' link  sec' lmblocks
 
        return (idoc $+$ ppLlvmFunction fun, ivar)
 

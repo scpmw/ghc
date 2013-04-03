@@ -30,6 +30,7 @@ import UniqSupply
 import Unique
 
 import Data.List ( nub )
+import Data.Maybe ( catMaybes )
 
 type LlvmStatements = OrdList LlvmStatement
 
@@ -38,7 +39,7 @@ type LlvmStatements = OrdList LlvmStatement
 --
 genLlvmProc :: RawCmmDecl -> LlvmAnnotator -> LlvmM [LlvmCmmDecl]
 genLlvmProc proc0@(CmmProc _ lbl live (ListGraph blocks)) annotGen = do
-    (lmblocks, lmdata) <- basicBlocksCodeGen blocks (annotGen lbl) annotGen
+    (lmblocks, lmdata) <- basicBlocksCodeGen live blocks (annotGen lbl) annotGen
     let info = topInfoTable proc0
         proc = CmmProc info lbl live (ListGraph lmblocks)
     return (proc:lmdata)
@@ -50,10 +51,11 @@ genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"
 --
 
 -- | Generate code for a list of blocks that make up a complete procedure.
-basicBlocksCodeGen :: [CmmBasicBlock] -> (LMMetaInt, LMMetaInt, LMMetaInt) -> LlvmAnnotator
+basicBlocksCodeGen :: LiveGlobalRegs -> [CmmBasicBlock]
+                      -> (LMMetaInt, LMMetaInt, LMMetaInt) -> LlvmAnnotator
                       -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
-basicBlocksCodeGen cmmBlocks (blockId, annotId, _) annotGen
-  = do (prologue, tops1) <- funPrologue cmmBlocks blockId
+basicBlocksCodeGen live cmmBlocks (blockId, annotId, _) annotGen
+  = do (prologue, tops1) <- funPrologue live cmmBlocks blockId
        (blockss, topss) <- fmap unzip $ mapM (basicBlockCodeGen annotGen) cmmBlocks
        let ((BasicBlock bid fstmts):rblks) = concat blockss
        let annot = MetaStmt [(fsLit "dbg", annotId)]
@@ -496,7 +498,7 @@ genJump :: CmmExpr -> [GlobalReg] -> LlvmM StmtData
 
 -- Call to known function
 genJump (CmmLit (CmmLabel lbl)) live = do
-    (vf, stmts, top) <- getHsFunc lbl
+    (vf, stmts, top) <- getHsFunc live lbl
     (stgRegs, stgStmts) <- funEpilogue live
     let s1  = Expr $ Call TailCall vf stgRegs llvmStdFunAttrs
     let s2  = Return Nothing
@@ -505,7 +507,7 @@ genJump (CmmLit (CmmLabel lbl)) live = do
 
 -- Call to unknown function / address
 genJump expr live = do
-    fty <- llvmFunTy
+    fty <- llvmFunTy live
     (vf, stmts, top) <- exprToVar expr
     dflags <- getDynFlags
 
@@ -1247,8 +1249,8 @@ genLit CmmHighStackMark
 -- question is never written. Therefore we skip it where we can to
 -- save a few lines in the output and hopefully speed compilation up a
 -- bit.
-funPrologue :: [CmmBasicBlock] -> LMMetaInt -> LlvmM StmtData
-funPrologue cmmBlocks scopeId = do
+funPrologue :: LiveGlobalRegs -> [CmmBasicBlock] -> LMMetaInt -> LlvmM StmtData
+funPrologue live cmmBlocks scopeId = do
 
   trash <- trashRegs
   let getAssignedRegs (CmmAssign reg _)  = [reg]
@@ -1263,6 +1265,7 @@ funPrologue cmmBlocks scopeId = do
       formalToReg (CmmHinted r _)        = CmmLocal r
       getRegsBlock (BasicBlock _ xs)     = concatMap getAssignedRegs xs
       assignedRegs = nub $ concatMap getRegsBlock cmmBlocks
+      isLive r     = r `elem` alwaysLive || r `elem` live
 
   dflags <- getDynFlags
   stmtss <- flip mapM assignedRegs $ \reg ->
@@ -1274,9 +1277,12 @@ funPrologue cmmBlocks scopeId = do
       CmmGlobal r -> do
         let reg   = lmGlobalRegVar dflags r
             arg   = lmGlobalRegArg dflags r
+            ty    = (pLower . getVarType) reg
+            trash = LMLitVar $ LMUndefLit ty
+            rval  = if isLive r then arg else trash
             alloc = Assignment reg $ Alloca (pLower $ getVarType reg) 1
         markStackReg r
-        return $ toOL [alloc, Store arg reg]
+        return $ toOL [alloc, Store rval reg]
 
   -- Declare registers
   let dbgRegs = [(CmmGlobal BaseReg, fsLit "BaseReg")
@@ -1327,29 +1333,32 @@ debugDeclareValue varMeta val = do
 
 -- | Function epilogue. Load STG variables to use as argument for call.
 -- STG Liveness optimisation done here.
-funEpilogue :: [GlobalReg] -> LlvmM ([LlvmVar], LlvmStatements)
+funEpilogue :: LiveGlobalRegs -> LlvmM ([LlvmVar], LlvmStatements)
 funEpilogue live = do
 
     -- Have information and liveness optimisation is enabled?
-    doRegLiveness <- getDynFlag (gopt Opt_RegLiveness)
-    let liveRegs = if doRegLiveness then alwaysLive ++ live else []
+    let liveRegs = alwaysLive ++ live
+        isFloat (FloatReg _)  = True
+        isFloat (DoubleReg _) = True
+        isFloat _             = False
 
     -- Set to value or "undef" depending on whether the register is
     -- actually live
     dflags <- getDynFlags
     let loadExpr r = do
           (v, _, s) <- getCmmRegVal (CmmGlobal r)
-          return (v, s)
+          return (Just $ v, s)
         loadUndef r = do
           let ty = (pLower . getVarType $ lmGlobalRegVar dflags r)
-          return (LMLitVar $ LMUndefLit ty, unitOL Nop)
+          return (Just $ LMLitVar $ LMUndefLit ty, nilOL)
     platform <- getDynFlag targetPlatform
-    loads <- flip mapM (activeStgRegs platform) $ \r ->
-      if r `elem` liveRegs then loadExpr r
-                           else loadUndef r
+    loads <- flip mapM (activeStgRegs platform) $ \r -> case () of
+      _ | r `elem` liveRegs  -> loadExpr r
+        | not (isFloat r)    -> loadUndef r
+        | otherwise          -> return (Nothing, nilOL)
 
     let (vars, stmts) = unzip loads
-    return (vars, concatOL stmts)
+    return (catMaybes vars, concatOL stmts)
 
 -- | Block prologue.
 blockPrologue :: LMMetaInt -> LlvmM StmtData
@@ -1385,9 +1394,9 @@ trashRegs = do plat <- getLlvmPlatform
 --
 -- This is for Haskell functions, function type is assumed, so doesn't work
 -- with foreign functions.
-getHsFunc :: CLabel -> LlvmM ExprData
-getHsFunc lbl
-  = do fty <- llvmFunTy
+getHsFunc :: LiveGlobalRegs -> CLabel -> LlvmM ExprData
+getHsFunc live lbl
+  = do fty <- llvmFunTy live
        name <- strCLabel_llvm lbl
        getHsFunc' name fty
 
