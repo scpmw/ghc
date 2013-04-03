@@ -13,7 +13,7 @@ import LlvmCodeGen.Base
 import LlvmCodeGen.Data
 
 import CLabel
-import OldCmm
+import Cmm
 import Platform
 
 import FastString

@@ -2,6 +2,7 @@
 -- | This is the top-level module in the LLVM code generator.
 --
 
+{-# LANGUAGE GADTs #-}
 module LlvmCodeGen ( llvmCodeGen, llvmFixupAsm ) where
 
 #include "HsVersions.h"
@@ -17,8 +18,10 @@ import LlvmMeta
 
 import BlockId ( blockLbl )
 import CgUtils ( fixStgRegisters )
-import OldCmm
-import OldPprCmm
+import Cmm
+import Hoopl
+import PprCmm
+import CmmUtils ( toBlockList )
 import Module
 import Debug
 
@@ -106,8 +109,8 @@ llvmGroupLlvmGens location (cmm, tick_map) = do
 
         -- Insert functions into map, collect data
         let split (CmmData s d' )     = return $ Just (s, d')
-            split p@(CmmProc _ l live _) = do
-              let l' = case topInfoTable p of
+            split (CmmProc h l live g) = do
+              let l' = case mapLookup (g_entry g) h of
                          Nothing                   -> l
                          Just (Statics info_lbl _) -> info_lbl
               lml <- strCLabel_llvm l'
@@ -153,9 +156,6 @@ cmmProcLlvmGens _ [] _ _
 cmmProcLlvmGens mod_loc ((CmmData _ _) : cmms) tick_map count
  = cmmProcLlvmGens mod_loc cmms tick_map count
 
-cmmProcLlvmGens mod_loc ((CmmProc _ _ _ (ListGraph [])) : cmms) tick_map count
- = cmmProcLlvmGens mod_loc cmms tick_map count
-
 cmmProcLlvmGens mod_loc (cmm : cmms) tick_map count
  = do cmmLlvmGen mod_loc tick_map count cmm
       cmmProcLlvmGens mod_loc cmms tick_map (count + 2)
@@ -163,7 +163,7 @@ cmmProcLlvmGens mod_loc (cmm : cmms) tick_map count
 
 -- | Complete LLVM code generation phase for a single top-level chunk of Cmm.
 cmmLlvmGen :: ModLocation -> TickMap -> Int -> RawCmmDecl -> LlvmM ()
-cmmLlvmGen mod_loc tick_map count cmm@(CmmProc _ lbl _ (ListGraph blocks)) = do
+cmmLlvmGen mod_loc tick_map count cmm@(CmmProc h lbl _ blocks) = do
 
     -- rewrite assignments to global regs
     dflags <- getDynFlag id
@@ -174,10 +174,11 @@ cmmLlvmGen mod_loc tick_map count cmm@(CmmProc _ lbl _ (ListGraph blocks)) = do
         (pprCmmGroup [fixed_cmm])
 
     -- Find and emit debug info for procedure
-    let entryLbl = case topInfoTable cmm of
+    let entryLbl = case mapLookup (g_entry blocks) h of
           Nothing                   -> lbl
           Just (Statics info_lbl _) -> info_lbl
-    let blockLbls = map (\(BasicBlock id _) -> blockLbl id) blocks
+        split = map blockSplit $ toBlockList blocks
+    let blockLbls = map (\(CmmEntry id, _, _) -> blockLbl id) split
     annotId <- cmmMetaLlvmProc lbl entryLbl blockLbls mod_loc tick_map
 
     -- generate llvm code from cmm

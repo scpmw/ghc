@@ -44,7 +44,7 @@ import CLabel
 import CodeGen.Platform ( activeStgRegs )
 import DynFlags
 import FastString
-import OldCmm
+import Cmm
 import qualified Outputable as Outp
 import qualified Pretty as Prt
 import Platform

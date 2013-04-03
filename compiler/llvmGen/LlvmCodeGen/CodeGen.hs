@@ -3,6 +3,7 @@
 -- | Handle conversion of CmmProc to LLVM code.
 --
 
+{-# LANGUAGE GADTs #-}
 module LlvmCodeGen.CodeGen ( genLlvmProc, trashRegs ) where
 
 #include "HsVersions.h"
@@ -16,8 +17,10 @@ import LlvmMeta ( genVariableMeta, LlvmAnnotator )
 import BlockId
 import CodeGen.Platform ( activeStgRegs, callerSaves )
 import CLabel
-import OldCmm
-import qualified OldPprCmm as PprCmm
+import Cmm
+import PprCmm
+import CmmUtils
+import Hoopl
 
 import DynFlags
 import FastString
@@ -38,9 +41,10 @@ type LlvmStatements = OrdList LlvmStatement
 -- | Top-level of the LLVM proc Code generator
 --
 genLlvmProc :: RawCmmDecl -> LlvmAnnotator -> LlvmM [LlvmCmmDecl]
-genLlvmProc proc0@(CmmProc _ lbl live (ListGraph blocks)) annotGen = do
+genLlvmProc (CmmProc infos lbl live graph) annotGen = do
+    let blocks = toBlockListEntryFirst graph
     (lmblocks, lmdata) <- basicBlocksCodeGen live blocks (annotGen lbl) annotGen
-    let info = topInfoTable proc0
+    let info = mapLookup (g_entry graph) infos
         proc = CmmProc info lbl live (ListGraph lmblocks)
     return (proc:lmdata)
 
@@ -51,31 +55,36 @@ genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"
 --
 
 -- | Generate code for a list of blocks that make up a complete procedure.
-basicBlocksCodeGen :: LiveGlobalRegs -> [CmmBasicBlock]
+basicBlocksCodeGen :: LiveGlobalRegs -> [CmmBlock]
                       -> (LMMetaInt, LMMetaInt, LMMetaInt) -> LlvmAnnotator
                       -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
 basicBlocksCodeGen live cmmBlocks (blockId, annotId, _) annotGen
   = do (prologue, tops1) <- funPrologue live cmmBlocks blockId
-       (blockss, topss) <- fmap unzip $ mapM (basicBlockCodeGen annotGen) cmmBlocks
-       let ((BasicBlock bid fstmts):rblks) = concat blockss
+       (blocks, topss) <- fmap unzip $ mapM (basicBlockCodeGen annotGen) cmmBlocks
+       let ((BasicBlock bid fstmts):rblks) = blocks
        let annot = MetaStmt [(fsLit "dbg", annotId)]
        let fblocks = (BasicBlock bid $ (map annot $ fromOL prologue) ++ fstmts):rblks
        return (fblocks, tops1 ++ concat topss)
 
 
 -- | Generate code for one block
-basicBlockCodeGen :: LlvmAnnotator -> CmmBasicBlock
-                     -> LlvmM ( [LlvmBasicBlock], [LlvmCmmDecl] )
-basicBlockCodeGen annotGen (BasicBlock id stmts)
-  = do (instrs, top) <- stmtsToInstrs stmts
+basicBlockCodeGen :: LlvmAnnotator
+                  -> CmmBlock
+                  -> LlvmM ( LlvmBasicBlock, [LlvmCmmDecl] )
+basicBlockCodeGen annotGen block
+  = do let (CmmEntry id, nodes, tail)  = blockSplit block
+       (mid_instrs, top) <- stmtsToInstrs $ blockToList nodes
+       (tail_instrs, top')  <- stmtToInstrs tail
+
        let (_,annotId,varId) = annotGen $ blockLbl id
        let annot = MetaStmt [(fsLit "dbg", annotId)]
        (ps, pt) <- blockPrologue varId
-       return ([BasicBlock id (map annot $ fromOL (ps `appOL` instrs))], pt ++ top)
 
+       let instrs = map annot $ fromOL (ps `appOL` mid_instrs `appOL` tail_instrs)
+       return (BasicBlock id instrs, pt ++ top' ++ top)
 
 -- -----------------------------------------------------------------------------
--- * CmmStmt code generation
+-- * CmmNode code generation
 --
 
 -- A statement conversion return data.
@@ -84,39 +93,36 @@ basicBlockCodeGen annotGen (BasicBlock id stmts)
 type StmtData = (LlvmStatements, [LlvmCmmDecl])
 
 
--- | Convert a list of CmmStmt's to LlvmStatement's
-stmtsToInstrs :: [CmmStmt] -> LlvmM StmtData
+-- | Convert a list of CmmNode's to LlvmStatement's
+stmtsToInstrs :: [CmmNode e x] -> LlvmM StmtData
 stmtsToInstrs stmts
    = do (instrss, topss) <- fmap unzip $ mapM stmtToInstrs stmts
         return (concatOL instrss, concat topss)
 
 
 -- | Convert a CmmStmt to a list of LlvmStatement's
-stmtToInstrs :: CmmStmt -> LlvmM StmtData
+stmtToInstrs :: CmmNode e x -> LlvmM StmtData
 stmtToInstrs stmt = case stmt of
 
-    CmmNop               -> return (nilOL, [])
     CmmComment _         -> return (nilOL, []) -- nuke comments
 
     CmmAssign reg src    -> genAssign reg src
     CmmStore addr src    -> genStore addr src
 
     CmmBranch id         -> genBranch id
-    CmmCondBranch arg id -> genCondBranch arg id
+    CmmCondBranch arg true false
+                         -> genCondBranch arg true false
     CmmSwitch arg ids    -> genSwitch arg ids
 
     -- Foreign Call
-    CmmCall target res args ret
-        -> genCall target res args ret
+    CmmUnsafeForeignCall target res args
+        -> genCall target res args
 
     -- Tail call
-    CmmJump arg live     -> genJump arg live
+    CmmCall { cml_target = arg,
+              cml_args_regs = live } -> genJump arg live
 
-    -- CPS, only tail calls, no return's
-    -- Actually, there are a few return statements that occur because of hand
-    -- written Cmm code.
-    CmmReturn
-        -> return (unitOL $ Return Nothing, [])
+    _ -> panic "Llvm.CodeGen.stmtToInstrs"
 
 -- | Wrapper function to declare an instrinct function by function type
 getInstrinct2 :: LMString -> LlvmType -> LlvmM ExprData
@@ -166,12 +172,12 @@ oldBarrier = do
         lmTrue  = mkIntLit i1 (-1)
 
 -- | Foreign Calls
-genCall :: CmmCallTarget -> [HintedCmmFormal] -> [HintedCmmActual]
-              -> CmmReturnInfo -> LlvmM StmtData
+genCall :: ForeignTarget -> [CmmFormal] -> [CmmActual]
+              -> LlvmM StmtData
 
 -- Write barrier needs to be handled specially as it is implemented as an LLVM
 -- intrinsic function.
-genCall (CmmPrim MO_WriteBarrier _) _ _ _ = do
+genCall (PrimTarget MO_WriteBarrier) _ _ = do
     platform <- getLlvmPlatform
     ver <- getLlvmVer
     case () of
@@ -184,7 +190,7 @@ genCall (CmmPrim MO_WriteBarrier _) _ _ _ = do
 -- types and things like Word8 are backed by an i32 and just present a logical
 -- i8 range. So we must handle conversions from i32 to i8 explicitly as LLVM
 -- is strict about types.
-genCall (CmmPrim op@(MO_PopCnt w) _) [CmmHinted dst _] args _ = do
+genCall t@(PrimTarget op@(MO_PopCnt w)) [dst] args = do
     let width = widthToLlvmInt w
         dstTy = cmmToLlvmType $ localRegType dst
 
@@ -193,7 +199,9 @@ genCall (CmmPrim op@(MO_PopCnt w) _) [CmmHinted dst _] args _ = do
 
     dstV                        <- getCmmReg (CmmLocal dst)
 
-    (argsV, stmts2, top2)       <- arg_vars args ([], nilOL, [])
+    let (_, arg_hints) = foreignTargetHints t
+    let args_hints = zip args arg_hints
+    (argsV, stmts2, top2)       <- arg_vars args_hints ([], nilOL, [])
     (argsV', stmts4)            <- castVars $ zip argsV [width]
     (retV, s1)                  <- doExpr width $ Call StdCall fptr argsV' []
     ([retV'], stmts5)           <- castVars [(retV,dstTy)]
@@ -205,7 +213,7 @@ genCall (CmmPrim op@(MO_PopCnt w) _) [CmmHinted dst _] args _ = do
 
 -- Handle memcpy function specifically since llvm's intrinsic version takes
 -- some extra parameters.
-genCall t@(CmmPrim op _) [] args' CmmMayReturn
+genCall t@(PrimTarget op) [] args'
  | op == MO_Memcpy ||
    op == MO_Memset ||
    op == MO_Memmove = do
@@ -220,7 +228,9 @@ genCall t@(CmmPrim op _) [] args' CmmMayReturn
         funTy = \name -> LMFunction $ LlvmFunctionDecl name ExternallyVisible
                              CC_Ccc LMVoid FixedArgs (tysToParams argTy) Nothing
 
-    (argVars, stmts1, top1)       <- arg_vars args ([], nilOL, [])
+    let (_, arg_hints) = foreignTargetHints t
+    let args_hints = zip args arg_hints
+    (argVars, stmts1, top1)       <- arg_vars args_hints ([], nilOL, [])
     (fptr, stmts2, top2)          <- getFunPtr funTy t
     (argVars', stmts3)            <- castVars $ zip argVars argTy
 
@@ -236,49 +246,45 @@ genCall t@(CmmPrim op _) [] args' CmmMayReturn
     -- Fix for trac #6158. Since LLVM 3.1, opt fails when given anything other
     -- than a direct constant (i.e. 'i32 8') as the alignment argument for the
     -- memcpy & co llvm intrinsic functions. So we handle this directly now.
-    extractLit (CmmHinted (CmmLit (CmmInt i _)) _) = mkIntLit i32 i
+    extractLit (CmmLit (CmmInt i _)) = mkIntLit i32 i
     extractLit _other = trace ("WARNING: Non constant alignment value given" ++ 
                                " for memcpy! Please report to GHC developers")
                         mkIntLit i32 0
 
-genCall (CmmPrim _ (Just stmts)) _ _ _
-    = stmtsToInstrs stmts
-
 -- Handle all other foreign calls and prim ops.
-genCall target res args ret = do
+genCall target res args = do
 
     dflags <- getDynFlags
 
     -- parameter types
-    let arg_type (CmmHinted _ AddrHint) = i8Ptr
+    let arg_type (_, AddrHint) = i8Ptr
         -- cast pointers to i8*. Llvm equivalent of void*
-        arg_type (CmmHinted expr _    ) = cmmToLlvmType $ cmmExprType dflags expr
+        arg_type (expr, _) = cmmToLlvmType $ cmmExprType dflags expr
 
     -- ret type
-    let ret_type ([]) = LMVoid
-        ret_type ([CmmHinted _ AddrHint]) = i8Ptr
-        ret_type ([CmmHinted reg _])      = cmmToLlvmType $ localRegType reg
+    let ret_type [] = LMVoid
+        ret_type [(_, AddrHint)] = i8Ptr
+        ret_type [(reg, _)]      = cmmToLlvmType $ localRegType reg
         ret_type t = panic $ "genCall: Too many return values! Can only handle"
                         ++ " 0 or 1, given " ++ show (length t) ++ "."
 
-    -- extract Cmm call convention
-    let cconv = case target of
-            CmmCallee _ conv -> conv
-            CmmPrim   _ _    -> PrimCallConv
-
-    -- translate to LLVM call convention
+    -- extract Cmm call convention, and translate to LLVM call convention
     platform <- getLlvmPlatform
-    let lmconv = case cconv of
-            StdCallConv  -> case platformArch platform of
-                            ArchX86    -> CC_X86_Stdcc
-                            ArchX86_64 -> CC_X86_Stdcc
-                            _          -> CC_Ccc
-            CCallConv    -> CC_Ccc
-            CApiConv     -> CC_Ccc
-            PrimCallConv -> CC_Ccc
+    let lmconv = case target of
+            ForeignTarget _ (ForeignConvention conv _ _ _) ->
+              case conv of
+                 StdCallConv  -> case platformArch platform of
+                                 ArchX86    -> CC_X86_Stdcc
+                                 ArchX86_64 -> CC_X86_Stdcc
+                                 _          -> CC_Ccc
+                 CCallConv    -> CC_Ccc
+                 CApiConv     -> CC_Ccc
+                 PrimCallConv -> panic "LlvmCodeGen.CodeGen.genCall: PrimCallConv"
+
+            PrimTarget   _ -> CC_Ccc
 
     {-
-        Some of the possibilities here are a worry with the use of a custom
+        CC_Ccc of the possibilities here are a worry with the use of a custom
         calling convention for passing STG args. In practice the more
         dangerous combinations (e.g StdCall + llvmGhcCC) don't occur.
 
@@ -286,23 +292,30 @@ genCall target res args ret = do
     -}
 
     -- call attributes
-    let fnAttrs | ret == CmmNeverReturns = NoReturn : llvmStdFunAttrs
-                | otherwise              = llvmStdFunAttrs
+    let fnAttrs | never_returns = NoReturn : llvmStdFunAttrs
+                | otherwise     = llvmStdFunAttrs
+
+        never_returns = case target of
+             ForeignTarget _ (ForeignConvention _ _ _ CmmNeverReturns) -> True
+             _ -> False
 
     -- fun type
+    let (res_hints, arg_hints) = foreignTargetHints target
+    let args_hints = zip args arg_hints
+    let ress_hints = zip res  res_hints
     let ccTy  = StdCall -- tail calls should be done through CmmJump
-    let retTy = ret_type res
-    let argTy = tysToParams $ map arg_type args
+    let retTy = ret_type ress_hints
+    let argTy = tysToParams $ map arg_type args_hints
     let funTy = \name -> LMFunction $ LlvmFunctionDecl name ExternallyVisible
                              lmconv retTy FixedArgs argTy (llvmFunAlign dflags)
 
 
-    (argVars, stmts1, top1) <- arg_vars args ([], nilOL, [])
+    (argVars, stmts1, top1) <- arg_vars args_hints ([], nilOL, [])
     (fptr, stmts2, top2)    <- getFunPtr funTy target
 
-    let retStmt | ccTy == TailCall       = unitOL $ Return Nothing
-                | ret == CmmNeverReturns = unitOL $ Unreachable
-                | otherwise              = nilOL
+    let retStmt | ccTy == TailCall  = unitOL $ Return Nothing
+                | never_returns     = unitOL $ Unreachable
+                | otherwise         = nilOL
 
     stmts3 <- trashStmts
     let stmts = stmts1 `appOL` stmts2 `appOL` stmts3
@@ -317,10 +330,10 @@ genCall target res args ret = do
         _ -> do
             (v1, s1) <- doExpr retTy $ Call ccTy fptr argVars fnAttrs
             -- get the return register
-            let ret_reg ([CmmHinted reg hint]) = (reg, hint)
+            let ret_reg [reg] = reg
                 ret_reg t = panic $ "genCall: Bad number of registers! Can only handle"
                                 ++ " 1, given " ++ show (length t) ++ "."
-            let (creg, _) = ret_reg res
+            let creg = ret_reg res
             vreg <- getCmmReg (CmmLocal creg)
             let allStmts = stmts `snocOL` s1
             if retTy == pLower (getVarType vreg)
@@ -344,14 +357,14 @@ genCall target res args ret = do
 
 
 -- | Create a function pointer from a target.
-getFunPtr :: (LMString -> LlvmType) -> CmmCallTarget
+getFunPtr :: (LMString -> LlvmType) -> ForeignTarget
           -> LlvmM ExprData
 getFunPtr funTy targ = case targ of
-    CmmCallee (CmmLit (CmmLabel lbl)) _ -> do
+    ForeignTarget (CmmLit (CmmLabel lbl)) _ -> do
         name <- strCLabel_llvm lbl
         getHsFunc' name (funTy name)
 
-    CmmCallee expr _ -> do
+    ForeignTarget expr _ -> do
         (v1, stmts, top) <- exprToVar expr
         dflags <- getDynFlags
         let fty = funTy $ fsLit "dynamic"
@@ -365,20 +378,20 @@ getFunPtr funTy targ = case targ of
         (v2,s1) <- doExpr (pLift fty) $ Cast cast v1 (pLift fty)
         return (v2, stmts `snocOL` s1, top)
 
-    CmmPrim mop _ -> do
+    PrimTarget mop -> do
         name <- cmmPrimOpFunctions mop
         let fty = funTy name
         getInstrinct2 name fty
 
 -- | Conversion of call arguments.
-arg_vars :: [HintedCmmActual]
+arg_vars :: [(CmmActual, ForeignHint)]
          -> ([LlvmVar], LlvmStatements, [LlvmCmmDecl])
          -> LlvmM ([LlvmVar], LlvmStatements, [LlvmCmmDecl])
 
 arg_vars [] (vars, stmts, tops)
   = return (vars, stmts, tops)
 
-arg_vars (CmmHinted e AddrHint:rest) (vars, stmts, tops)
+arg_vars ((e, AddrHint):rest) (vars, stmts, tops)
   = do (v1, stmts', top') <- exprToVar e
        dflags <- getDynFlags
        let op = case getVarType v1 of
@@ -392,7 +405,7 @@ arg_vars (CmmHinted e AddrHint:rest) (vars, stmts, tops)
        arg_vars rest (vars ++ [v2], stmts `appOL` stmts' `snocOL` s1,
                                tops ++ top')
 
-arg_vars (CmmHinted e _:rest) (vars, stmts, tops)
+arg_vars ((e, _):rest) (vars, stmts, tops)
   = do (v1, stmts', top') <- exprToVar e
        arg_vars rest (vars ++ [v1], stmts `appOL` stmts', tops ++ top')
 
@@ -657,17 +670,15 @@ genBranch id =
 
 
 -- | Conditional branch
-genCondBranch :: CmmExpr -> BlockId -> LlvmM StmtData
-genCondBranch cond idT = do
-    idF <- runUs $ getUniqueUs
+genCondBranch :: CmmExpr -> BlockId -> BlockId -> LlvmM StmtData
+genCondBranch cond idT idF = do
     let labelT = blockIdToLlvm idT
-    let labelF = LMLocalVar idF LMLabel
+    let labelF = blockIdToLlvm idF
     (vc, stmts, top) <- exprToVarOpt i1Option cond
     if getVarType vc == i1
         then do
             let s1 = BranchIf vc labelT labelF
-            let s2 = MkLabel idF
-            return $ (stmts `snocOL` s1 `snocOL` s2, top)
+            return (stmts `snocOL` s1, top)
         else do
             dflags <- getDynFlags
             panic $ "genCondBranch: Cond expr not bool! (" ++ showSDoc dflags (ppr vc) ++ ")"
@@ -1249,22 +1260,18 @@ genLit CmmHighStackMark
 -- question is never written. Therefore we skip it where we can to
 -- save a few lines in the output and hopefully speed compilation up a
 -- bit.
-funPrologue :: LiveGlobalRegs -> [CmmBasicBlock] -> LMMetaInt -> LlvmM StmtData
+funPrologue :: LiveGlobalRegs -> [CmmBlock] -> LMMetaInt -> LlvmM StmtData
 funPrologue live cmmBlocks scopeId = do
 
   trash <- trashRegs
-  let getAssignedRegs (CmmAssign reg _)  = [reg]
+  let getAssignedRegs :: CmmNode O O -> [CmmReg]
+      getAssignedRegs (CmmAssign reg _)  = [reg]
       -- Calls will trash all registers. Unfortunately, this needs them to
       -- be stack-allocated in the first place.
-      getAssignedRegs (CmmCall t rs _ _) = map CmmGlobal trash ++
-                                            map formalToReg rs ++
-                                            getPrimRegs t
+      getAssignedRegs (CmmUnsafeForeignCall _ rs _) = map CmmGlobal trash ++ map CmmLocal rs
       getAssignedRegs _                  = []
-      getPrimRegs (CmmPrim _ (Just ss))  = concatMap getAssignedRegs ss
-      getPrimRegs _                      = []
-      formalToReg (CmmHinted r _)        = CmmLocal r
-      getRegsBlock (BasicBlock _ xs)     = concatMap getAssignedRegs xs
-      assignedRegs = nub $ concatMap getRegsBlock cmmBlocks
+      getRegsBlock (_, body, _)          = concatMap getAssignedRegs $ blockToList body
+      assignedRegs = nub $ concatMap (getRegsBlock . blockSplit) cmmBlocks
       isLive r     = r `elem` alwaysLive || r `elem` live
 
   dflags <- getDynFlags
