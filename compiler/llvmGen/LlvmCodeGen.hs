@@ -110,12 +110,20 @@ llvmGroupLlvmGens location (cmm, tick_map) = do
         -- Insert functions into map, collect data
         let split (CmmData s d' )     = return $ Just (s, d')
             split (CmmProc h l live g) = do
+
+              -- Set function type
               let l' = case mapLookup (g_entry g) h of
                          Nothing                   -> l
                          Just (Statics info_lbl _) -> info_lbl
               lml <- strCLabel_llvm l'
               funInsert lml =<< llvmFunTy live
+
+              -- Save Cmm/Llvm label mapping
               labelInsert l l'
+              let blocks = map blockSplit $ toBlockList g
+              flip mapM_ blocks $ \(CmmEntry i, _, _) ->
+                let bl = blockLbl i in labelInsert bl bl
+
               return Nothing
         cdata <- fmap catMaybes $ mapM split cmm
 
