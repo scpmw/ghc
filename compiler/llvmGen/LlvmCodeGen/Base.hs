@@ -464,14 +464,15 @@ generateAliases = do
     -- Defined by now?
     m_ty <- funLookup lbl
     let mkVar ty link = LMGlobalVar lbl (LMPointer ty) link Nothing Nothing Global
-        (defs, ty, var) = case m_ty of
-          Just ty -> ([], ty, mkVar ty ExternallyVisible)
+        (defs, ty, var, link) = case m_ty of
+          Just ty -> ([], ty, mkVar ty ExternallyVisible, Internal)
           Nothing -> let ty = LMArray 0 (llvmWord dflags)
                          var = mkVar ty External
-                     in ([LMGlobal var Nothing], ty, var)
+                     in ([LMGlobal var Nothing], ty, var, External)
         aliasLbl = lbl `appendFS` fsLit "_alias"
         tyLbl = lbl `appendFS` fsLit "_type"
-        aliasVar = LMGlobalVar aliasLbl (LMPointer ty) Internal Nothing Nothing Alias
+        -- See note [Alias Linkage]
+        aliasVar = LMGlobalVar aliasLbl (LMPointer ty) link Nothing Nothing Alias
     return ((LMGlobal aliasVar $ Just $ LMStaticPointer var) : defs,
             LMAlias (tyLbl, ty)
             )
