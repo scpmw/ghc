@@ -829,7 +829,7 @@ oldMD5 dflags bh = do
   let cmd = "md5sum " ++ tmp ++ " >" ++ tmp2
   r <- system cmd
   case r of
-    ExitFailure _ -> ghcError (PhaseFailed cmd r)
+    ExitFailure _ -> throwGhcException (PhaseFailed cmd r)
     ExitSuccess -> do
         hash_str <- readFile tmp2
         return $! readHexFingerprint hash_str
@@ -1124,7 +1124,7 @@ check_old_iface hsc_env mod_summary src_modified maybe_iface
              read_result <- readIface (ms_mod mod_summary) iface_path False
              case read_result of
                  Failed err -> do
-                     traceIf (text "FYI: cannont read old interface file:" $$ nest 4 err)
+                     traceIf (text "FYI: cannot read old interface file:" $$ nest 4 err)
                      return Nothing
                  Succeeded iface -> do
                      traceIf (text "Read the interface file" <+> text iface_path)
@@ -1502,16 +1502,19 @@ tyConToIfaceDecl env tycon
                     ifConUnivTvs = toIfaceTvBndrs univ_tvs',
                     ifConExTvs   = toIfaceTvBndrs ex_tvs',
                     ifConEqSpec  = to_eq_spec eq_spec,
-                    ifConCtxt    = tidyToIfaceContext env3 theta,
-                    ifConArgTys  = map (tidyToIfaceType env3) arg_tys,
+                    ifConCtxt    = tidyToIfaceContext env2 theta,
+                    ifConArgTys  = map (tidyToIfaceType env2) arg_tys,
                     ifConFields  = map getOccName 
                                        (dataConFieldLabels data_con),
                     ifConStricts = dataConStrictMarks data_con }
         where
           (univ_tvs, ex_tvs, eq_spec, theta, arg_tys, _) = dataConFullSig data_con
-          (env2, univ_tvs') = tidyTyClTyVarBndrs env1 univ_tvs
-          (env3, ex_tvs')   = tidyTyVarBndrs env2 ex_tvs
-          to_eq_spec spec = [ (getOccName (tidyTyVar env3 tv), tidyToIfaceType env3 ty) 
+
+          -- Start with 'emptyTidyEnv' not 'env1', because the type of the
+          -- data constructor is fully standalone
+          (env1, univ_tvs') = tidyTyVarBndrs emptyTidyEnv univ_tvs
+          (env2, ex_tvs')   = tidyTyVarBndrs env1 ex_tvs
+          to_eq_spec spec = [ (getOccName (tidyTyVar env2 tv), tidyToIfaceType env2 ty) 
                             | (tv,ty) <- spec]
 
 

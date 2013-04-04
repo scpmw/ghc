@@ -102,7 +102,7 @@ pprTop (CmmProc infos clbl _ graph) =
            rbrace ]
     )
   where
-        blocks = toBlockList graph
+        blocks = toBlockListEntryFirst graph
         (temp_decls, extern_decls) = pprTempAndExternDecls blocks
 
 
@@ -230,6 +230,8 @@ pprStmt stmt =
                     pprCall cast_fn cconv hresults hargs <> semi)
                         -- for a dynamic call, no declaration is necessary.
 
+    CmmUnsafeForeignCall (PrimTarget MO_Touch) _results _args -> empty
+
     CmmUnsafeForeignCall target@(PrimTarget op) results args ->
         proto $$ fn_call
       where
@@ -295,8 +297,8 @@ pprBranch ident = ptext (sLit "goto") <+> pprBlockId ident <> semi
 pprCondBranch :: CmmExpr -> BlockId -> BlockId -> SDoc
 pprCondBranch expr yes no
         = hsep [ ptext (sLit "if") , parens(pprExpr expr) ,
-                        ptext (sLit "goto"), pprBlockId yes,
-                        ptext (sLit "else"), pprBlockId no <> semi ]
+                        ptext (sLit "goto"), pprBlockId yes <> semi,
+                        ptext (sLit "else goto"), pprBlockId no <> semi ]
 
 -- ---------------------------------------------------------------------
 -- a local table branch
@@ -996,6 +998,9 @@ cLoad expr rep
            in parens (cast <+> pprExpr1 expr) <> ptext (sLit "->x")
       else char '*' <> parens (cCast (machRepPtrCType rep) expr)
     where -- On these platforms, unaligned loads are known to cause problems
+          bewareLoadStoreAlignment ArchAlpha    = True
+          bewareLoadStoreAlignment ArchMipseb   = True
+          bewareLoadStoreAlignment ArchMipsel   = True
           bewareLoadStoreAlignment (ArchARM {}) = True
           bewareLoadStoreAlignment _            = False
 
