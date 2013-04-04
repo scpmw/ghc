@@ -181,7 +181,7 @@
 #define EVENT_DEBUG_CORE          203
 #define EVENT_DEBUG_PTR_RANGE     204
 
-#define EVENT_INSTR_PTR_SAMPLE    205 /* (ips)                  */
+#define EVENT_DEBUG_SAMPLES       205
 
 /*
  * The highest event code +1 that ghc itself emits. Note that some event

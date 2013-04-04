@@ -217,8 +217,11 @@ void traceUserMarker(Capability *cap, char *msg);
 #define SAMPLE_BY_STALLED_FE   7
 #define SAMPLE_BY_STALLED_BE   8
 
-void traceInstrPtrSample(Capability *cap, StgBool own_cap, StgWord32 sample_type,
-                         StgWord32 cnt, void **ips);
+#define SAMPLE_INSTR_PTR       0
+
+void traceSamples(Capability *cap, StgBool own_cap,
+                  StgWord32 sample_by, StgWord32 sample_type,
+                  StgWord32 cnt, void **samples, nat *weights);
 
 void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
 
