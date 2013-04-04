@@ -458,8 +458,8 @@ getGlobalPtr llvmLbl = do
     Nothing -> do
       delayType llvmLbl
       return $ mkGlbVar
-        (llvmLbl `appendFS` fsLit "_alias")
-        (LMAlias (llvmLbl `appendFS` fsLit "_type", undefined))
+        (llvmLbl `appendFS` fsLit "$alias")
+        (LMAlias (llvmLbl `appendFS` fsLit "$type", undefined))
         Alias
 
 -- | Generate aliases for references that were created while compiling.
@@ -476,8 +476,8 @@ generateAliases = do
           Nothing -> let ty = LMArray 0 (llvmWord dflags)
                          var = mkVar ty External
                      in ([LMGlobal var Nothing], ty, var, External)
-        aliasLbl = lbl `appendFS` fsLit "_alias"
-        tyLbl = lbl `appendFS` fsLit "_type"
+        aliasLbl = lbl `appendFS` fsLit "$alias"
+        tyLbl = lbl `appendFS` fsLit "$type"
         -- See note [Alias Linkage]
         aliasVar = LMGlobalVar aliasLbl (LMPointer ty) link Nothing Nothing Alias
     return ((LMGlobal aliasVar $ Just $ LMStaticPointer var) : defs,
@@ -513,10 +513,10 @@ generateAliases = do
 -- refer to "fun" itself, but instead refer to a *value* alias of it instead,
 -- which we can later set to the proper value without any further hassle:
 --
---  @ptr = constant %typ* @fun_alias;
+--  @ptr = constant %typ* @fun$alias;
 --  define i32 @fun() { ret i32 0; }
 --  %typ = type i32 ();
---  @fun_alias = alias %typ* @fun;
+--  @fun$alias = alias %typ* @fun;
 
 -- ----------------------------------------------------------------------------
 -- * Misc
