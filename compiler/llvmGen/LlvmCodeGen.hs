@@ -122,7 +122,7 @@ llvmGroupLlvmGens location (cmm, tick_map) = do
         {-# SCC "llvm_datas_gen" #-}
           cmmDataLlvmGens cdata
         {-# SCC "llvm_procs_gen" #-}
-          cmmProcLlvmGens location cmm tick_map 1
+          mapM_ (cmmLlvmGen location tick_map) cmm
         return tick_map
 
 -- -----------------------------------------------------------------------------
@@ -142,28 +142,9 @@ cmmDataLlvmGens statics
 
        renderLlvm $ pprLlvmData (concat gss, concat tss)
 
-
--- -----------------------------------------------------------------------------
--- | Do LLVM code generation on all these Cmms procs.
---
-cmmProcLlvmGens :: ModLocation -> [RawCmmDecl] -> TickMap
-      -> Int         -- ^ count, used for generating unique subsections
-      -> LlvmM ()
-
-cmmProcLlvmGens _ [] _ _
-  = return ()
-
-cmmProcLlvmGens mod_loc ((CmmData _ _) : cmms) tick_map count
- = cmmProcLlvmGens mod_loc cmms tick_map count
-
-cmmProcLlvmGens mod_loc (cmm : cmms) tick_map count
- = do cmmLlvmGen mod_loc tick_map count cmm
-      cmmProcLlvmGens mod_loc cmms tick_map (count + 2)
-
-
 -- | Complete LLVM code generation phase for a single top-level chunk of Cmm.
-cmmLlvmGen :: ModLocation -> TickMap -> Int -> RawCmmDecl -> LlvmM ()
-cmmLlvmGen mod_loc tick_map count cmm@(CmmProc h lbl _ blocks) = do
+cmmLlvmGen :: ModLocation -> TickMap -> RawCmmDecl -> LlvmM ()
+cmmLlvmGen mod_loc tick_map cmm@(CmmProc h lbl _ blocks) = do
 
     -- rewrite assignments to global regs
     dflags <- getDynFlag id
@@ -184,14 +165,19 @@ cmmLlvmGen mod_loc tick_map count cmm@(CmmProc h lbl _ blocks) = do
     -- generate llvm code from cmm
     llvmBC <- withClearVars $ genLlvmProc fixed_cmm annotId
 
+    -- allocate IDs for info table and code, so the mangler can later
+    -- make sure they end up next to each other.
+    itableSection <- freshSectionId
+    _codeSection <- freshSectionId
+
     -- pretty print
-    (docs, ivars) <- fmap unzip $ mapM (pprLlvmCmmDecl count) llvmBC
+    (docs, ivars) <- fmap unzip $ mapM (pprLlvmCmmDecl itableSection) llvmBC
 
     -- Output, note down used variables
     renderLlvm (vcat docs)
     mapM_ markUsedVar $ concat ivars
 
-cmmLlvmGen _ _ _ _ = return ()
+cmmLlvmGen _ _ _ = return ()
 
 -- -----------------------------------------------------------------------------
 -- | Marks variables as used where necessary
