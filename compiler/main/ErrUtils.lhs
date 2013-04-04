@@ -253,7 +253,7 @@ dumpSDoc dflags flag hdr doc
                                              $$ blankLine
                                              $$ doc
                                         return $ mkDumpDoc hdr d
-                        defaultLogActionHPrintDoc dflags handle doc' defaultDumpStyle
+                        defaultLogActionHPrintDoc dflags handle doc' lineAnnotatedDumpStyle
                         hClose handle
 
             -- write the dump to stdout

@@ -93,7 +93,14 @@ ppr_bind (Rec binds)           = vcat (map pp binds)
 ppr_binding :: OutputableBndr b => (b, Expr b) -> SDoc
 ppr_binding (val_bdr, expr)
   = pprBndr LetBind val_bdr $$
-    hang (ppr val_bdr <+> equals) 2 (pprCoreExpr expr)
+    hang (ppr val_bdr <+> equals) 2 (ppr_annot val_bdr $ pprCoreExpr expr)
+
+ppr_annot :: Outputable b => b -> SDoc -> SDoc
+ppr_annot name doc = sdocWithDynFlags $ \dflags ->
+  let annot = showSDocDump dflags $ text "ann<#" <> ppr name <> text "#>"
+  in pprAnnotate annot doc
+
+
 \end{code}
 
 \begin{code}
@@ -170,7 +177,8 @@ ppr_expr add_par (Case expr var ty [(con,args,rhs)])
                      , char '}'
                              <+> ptext (sLit "in")
                      ]
-             , pprCoreExpr rhs
+             , ppr_annot (var, con) $
+               pprCoreExpr rhs
              ]
     else add_par $
          sep [sep [ptext (sLit "case") <+> pprCoreExpr expr,
@@ -178,6 +186,7 @@ ppr_expr add_par (Case expr var ty [(con,args,rhs)])
                    sep [ptext (sLit "of") <+> ppr_bndr var,
                         char '{' <+> ppr_case_pat con args <+> arrow]
                ],
+              ppr_annot (var, con) $
               pprCoreExpr rhs,
               char '}'
          ]
@@ -190,11 +199,12 @@ ppr_expr add_par (Case expr var ty alts)
                 <+> pprCoreExpr expr
                 <+> ifPprDebug (braces (ppr ty)),
               ptext (sLit "of") <+> ppr_bndr var <+> char '{'],
-         nest 2 (vcat (punctuate semi (map pprCoreAlt alts))),
+         nest 2 (vcat (punctuate semi (map ppr_alt alts))),
          char '}'
     ]
   where
     ppr_bndr = pprBndr CaseBind
+    ppr_alt alt@(con,_,_) = ppr_annot (var, con) $ pprCoreAlt alt
 
 
 -- special cases: let ... in let ...
