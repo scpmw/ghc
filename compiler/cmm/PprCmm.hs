@@ -180,7 +180,11 @@ pprNode node = pp_node <+> pp_debug
       CmmEntry id -> ppr id <> colon
 
       -- // text
-      CmmComment s -> text "//" <+> ftext s
+      CmmComment s -> ptext (sLit "//") <+> ftext s
+
+      -- // tick
+      CmmTick t -> ptext (sLit "//tick") <+> ppr t
+      CmmContext l -> ptext (sLit "//ctx") <+> ppr l
 
       -- reg = expr;
       CmmAssign reg expr -> ppr reg <+> equals <+> ppr expr <> semi
@@ -263,6 +267,8 @@ pprNode node = pp_node <+> pp_debug
       else case node of
              CmmEntry {}             -> empty -- Looks terrible with text "  // CmmEntry"
              CmmComment {}           -> empty -- Looks also terrible with text "  // CmmComment"
+             CmmTick {}              -> empty -- Looks even more terrible with text "  // CmmTick"
+             CmmContext {}           -> empty -- Looks simply unacceptable with text "  // CmmContext"
              CmmAssign {}            -> text "  // CmmAssign"
              CmmStore {}             -> text "  // CmmStore"
              CmmUnsafeForeignCall {} -> text "  // CmmUnsafeForeignCall"

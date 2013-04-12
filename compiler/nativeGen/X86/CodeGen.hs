@@ -151,6 +151,8 @@ stmtToInstrs stmt = do
   is32Bit <- is32BitPlatform
   case stmt of
     CmmComment s   -> return (unitOL (COMMENT s))
+    CmmTick {}     -> return nilOL
+    CmmContext {}  -> return nilOL
 
     CmmAssign reg src
       | isFloatType ty         -> assignReg_FltCode size reg src

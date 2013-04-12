@@ -1,8 +1,6 @@
 {-# LANGUAGE GADTs #-}
 -- ToDo: remove -fno-warn-warnings-deprecations
 {-# OPTIONS_GHC -fno-warn-warnings-deprecations #-}
--- ToDo: remove -fno-warn-incomplete-patterns
-{-# OPTIONS_GHC -fno-warn-incomplete-patterns #-}
 
 module CmmCommonBlockElim
   ( elimCommonBlocks
@@ -94,7 +92,7 @@ hash_block block =
         hash_lst m h = hash_node m + h `shiftL` 1
 
         hash_node :: CmmNode O x -> Word32
-        hash_node (CmmComment _) = 0 -- don't care
+        hash_node n | dont_care n = 0 -- don't care
         hash_node (CmmAssign r e) = hash_reg r + hash_e e
         hash_node (CmmStore e e') = hash_e e + hash_e e'
         hash_node (CmmUnsafeForeignCall t _ as) = hash_tgt t + hash_list hash_e as
@@ -103,6 +101,7 @@ hash_block block =
         hash_node (CmmCall e _ _ _ _ _) = hash_e e
         hash_node (CmmForeignCall t _ _ _ _ _) = hash_tgt t
         hash_node (CmmSwitch e _) = hash_e e
+        hash_node _ = error "hash_node: unknown Cmm node!"
 
         hash_reg :: CmmReg -> Word32
         hash_reg   (CmmLocal _) = 117
@@ -131,6 +130,14 @@ hash_block block =
         hash_list f = foldl (\z x -> f x + z) (0::Word32)
 
         cvt = fromInteger . toInteger
+
+-- | Ignore these node types for equality
+dont_care :: CmmNode O x -> Bool
+dont_care CmmComment {}  = True
+dont_care CmmTick {}     = True
+dont_care CmmContext {}  = True
+dont_care _other         = False
+
 -- Utilities: equality and substitution on the graph.
 
 -- Given a map ``subst'' from BlockID -> BlockID, we define equality.
@@ -147,7 +154,6 @@ lookupBid subst bid = case mapLookup bid subst of
 --
 eqMiddleWith :: (BlockId -> BlockId -> Bool)
              -> CmmNode O O -> CmmNode O O -> Bool
-eqMiddleWith _ (CmmComment _) (CmmComment _) = True
 eqMiddleWith eqBid (CmmAssign r1 e1) (CmmAssign r2 e2)
   = r1 == r2 && eqExprWith eqBid e1 e2
 eqMiddleWith eqBid (CmmStore l1 r1) (CmmStore l2 r2)
@@ -182,10 +188,12 @@ eqExprWith eqBid = eq
 -- IDs to block IDs.
 eqBlockBodyWith :: (BlockId -> BlockId -> Bool) -> CmmBlock -> CmmBlock -> Bool
 eqBlockBodyWith eqBid block block'
-  = and (zipWith (eqMiddleWith eqBid) (blockToList m) (blockToList m')) &&
+  = and (zipWith (eqMiddleWith eqBid) nodes nodes') &&
     eqLastWith eqBid l l'
   where (_,m,l)   = blockSplit block
+        nodes     = filter (not . dont_care) (blockToList m)
         (_,m',l') = blockSplit block'
+        nodes'    = filter (not . dont_care) (blockToList m')
 
 
 

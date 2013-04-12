@@ -26,6 +26,7 @@ module StgCmmMonad (
         emit, emitDecl, emitProc,
         emitProcWithConvention, emitProcWithStackFrame,
         emitOutOfLine, emitAssign, emitStore, emitComment,
+        emitTick, emitContext,
 
         getCmm, aGraphToGraph,
 	getCodeR, getCode, getHeapUsage,
@@ -79,6 +80,7 @@ import Unique
 import UniqSupply
 import FastString
 import Outputable
+import CoreSyn (Tickish)
 
 import Control.Monad
 import Data.List
@@ -677,6 +679,12 @@ emitComment s = emitCgStmt (CgStmt (CmmComment s))
 emitComment _ = return ()
 #endif
 
+emitTick :: Tickish () -> FCode ()
+emitTick = emitCgStmt . CgStmt . CmmTick
+
+emitContext :: Label -> FCode ()
+emitContext = emitCgStmt . CgStmt . CmmContext
+
 emitAssign :: CmmReg  -> CmmExpr -> FCode ()
 emitAssign l r = emitCgStmt (CgStmt (CmmAssign l r))
 
@@ -686,6 +694,8 @@ emitStore l r = emitCgStmt (CgStmt (CmmStore l r))
 
 newLabelC :: FCode BlockId
 newLabelC = do { u <- newUnique
+               ; let l = mkBlockId u
+               ; emitContext l
                ; return $ mkBlockId u }
 
 emit :: CmmAGraph -> FCode ()

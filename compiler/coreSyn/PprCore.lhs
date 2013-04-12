@@ -512,11 +512,13 @@ instance Outputable id => Outputable (Tickish id) where
          (True,True)  -> hcat [ptext (sLit "scctick<"), ppr cc, char '>']
          (True,False) -> hcat [ptext (sLit "tick<"),    ppr cc, char '>']
          _            -> hcat [ptext (sLit "scc<"),     ppr cc, char '>']
-  ppr (SourceNote span _ f) = ifPprDebug $
+  ppr (SourceNote span _ f) =
       hcat [ ptext (sLit "src<"), ppr f, ptext (sLit ":"), text (showUserRealSpan True span), char '>']
-  ppr (CoreNote {coreBind = bnd}) = ifPprDebug $
+  ppr (CoreNote {coreBind = bnd, coreCon = DEFAULT}) =
       hcat [ ptext (sLit "core<"), ppr bnd, ptext (sLit "=...>") ]
-  ppr (OptNote {optRule = rname}) = ifPprDebug $
+  ppr (CoreNote {coreBind = bnd, coreCon = con}) =
+      hcat [ ptext (sLit "core<"), ppr bnd <+> ppr con <>ptext (sLit "->...>") ]
+  ppr (OptNote {optRule = rname}) =
       hcat [ ptext (sLit "opt<"), ppr rname, ptext (sLit ">") ]
 \end{code}
 
