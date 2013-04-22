@@ -489,13 +489,16 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
                 ; when node_points (ldvEnterClosure cl_info)
                 ; granYield arg_regs node_points
 
+                -- Emit ticks early so heap check is covered
+                ; body' <- cgTicks body
+
                 -- Main payload
                 ; entryHeapCheck cl_info node' arity arg_regs $ do
                 { fv_bindings <- mapM bind_fv fv_details
                 -- Load free vars out of closure *after*
                 -- heap check, to reduce live vars over check
                 ; when node_points $ load_fvs node lf_info fv_bindings
-                ; void $ cgExpr body
+                ; void $ cgExpr body'
                 }}
   }
 
@@ -547,6 +550,7 @@ thunkCode cl_info fv_details _cc node arity body
         ; tickyEnterThunk cl_info
         ; ldvEnterClosure cl_info -- NB: Node always points when profiling
         ; granThunk node_points
+        ; body' <- cgTicks body
 
         -- Heap overflow check
         ; entryHeapCheck cl_info node' arity [] $ do
@@ -565,7 +569,7 @@ thunkCode cl_info fv_details _cc node arity body
                ; let lf_info = closureLFInfo cl_info
                ; fv_bindings <- mapM bind_fv fv_details
                ; load_fvs node lf_info fv_bindings
-               ; void $ cgExpr body }}}
+               ; void $ cgExpr body' }}}
 
 
 ------------------------------------------------------------------------
