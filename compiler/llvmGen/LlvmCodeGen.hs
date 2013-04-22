@@ -49,7 +49,8 @@ llvmCodeGen dflags location h us cmm_stream
   = do bufh <- newBufHandle h
 
        -- get llvm version, cache for later use
-       ver <- getLlvmVersion dflags
+       ver <- (fromMaybe defaultLlvmVersion) `fmap` figureLlvmVersion dflags
+       writeIORef (llvmVersion dflags) ver
 
        -- warn if unsupported
        when (ver < minSupportLlvmVersion) $
@@ -66,23 +67,6 @@ llvmCodeGen dflags location h us cmm_stream
          llvmCodeGen' (liftStream cmm_stream)
 
        bFlush bufh
-
--- | Handle setting up the LLVM version.
-getLlvmVersion :: DynFlags -> IO Int
-getLlvmVersion dflags = do
-        ver <- (fromMaybe defaultLlvmVersion) `fmap` figureLlvmVersion dflags
-        -- cache llvm version for later use
-        writeIORef (llvmVersion dflags) ver
-        when (ver < minSupportLlvmVersion) $
-            errorMsg dflags (text "You are using an old version of LLVM that"
-                             <> text "isn't supported anymore!"
-                             $+$ text "We will try though...")
-        when (ver > maxSupportLlvmVersion) $
-            putMsg dflags (text "You are using a new version of LLVM that"
-                           <> text "hasn't been tested yet!"
-                           $+$ text "We will try though...")
-        return ver
-
 
 llvmCodeGen' :: Stream.Stream LlvmM RawCmmGroup () -> LlvmM ()
 llvmCodeGen' cmm_stream

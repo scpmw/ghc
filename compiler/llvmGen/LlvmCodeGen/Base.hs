@@ -258,12 +258,12 @@ runLlvm dflags mod_loc ver out us m = do
                       }
 
 -- | Get environment (internal)
-getEnv :: LlvmM LlvmEnv
-getEnv = LlvmM $ \env -> return (env, env)
+getEnv :: (LlvmEnv -> a) -> LlvmM a
+getEnv f = LlvmM (\env -> return (f env, env))
 
 -- | Modify environment (internal)
 modifyEnv :: (LlvmEnv -> LlvmEnv) -> LlvmM ()
-modifyEnv f = LlvmM $ \env -> return ((), f env)
+modifyEnv f = LlvmM (\env -> return ((), f env))
 
 -- | Lift a stream into the LlvmM monad
 liftStream :: Stream.Stream IO a x -> Stream.Stream LlvmM a x
@@ -281,22 +281,21 @@ withClearVars m = LlvmM $ \env -> do
 
 -- | Insert variables or functions into the environment.
 varInsert, funInsert :: Uniquable key => key -> LlvmType -> LlvmM ()
-varInsert s t = LlvmM $ \env -> return ((), env { envVarMap = addToUFM (envVarMap env) s t } )
-funInsert s t = LlvmM $ \env -> return ((), env { envFunMap = addToUFM (envFunMap env) s t } )
+varInsert s t = modifyEnv $ \env -> env { envVarMap = addToUFM (envVarMap env) s t }
+funInsert s t = modifyEnv $ \env -> env { envFunMap = addToUFM (envFunMap env) s t }
 
 -- | Lookup variables or functions in the environment.
 varLookup, funLookup :: Uniquable key => key -> LlvmM (Maybe LlvmType)
-varLookup s = LlvmM $ \env -> return (lookupUFM (envVarMap env) s, env)
-funLookup s = LlvmM $ \env -> return (lookupUFM (envFunMap env) s, env)
+varLookup s = getEnv (flip lookupUFM s . envVarMap)
+funLookup s = getEnv (flip lookupUFM s . envFunMap)
 
 -- | Set a register as allocated on the stack
 markStackReg :: GlobalReg -> LlvmM ()
-markStackReg r = LlvmM $ \env -> return ((), env { envStackRegs = r : envStackRegs env })
+markStackReg r = modifyEnv $ \env -> env { envStackRegs = r : envStackRegs env }
 
 -- | Check whether a register is allocated on the stack
 checkStackReg :: GlobalReg -> LlvmM Bool
-checkStackReg r = LlvmM $ \env -> return (r `elem` envStackRegs env, env)
-
+checkStackReg r = getEnv ((elem r) . envStackRegs)
 -- | Register the LLVM label for a CMM label
 labelInsert :: CLabel -> CLabel -> LlvmM ()
 labelInsert cl ll = LlvmM $ \env -> return ((), env { envLabelMap = (cl,ll):envLabelMap env })
@@ -309,33 +308,13 @@ getLabelMap = LlvmM $ \env -> return (envLabelMap env, env)
 getMetaUniqueId :: LlvmM LMMetaInt
 getMetaUniqueId = LlvmM $ \env -> return (envFreshMeta env, env { envFreshMeta = envFreshMeta env + 1})
 
--- | Here we pre-initialise some functions that are used internally by GHC
--- so as to make sure they have the most general type in the case that
--- user code also uses these functions but with a different type than GHC
--- internally. (Main offender is treating return type as 'void' instead of
--- 'void *'). Fixes trac #5486.
-ghcInternalFunctions :: LlvmM ()
-ghcInternalFunctions = do
-    dflags <- getDynFlags
-    mk "memcpy" i8Ptr [i8Ptr, i8Ptr, llvmWord dflags]
-    mk "memmove" i8Ptr [i8Ptr, i8Ptr, llvmWord dflags]
-    mk "memset" i8Ptr [i8Ptr, llvmWord dflags, llvmWord dflags]
-    mk "newSpark" (llvmWord dflags) [i8Ptr, i8Ptr]
-  where
-    mk n ret args = do
-      let n' = fsLit n
-          decl = LlvmFunctionDecl n' ExternallyVisible CC_Ccc ret
-                                 FixedArgs (tysToParams args) Nothing
-      renderLlvm $ ppLlvmFunctionDecl decl
-      funInsert n' (LMFunction decl)
-
 -- | Get the LLVM version we are generating code for
 getLlvmVer :: LlvmM LlvmVersion
-getLlvmVer = LlvmM $ \env -> return (envVersion env, env)
+getLlvmVer = getEnv envVersion
 
 -- | Get the platform we are generating code for
 getDynFlag :: (DynFlags -> a) -> LlvmM a
-getDynFlag f = LlvmM $ \env -> return (f $ envDynFlags env, env)
+getDynFlag f = getEnv (f . envDynFlags)
 
 -- | Get the platform we are generating code for
 getLlvmPlatform :: LlvmM Platform
@@ -361,43 +340,37 @@ runUs m = LlvmM $ \env -> do
 
 -- | Marks a variable as "used"
 markUsedVar :: LlvmVar -> LlvmM ()
-markUsedVar v = LlvmM $ \env -> return ((), env { envUsedVars = v : envUsedVars env })
+markUsedVar v = modifyEnv $ \env -> env { envUsedVars = v : envUsedVars env }
 
 -- | Return all variables marked as "used" so far
 getUsedVars :: LlvmM [LlvmVar]
-getUsedVars = LlvmM $ \env -> return (envUsedVars env, env)
+getUsedVars = getEnv envUsedVars
 
 -- | Saves that at some point we didn't know the type of the label and
 -- generated a reference to a type variable instead
 delayType :: LMString -> LlvmM ()
-delayType lbl = LlvmM $ \env -> return ((), env { envDelayedTypes = addOneToUniqSet (envDelayedTypes env) lbl })
-
--- | Convenience functions for defining getters
-getLlvmEnv :: (LlvmEnv -> a) -> LlvmM a
-getLlvmEnv f = LlvmM $ \env -> return (f env, env)
-getLlvmEnvUFM :: Uniquable key => (LlvmEnv -> UniqFM a) -> key -> LlvmM (Maybe a)
-getLlvmEnvUFM f s = LlvmM $ \env -> return (lookupUFM (f env) s, env)
+delayType lbl = modifyEnv $ \env -> env { envDelayedTypes = addOneToUniqSet (envDelayedTypes env) lbl }
 
 -- | Sets metadata node for a given unique string
 setUniqMeta :: LMMetaUnique -> LMMetaInt -> LlvmM ()
-setUniqMeta f m = LlvmM $ \env -> return ((), env { envUniqMeta = addToUFM (envUniqMeta env) f m })
+setUniqMeta f m = modifyEnv $ \env -> env { envUniqMeta = addToUFM (envUniqMeta env) f m }
 -- | Gets metadata node for given unique string
 getUniqMeta :: LMMetaUnique -> LlvmM (Maybe LMMetaInt)
-getUniqMeta = getLlvmEnvUFM envUniqMeta
+getUniqMeta s = getEnv (flip lookupUFM s . envUniqMeta)
 
 -- | Allocates a metadata node for given file
 setFileMeta :: LMString -> LMMetaInt -> LlvmM ()
-setFileMeta f m = LlvmM $ \env -> return ((), env { envFileMeta = addToUFM (envFileMeta env) f m })
+setFileMeta f m = modifyEnv $ \env -> env { envFileMeta = addToUFM (envFileMeta env) f m }
 -- | Gets metadata node for given file (if any)
 getFileMeta :: LMString -> LlvmM (Maybe LMMetaInt)
-getFileMeta = getLlvmEnvUFM envFileMeta
+getFileMeta s = getEnv (flip lookupUFM s . envFileMeta)
 
 -- | Sets metadata node for given procedure
 addProcMeta :: LMMetaInt -> LlvmM ()
-addProcMeta m = LlvmM $ \env -> return ((), env { envProcMeta = m:envProcMeta env })
+addProcMeta m = modifyEnv $ \env -> env { envProcMeta = m:envProcMeta env }
 -- | Returns all procedure meta data IDs
 getProcMetaIds :: LlvmM [LMMetaInt]
-getProcMetaIds = getLlvmEnv (reverse . envProcMeta)
+getProcMetaIds = getEnv (reverse . envProcMeta)
 
 -- | Returns a fresh section ID
 freshSectionId :: LlvmM Int
@@ -405,7 +378,32 @@ freshSectionId = LlvmM $ \env -> return (envNextSection env, env { envNextSectio
 
 -- | Returns location of current module
 getModLoc :: LlvmM ModLocation
-getModLoc = getLlvmEnv envModLoc
+getModLoc = getEnv envModLoc
+
+
+-- ----------------------------------------------------------------------------
+-- * Internal functions
+--
+
+-- | Here we pre-initialise some functions that are used internally by GHC
+-- so as to make sure they have the most general type in the case that
+-- user code also uses these functions but with a different type than GHC
+-- internally. (Main offender is treating return type as 'void' instead of
+-- 'void *'). Fixes trac #5486.
+ghcInternalFunctions :: LlvmM ()
+ghcInternalFunctions = do
+    dflags <- getDynFlags
+    mk "memcpy" i8Ptr [i8Ptr, i8Ptr, llvmWord dflags]
+    mk "memmove" i8Ptr [i8Ptr, i8Ptr, llvmWord dflags]
+    mk "memset" i8Ptr [i8Ptr, llvmWord dflags, llvmWord dflags]
+    mk "newSpark" (llvmWord dflags) [i8Ptr, i8Ptr]
+  where
+    mk n ret args = do
+      let n' = fsLit n
+          decl = LlvmFunctionDecl n' ExternallyVisible CC_Ccc ret
+                                 FixedArgs (tysToParams args) Nothing
+      renderLlvm $ ppLlvmFunctionDecl decl
+      funInsert n' (LMFunction decl)
 
 -- ----------------------------------------------------------------------------
 -- * Label handling
@@ -449,6 +447,8 @@ strProcedureName_llvm lbl = do
     return (fsLit str)
 
 -- ----------------------------------------------------------------------------
+-- * Global variables / forward references
+--
 
 -- | Create/get a pointer to a static value. The value type might be
 -- an undefined forward type alias if the value in question hasn't
@@ -471,7 +471,7 @@ getGlobalPtr llvmLbl = do
 -- | Generate aliases for references that were created while compiling.
 generateAliases :: LlvmM ([LMGlobal], [LlvmType])
 generateAliases = do
-  delayed <- fmap (uniqSetToList . envDelayedTypes) getEnv
+  delayed <- getEnv (uniqSetToList . envDelayedTypes)
   dflags <- getDynFlags
   defss <- flip mapM delayed $ \lbl -> do
     -- Defined by now?
