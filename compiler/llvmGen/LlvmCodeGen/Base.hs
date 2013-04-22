@@ -449,7 +449,7 @@ getGlobalPtr llvmLbl = do
       delayType llvmLbl
       return $ mkGlbVar
         (llvmLbl `appendFS` fsLit "$alias")
-        (LMAlias (llvmLbl `appendFS` fsLit "$type", undefined))
+        (LMInt 8)
         Alias
 
 -- | Generate aliases for references that were created while compiling.
@@ -466,15 +466,11 @@ generateAliases = do
                          var = mkVar ty External
                      in ([LMGlobal var Nothing], ty, var)
         aliasLbl = lbl `appendFS` fsLit "$alias"
-        tyLbl = lbl `appendFS` fsLit "$type"
-        aliasVar = LMGlobalVar aliasLbl (LMPointer ty) Internal Nothing Nothing Alias
-    return ((LMGlobal aliasVar $ Just $ LMStaticPointer var) : defs,
-            LMAlias (tyLbl, ty)
-            )
+        aliasVar = LMGlobalVar aliasLbl (LMPointer (LMInt 8)) Internal Nothing Nothing Alias
+    return ((LMGlobal aliasVar $ Just $ LMBitc (LMStaticPointer var) (LMPointer (LMInt 8))) : defs)
   -- Reset forward list
   modifyEnv $ \env -> env { envDelayedTypes = emptyUniqSet }
-  let (gss, ts) = unzip defss
-  return (concat gss, ts)
+  return (concat defss, [])
 
 -- Note [Llvm Forward References]
 --
