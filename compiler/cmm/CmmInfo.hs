@@ -36,19 +36,19 @@ import Data.Word
 
 -- When we split at proc points, we need an empty info table.
 mkEmptyContInfoTable :: CLabel -> CmmInfoTable
-mkEmptyContInfoTable info_lbl 
+mkEmptyContInfoTable info_lbl
   = CmmInfoTable { cit_lbl  = info_lbl
                  , cit_rep  = mkStackRep []
                  , cit_prof = NoProfilingInfo
                  , cit_srt  = NoC_SRT }
 
-cmmToRawCmm :: DynFlags -> Stream IO (CmmGroup, a) ()
-            -> IO (Stream IO (RawCmmGroup, a) ())
+cmmToRawCmm :: DynFlags -> Stream IO CmmGroup ()
+            -> IO (Stream IO RawCmmGroup ())
 cmmToRawCmm dflags cmms
   = do { uniqs <- mkSplitUniqSupply 'i'
-       ; let do_one uniqs (cmm, ticks) = do
+       ; let do_one uniqs cmm = do
                 case initUs uniqs $ concatMapM (mkInfoTable dflags) cmm of
-                  (b,uniqs') -> return (uniqs',(b, ticks))
+                  (b,uniqs') -> return (uniqs', b)
                   -- NB. strictness fixes a space leak.  DO NOT REMOVE.
        ; return (Stream.mapAccumL do_one uniqs cmms >> return ())
        }

@@ -23,7 +23,6 @@ import Hoopl
 import PprCmm
 import CmmUtils ( toBlockList )
 import Module
-import Debug
 
 import BufWrite
 import DynFlags
@@ -44,7 +43,7 @@ import System.IO
 -- | Top-level of the LLVM Code generator
 --
 llvmCodeGen :: DynFlags -> ModLocation -> Handle -> UniqSupply
-               -> Stream.Stream IO (RawCmmGroup,TickMap) ()
+               -> Stream.Stream IO RawCmmGroup ()
                -> IO ()
 llvmCodeGen dflags location h us cmm_stream
   = do bufh <- newBufHandle h
@@ -63,8 +62,8 @@ llvmCodeGen dflags location h us cmm_stream
                           $+$ text "We will try though...")
 
        -- run code generation
-       runLlvm dflags ver bufh us $
-         llvmCodeGen' location (liftStream cmm_stream)
+       runLlvm dflags location ver bufh us $
+         llvmCodeGen' (liftStream cmm_stream)
 
        bFlush bufh
 
@@ -85,27 +84,27 @@ getLlvmVersion dflags = do
         return ver
 
 
-llvmCodeGen' :: ModLocation -> Stream.Stream LlvmM (RawCmmGroup,TickMap) () -> LlvmM ()
-llvmCodeGen' location cmm_stream
+llvmCodeGen' :: Stream.Stream LlvmM RawCmmGroup () -> LlvmM ()
+llvmCodeGen' cmm_stream
   = do  -- Preamble
         renderLlvm pprLlvmHeader
         ghcInternalFunctions
-        cmmMetaLlvmPrelude location
+        cmmMetaLlvmPrelude
 
         -- Procedures
-        let llvmStream = Stream.mapM (llvmGroupLlvmGens location) cmm_stream
-        tick_maps <- Stream.collect llvmStream
+        let llvmStream = Stream.mapM llvmGroupLlvmGens cmm_stream
+        _ <- Stream.collect llvmStream
 
         -- Declare aliases for forward references
         renderLlvm . pprLlvmData =<< generateAliases
 
         -- Postamble
-        cmmMetaLlvmUnit location
-        cmmDebugLlvmGens location (last tick_maps)
+        cmmMetaLlvmUnit
+        cmmDebugLlvmGens
         cmmUsedLlvmGens
 
-llvmGroupLlvmGens :: ModLocation -> (RawCmmGroup, TickMap) -> LlvmM TickMap
-llvmGroupLlvmGens location (cmm, tick_map) = do
+llvmGroupLlvmGens :: RawCmmGroup -> LlvmM ()
+llvmGroupLlvmGens cmm = do
 
         -- Insert functions into map, collect data
         let split (CmmData s d' )     = return $ Just (s, d')
@@ -121,8 +120,8 @@ llvmGroupLlvmGens location (cmm, tick_map) = do
               -- Save Cmm/Llvm label mapping
               labelInsert l l'
               let blocks = map blockSplit $ toBlockList g
-              flip mapM_ blocks $ \(CmmEntry i, _, _) ->
-                let bl = blockLbl i in labelInsert bl bl
+              flip mapM_ blocks ((\(CmmEntry i, _, _) ->
+                let bl = blockLbl i in labelInsert bl bl) :: (CmmNode C O, Block CmmNode O O, CmmNode O C) -> LlvmM ())
 
               return Nothing
         cdata <- fmap catMaybes $ mapM split cmm
@@ -130,8 +129,7 @@ llvmGroupLlvmGens location (cmm, tick_map) = do
         {-# SCC "llvm_datas_gen" #-}
           cmmDataLlvmGens cdata
         {-# SCC "llvm_procs_gen" #-}
-          mapM_ (cmmLlvmGen location tick_map) cmm
-        return tick_map
+          mapM_ cmmLlvmGen cmm
 
 -- -----------------------------------------------------------------------------
 -- | Do LLVM code generation on all these Cmms data sections.
@@ -151,8 +149,8 @@ cmmDataLlvmGens statics
        renderLlvm $ pprLlvmData (concat gss, concat tss)
 
 -- | Complete LLVM code generation phase for a single top-level chunk of Cmm.
-cmmLlvmGen :: ModLocation -> TickMap -> RawCmmDecl -> LlvmM ()
-cmmLlvmGen mod_loc tick_map cmm@(CmmProc h lbl _ blocks) = do
+cmmLlvmGen ::RawCmmDecl -> LlvmM ()
+cmmLlvmGen cmm@CmmProc{} = do
 
     -- rewrite assignments to global regs
     dflags <- getDynFlag id
@@ -162,16 +160,8 @@ cmmLlvmGen mod_loc tick_map cmm@(CmmProc h lbl _ blocks) = do
     liftIO $ dumpIfSet_dyn dflags Opt_D_dump_opt_cmm "Optimised Cmm"
         (pprCmmGroup [fixed_cmm])
 
-    -- Find and emit debug info for procedure
-    let entryLbl = case mapLookup (g_entry blocks) h of
-          Nothing                   -> lbl
-          Just (Statics info_lbl _) -> info_lbl
-        split = map blockSplit $ toBlockList blocks
-    let blockLbls = map (\(CmmEntry id, _, _) -> blockLbl id) split
-    annotId <- cmmMetaLlvmProc lbl entryLbl blockLbls mod_loc tick_map
-
     -- generate llvm code from cmm
-    llvmBC <- withClearVars $ genLlvmProc fixed_cmm annotId
+    llvmBC <- withClearVars $ genLlvmProc fixed_cmm
 
     -- allocate IDs for info table and code, so the mangler can later
     -- make sure they end up next to each other.
@@ -185,7 +175,7 @@ cmmLlvmGen mod_loc tick_map cmm@(CmmProc h lbl _ blocks) = do
     renderLlvm (vcat docs)
     mapM_ markUsedVar $ concat ivars
 
-cmmLlvmGen _ _ _ = return ()
+cmmLlvmGen _ = return ()
 
 -- -----------------------------------------------------------------------------
 -- | Marks variables as used where necessary

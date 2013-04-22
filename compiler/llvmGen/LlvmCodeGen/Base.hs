@@ -25,7 +25,7 @@ module LlvmCodeGen.Base (
         setUniqMeta, getUniqMeta,
         setFileMeta, getFileMeta,
         addProcMeta, getProcMetaIds,
-        freshSectionId,
+        freshSectionId, getModLoc,
 
         cmmToLlvmType, widthToLlvmFloat, widthToLlvmInt, llvmFunTy,
         llvmFunSig, llvmStdFunAttrs, llvmFunAlign, llvmInfAlign,
@@ -51,6 +51,7 @@ import qualified Pretty as Prt
 import Platform
 import UniqFM
 import Unique
+import Module ( ModLocation )
 import MonadUtils ( MonadIO(..) )
 import BufWrite   ( BufHandle )
 import UniqSet
@@ -196,7 +197,6 @@ maxSupportLlvmVersion = 31
 -- * Environment Handling
 --
 
--- two maps, one for functions and one for local vars.
 data LlvmEnv = LlvmEnv
   { envFunMap :: LlvmEnvMap
   , envVarMap :: LlvmEnvMap
@@ -206,6 +206,7 @@ data LlvmEnv = LlvmEnv
   , envLabelMap :: [(CLabel, CLabel)]
   , envVersion :: LlvmVersion
   , envDynFlags :: DynFlags
+  , envModLoc :: ModLocation
   , envOutput :: BufHandle
   , envUniq :: UniqSupply
   , envFreshMeta :: LMMetaInt
@@ -234,8 +235,8 @@ instance HasDynFlags LlvmM where
     getDynFlags = LlvmM $ \env -> return (envDynFlags env, env)
 
 -- | Get initial Llvm environment.
-runLlvm :: DynFlags -> LlvmVersion -> BufHandle -> UniqSupply -> LlvmM () -> IO ()
-runLlvm dflags ver out us m = do
+runLlvm :: DynFlags -> ModLocation -> LlvmVersion -> BufHandle -> UniqSupply -> LlvmM () -> IO ()
+runLlvm dflags mod_loc ver out us m = do
     _ <- runLlvmM m env
     return ()
   where env = LlvmEnv { envFunMap = emptyUFM
@@ -246,6 +247,7 @@ runLlvm dflags ver out us m = do
                       , envLabelMap = []
                       , envVersion = ver
                       , envDynFlags = dflags
+                      , envModLoc = mod_loc
                       , envOutput = out
                       , envUniq = us
                       , envFreshMeta = 0
@@ -400,6 +402,10 @@ getProcMetaIds = getLlvmEnv (reverse . envProcMeta)
 -- | Returns a fresh section ID
 freshSectionId :: LlvmM Int
 freshSectionId = LlvmM $ \env -> return (envNextSection env, env { envNextSection = envNextSection env + 1})
+
+-- | Returns location of current module
+getModLoc :: LlvmM ModLocation
+getModLoc = getLlvmEnv envModLoc
 
 -- ----------------------------------------------------------------------------
 -- * Label handling

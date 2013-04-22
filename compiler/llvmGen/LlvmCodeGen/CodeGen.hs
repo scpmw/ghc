@@ -12,7 +12,7 @@ import Llvm
 import LlvmCodeGen.Base
 import LlvmCodeGen.Regs
 
-import LlvmMeta ( genVariableMeta, LlvmAnnotator )
+import LlvmMeta
 
 import BlockId
 import CodeGen.Platform ( activeStgRegs, callerSaves )
@@ -40,48 +40,59 @@ type LlvmStatements = OrdList LlvmStatement
 -- -----------------------------------------------------------------------------
 -- | Top-level of the LLVM proc Code generator
 --
-genLlvmProc :: RawCmmDecl -> LlvmAnnotator -> LlvmM [LlvmCmmDecl]
-genLlvmProc (CmmProc infos lbl live graph) annotGen = do
+genLlvmProc :: RawCmmDecl -> LlvmM [LlvmCmmDecl]
+genLlvmProc proc@(CmmProc infos lbl live graph) = do
+    meta <- cmmMetaLlvmProc proc
     let blocks = toBlockListEntryFirst graph
-    (lmblocks, lmdata) <- basicBlocksCodeGen live blocks (annotGen lbl) annotGen
+    (lmblocks, lmdata) <- basicBlocksCodeGen live meta blocks
     let info = mapLookup (g_entry graph) infos
         proc = CmmProc info lbl live (ListGraph lmblocks)
     return (proc:lmdata)
 
-genLlvmProc _ _ = panic "genLlvmProc: case that shouldn't reach here!"
+genLlvmProc _ = panic "genLlvmProc: case that shouldn't reach here!"
 
 -- -----------------------------------------------------------------------------
 -- * Block code generation
 --
 
--- | Generate code for a list of blocks that make up a complete procedure.
-basicBlocksCodeGen :: LiveGlobalRegs -> [CmmBlock]
-                      -> (LMMetaInt, LMMetaInt, LMMetaInt) -> LlvmAnnotator
+-- | Generate code for a list of blocks that make up a complete
+-- procedure. The first block in the list is exepected to be the entry
+-- point and will get the prologue.
+basicBlocksCodeGen :: LiveGlobalRegs -> (LMMetaInt, BlockTicks) -> [CmmBlock]
                       -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
-basicBlocksCodeGen live cmmBlocks (blockId, annotId, _) annotGen
-  = do (prologue, tops1) <- funPrologue live cmmBlocks blockId
-       (blocks, topss) <- fmap unzip $ mapM (basicBlockCodeGen annotGen) cmmBlocks
-       let ((BasicBlock bid fstmts):rblks) = blocks
-       let annot = MetaStmt [(fsLit "dbg", annotId)]
-       let fblocks = (BasicBlock bid $ (map annot $ fromOL prologue) ++ fstmts):rblks
-       return (fblocks, tops1 ++ concat topss)
+basicBlocksCodeGen _    _    []                     = panic "no entry block!"
+basicBlocksCodeGen live meta (entryBlock:cmmBlocks)
+  = do -- Generate entry meta data and prologue
+       entryMetas@(scopeId, annotId, _) <- cmmMetaLlvmBlock meta entryBlock
+       (prologue, prologueTops) <- funPrologue live (entryBlock:cmmBlocks) scopeId
+       let prologue' = annotateDebug annotId $ fromOL prologue
+
+       -- Generate code
+       (BasicBlock bid entry, entryTops) <- basicBlockCodeGen entryMetas entryBlock
+       (blocks, topss) <- fmap unzip $ flip mapM cmmBlocks $ \block -> do
+         blockMeta <- cmmMetaLlvmBlock meta block
+         basicBlockCodeGen blockMeta block
+
+       -- Compose
+       let entryBlock = BasicBlock bid (prologue' ++ entry)
+       return (entryBlock : blocks, prologueTops ++ entryTops ++ concat topss)
 
 
 -- | Generate code for one block
-basicBlockCodeGen :: LlvmAnnotator
+basicBlockCodeGen :: (LMMetaInt, LMMetaInt, LMMetaInt)
                   -> CmmBlock
                   -> LlvmM ( LlvmBasicBlock, [LlvmCmmDecl] )
-basicBlockCodeGen annotGen block
-  = do let (CmmEntry id, nodes, tail)  = blockSplit block
+basicBlockCodeGen (_,annotId,varId) block
+  = do (ps, pt) <- blockPrologue varId
+       let (CmmEntry id, nodes, tail)  = blockSplit block
        (mid_instrs, top) <- stmtsToInstrs $ blockToList nodes
        (tail_instrs, top')  <- stmtToInstrs tail
-
-       let (_,annotId,varId) = annotGen $ blockLbl id
-       let annot = MetaStmt [(fsLit "dbg", annotId)]
-       (ps, pt) <- blockPrologue varId
-
-       let instrs = map annot $ fromOL (ps `appOL` mid_instrs `appOL` tail_instrs)
+       let instrs = annotateDebug annotId $
+                    fromOL (ps `appOL` mid_instrs `appOL` tail_instrs)
        return (BasicBlock id instrs, pt ++ top' ++ top)
+
+
+
 
 -- -----------------------------------------------------------------------------
 -- * CmmNode code generation

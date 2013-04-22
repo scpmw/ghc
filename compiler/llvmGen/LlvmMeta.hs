@@ -7,12 +7,14 @@
 module LlvmMeta (
 
   cmmMetaLlvmPrelude,
-  cmmMetaLlvmProc,
   cmmMetaLlvmUnit,
-
-  LlvmAnnotator,
+  cmmMetaLlvmProc,
+  cmmMetaLlvmBlock,
 
   genVariableMeta,
+
+  annotateDebug,
+  BlockTicks,
 
   cmmDebugLlvmGens
   ) where
@@ -30,22 +32,24 @@ import FastString
 import Debug
 import Binary
 
+import BlockId         ( BlockEnv )
 import Config          ( cProjectName, cProjectVersion )
-import Platform
-import SrcLoc          (srcSpanFile,
-                        srcSpanStartLine, srcSpanStartCol,
-                        srcSpanEndLine, srcSpanEndCol)
-import MonadUtils      ( MonadIO(..), zipWith3M )
+import Cmm
+import CmmUtils        ( toBlockMap, blockTicks, blockContexts )
+import Compiler.Hoopl  ( mapLookup, mapInsert, mapUnions, entryLabel )
+import SrcLoc
+import MonadUtils      ( MonadIO(..) )
 import Outputable      ( showSDoc, ppr, renderWithStyle, mkCodeStyle,  CodeStyle(..) )
+import Panic           ( panic )
+import Unique          ( getKey, getUnique )
 
-import System.Directory(getCurrentDirectory)
-import Data.List       (maximumBy, isPrefixOf)
-import Data.Maybe      (fromMaybe, fromJust, mapMaybe)
-import Data.Map as Map (lookup, fromList)
-import Data.Function   (on)
-import Data.Char       (ord, chr, isAscii, isPrint, intToDigit)
-import Data.Word       (Word8)
-import Data.Bits       (shiftL)
+import System.Directory( getCurrentDirectory)
+import Data.List       ( maximumBy, isPrefixOf)
+import Data.Maybe      ( fromMaybe, fromJust, catMaybes )
+import Data.Char       ( ord, chr, isAscii, isPrint, intToDigit)
+import Data.Word       ( Word8)
+import Data.Bits       ( shiftL)
+import Data.Ord        ( comparing )
 
 import Foreign.Ptr
 import Foreign.ForeignPtr
@@ -113,9 +117,10 @@ cachedTypeMeta = llvmFunTy [] >>= \funTy -> return
  where mk ty n = (ty, mkMetaUnique (fsLit $ "LlvmMeta.cachedMeta." ++ n))
 
 -- | Allocates global meta data nodes
-cmmMetaLlvmPrelude :: ModLocation -> LlvmM ()
-cmmMetaLlvmPrelude mod_loc = do
-
+cmmMetaLlvmPrelude :: LlvmM ()
+cmmMetaLlvmPrelude = do
+  mod_loc <- getModLoc
+  
   -- Allocate compilation unit meta. It gets emitted later in
   -- cmmMetaLlvmUnit, after all procedures have been written out.
   unitId <- getMetaUniqueId
@@ -152,8 +157,9 @@ cmmMetaLlvmPrelude mod_loc = do
 
 -- | Emit debug data about the compilation unit. Should be called
 -- after all procedure metadata has been generated.
-cmmMetaLlvmUnit :: ModLocation -> LlvmM ()
-cmmMetaLlvmUnit mod_loc = do
+cmmMetaLlvmUnit :: LlvmM ()
+cmmMetaLlvmUnit = do
+  mod_loc <- getModLoc
 
   -- Make lists of enums, retained types, subprograms and globals
   Just unitId <- getUniqMeta unitN
@@ -229,21 +235,21 @@ emitFileMeta filePath = do
 
       return fileId
 
+type BlockTicks = BlockEnv (Tickish ())
 
-type LlvmAnnotator = CLabel -> (LMMetaInt, LMMetaInt, LMMetaInt)
+-- | Generates meta data for a procedure, returning its meta data ID
+cmmMetaLlvmProc :: RawCmmDecl -> LlvmM (LMMetaInt, BlockTicks)
+cmmMetaLlvmProc proc@(CmmProc infos cmmLabel _ graph) = do
 
--- | Generates meta data for a procedure. Returns an annotator that
--- can be used to retreive the metadata ids for various parts of the
--- procedure.
-cmmMetaLlvmProc :: CLabel -> CLabel -> [CLabel] -> ModLocation -> TickMap -> LlvmM LlvmAnnotator
-cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
+  -- Get entry label name
+  let entryLabel = case mapLookup (g_entry graph) infos of
+        Nothing                  -> cmmLabel
+        Just (Statics infoLbl _) -> infoLbl
 
   -- Find source tick to associate with procedure
-  let unitFile = fromMaybe "** no source file **" (ml_hs_file mod_loc)
-      procTick = findGoodSourceTick cmmLabel unitFile tiMap
-      (file, line, _) = case fmap sourceSpan procTick of
-        Just span -> (srcSpanFile span, srcSpanStartLine span, srcSpanStartCol span)
-        _         -> (mkFastString unitFile, 1, 0)
+  mod_loc <- getModLoc
+  let (procTick, blockTicks) = findGoodSourceTicks proc mod_loc
+  (file, line, _) <- tickToLoc procTick
   fileId <- emitFileMeta file
 
   -- it seems like LLVM 3.0 (likely 2.x as well) ignores the procedureName
@@ -282,87 +288,82 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
     , mkI1 $ opt > 0                             -- Optimized
     ] ++ [ funRef ]                              -- Function pointer
   addProcMeta procId
+  return (procId, blockTicks)
 
-  -- Generate a scope as well as a line annotation for a tick map entry
-  let makeBlockMeta ctxId n tim = do
+cmmMetaLlvmProc _other = panic "cmmMetaLlvmProc: Passed non-proc!"
 
-        -- Figure out line information for this tick
-        let tick = findGoodSourceTick (timLabel tim) unitFile tiMap
+-- | Make a (file, line, column) tuple from a tick, or fall back to a
+-- standard source location where impossible
+tickToLoc :: Maybe (Tickish ()) -> LlvmM (FastString, Int, Int)
+tickToLoc (Just (SourceNote { sourceSpan = span } )) 
+            = return (srcSpanFile span, srcSpanStartLine span, srcSpanStartCol span)
+tickToLoc _ = do mod_loc <- getModLoc
+                 let unitFile = fromMaybe "** no source file **" (ml_hs_file mod_loc)
+                 return (mkFastString unitFile, 1, 0)
 
-        let (file, line, col) = case fmap sourceSpan tick of
-              Just span -> (srcSpanFile span, srcSpanStartLine span, srcSpanStartCol span)
-              _         -> (mkFastString unitFile, 1, 0)
-        fileId <- emitFileMeta file
+-- | Generates meta data for a block and returns a meta data ID to use
+-- for annnotating statements
+cmmMetaLlvmBlock :: (LMMetaInt, BlockTicks) -> CmmBlock -> LlvmM (LMMetaInt, LMMetaInt, LMMetaInt)
+cmmMetaLlvmBlock (procId, blockTicks) block = do
 
-        -- According to the llvm docs, the main reason it's asking for
-        -- source line/column on the blocks is to prevent different
-        -- blocks from getting merged. That's plausible, given that
-        -- the DWARF standard doesn't even allow giving source
-        -- location information for blocks.
-        --
-        -- As we will be using the same source code location data for
-        -- many blocks, we therefore take the liberty here to "cook"
-        -- our data so blocks are always unique. Note we have no
-        -- reason to do this for the line annotations though - so
-        -- generated DWARF should look no different.
-        let col' = col + n
+  -- Figure out line information for this tick
+  let blockLbl = entryLabel block
+      tick = mapLookup blockLbl blockTicks
+  (file, line, col) <- tickToLoc tick
+  fileId <- emitFileMeta file
 
-        bid <- getMetaUniqueId
-        renderMeta bid $ LMMeta $ map LMLitVar
-          [ mkI32 $ dW_TAG_lexical_block
-          , LMMetaRef ctxId
-          , mkI32 $ fromIntegral line               -- Source line
-          , mkI32 $ fromIntegral col'               -- Source column
-          , LMMetaRef fileId                        -- File context
-          , mkI32 0                                 -- Template parameter index
-          ]
+  -- According to the llvm docs, the main reason it's asking for
+  -- source line/column on the blocks is to prevent different
+  -- blocks from getting merged. That's plausible, given that
+  -- the DWARF standard doesn't even allow giving source
+  -- location information for blocks.
+  --
+  -- As we will be using the same source code location data for
+  -- many blocks, we therefore take the liberty here to "cook"
+  -- our data so blocks are always unique. Note we have no
+  -- reason to do this for the line annotations though - so
+  -- generated DWARF should look no different.
+  let uniqCol = getKey $ getUnique blockLbl
 
-        id <- getMetaUniqueId
-        renderMeta id $ LMMeta $ map LMLitVar
-          [ mkI32 $ fromIntegral line               -- Source line
-          , mkI32 $ fromIntegral col                -- Source column
-          , LMMetaRef bid                           -- Block context
-          , nullLit                                 -- Inlined from location
-          ]
+  bid <- getMetaUniqueId
+  renderMeta bid $ LMMeta $ map LMLitVar
+    [ mkI32 $ dW_TAG_lexical_block
+    , LMMetaRef procId
+    , mkI32 $ fromIntegral line               -- Source line
+    , mkI32 $ fromIntegral uniqCol            -- Source column
+    , LMMetaRef fileId                        -- File context
+    , mkI32 0                                 -- Template parameter index
+    ]
 
-        -- Unfortunately, we actually *want* to be able to identify
-        -- individual blocks after compilation - with many of them
-        -- sharing the same source line annotation. So we do a little
-        -- trick here: We generate a special variable in the scope
-        -- above, the name of which will tell the RTS what the block
-        -- name actually is.
-        dflags <- getDynFlags
-        platform <- getLlvmPlatform
-        let bname = renderWithStyle dflags (pprCLabel platform (timLabel tim))
-                                    (mkCodeStyle CStyle)
-            vname = mkFastString ("__debug_ghc_" ++ bname)
-        vid <- getMetaUniqueId
-        renderMeta vid =<< genVariableMeta vname Nothing i8 bid
+  id <- getMetaUniqueId
+  renderMeta id $ LMMeta $ map LMLitVar
+    [ mkI32 $ fromIntegral line               -- Source line
+    , mkI32 $ fromIntegral col                -- Source column
+    , LMMetaRef bid                           -- Block context
+    , nullLit                                 -- Inlined from location
+    ]
 
-        return (timLabel tim, (bid, id, vid))
+  -- Unfortunately, we actually *want* to be able to identify
+  -- individual blocks after compilation - with many of them
+  -- sharing the same source line annotation. So we do a little
+  -- trick here: We generate a special variable in the scope
+  -- above, the name of which will tell the RTS what the block
+  -- name actually is.
+  dflags <- getDynFlags
+  let bname = renderWithStyle dflags (ppr blockLbl) (mkCodeStyle CStyle)
+      vname = mkFastString ("__debug_ghc_" ++ bname)
+  vid <- getMetaUniqueId
+  renderMeta vid =<< genVariableMeta vname Nothing i8 bid
 
-  -- Generate meta data for procedure top-level
-  let procTim = case  Map.lookup cmmLabel tiMap of
-        Just t  -> t
-        Nothing -> TickMapEntry cmmLabel Nothing []
-  (_,topIds@(blockId,_,_)) <- makeBlockMeta procId 0 procTim
+  return (bid, id, vid)
 
-  -- Generate meta data for blocks
-  let blockTims = mapMaybe (flip Map.lookup tiMap) blockLabels
-  metas <- fmap Map.fromList $
-           zipWith3M makeBlockMeta (repeat blockId) [1..] blockTims
+-- | Put debug annotations on a list of statements
+annotateDebug :: LMMetaInt -> [LlvmStatement] -> [LlvmStatement]
+annotateDebug annotId = map (MetaStmt [(fsLit "dbg", annotId)])
 
-  -- Closure for getting annotation IDs.
-  let annot l = case Map.lookup l metas of
-        Just ids -> ids
-        Nothing  -> topIds
-
-  return annot
-
--- | Find a "good" tick we could associate the procedure with in the
--- DWARF debugging data. We do this by looking for source ticks at the
--- given procedure as well as the context that it was created from
--- ("parent").
+-- | For every block in the procedure find a "good" source note tick
+-- that seems useful to associate with it in DWARF, where we are
+-- restricted to simple 1-to-1 mapping to source code.
 --
 -- As this might often give us a whole list of ticks to choose from,
 -- we arbitrarily select the biggest source span - preferably from the
@@ -370,31 +371,45 @@ cmmMetaLlvmProc cmmLabel entryLabel blockLabels mod_loc tiMap = do
 -- corresponds to the most useful location in the code. All nothing
 -- but guesswork, obviously, but this is meant to be more or lesser
 -- filler data anyway.
-findGoodSourceTick :: CLabel -> FilePath -> TickMap -> Maybe (Tickish ())
-findGoodSourceTick lbl unit tiMap
-  | null ticks = Nothing
-  | otherwise  = Just $ maximumBy (compare `on` rangeRating) ticks
-  where
-    unitFS = mkFastString unit
-    ticks = findSourceTis (Map.lookup lbl tiMap)
-    rangeRating (SourceNote span _ _) =
-      (case () of
-        _ | ".dump" `isPrefixOf` takeExtension (unpackFS $ srcSpanFile span)
-                                       -> 2
-          | srcSpanFile span == unitFS -> 1
-          | otherwise                  -> 0 :: Int,
-       srcSpanEndLine span - srcSpanStartLine span,
-       srcSpanEndCol span - srcSpanStartCol span)
-    rangeRating _non_source_note = error "rangeRating"
-    findSourceTis :: Maybe TickMapEntry -> [Tickish ()]
-    findSourceTis Nothing    = []
-    findSourceTis (Just tim) =
-      case filter isSourceTick (timTicks tim) of
-        stis@(_:_)  -> stis
-        _           -> findSourceTis (timParent tim)
-
-    isSourceTick SourceNote {} = True
-    isSourceTick _             = False
+findGoodSourceTicks :: RawCmmDecl -> ModLocation
+                    -> (Maybe (Tickish ()), BlockTicks)
+findGoodSourceTicks (CmmProc _ _ _ g) mod_loc =
+  let blockMap = toBlockMap g
+      go ctx lbl =
+        let m_block = mapLookup lbl blockMap
+            sticks = maybe [] (filter isSourceTick . blockTicks) m_block
+            -- Choose ticks from own source notes, or take over tick
+            -- annotation from parent otherwise (if any)
+            myTick0 = case sticks of
+              sts@(_:_) -> Just $ maximumBy (comparing rangeRating) sts
+              []        -> ctx
+            -- Recurse into sub-blocks
+            ctxs = maybe [] blockContexts m_block
+            (recTicks, recMaps) = unzip $ map (go myTick0) ctxs
+            -- When in doubt get ticks from children
+            recTicks' = catMaybes recTicks
+            myTick1 = case myTick0 of
+              Just _     -> myTick0
+              Nothing    | not (null recTicks')
+                         -> Just $ maximumBy (comparing rangeRating) recTicks'
+              _otherwise -> Nothing
+            -- New map
+            newMap = maybe id (mapInsert lbl) myTick1 $ mapUnions recMaps
+        in (myTick1, newMap)
+      unitFS = maybe nilFS mkFastString $ ml_hs_file mod_loc
+      rangeRating (SourceNote span _ _) =
+        (case () of
+          _ | ".dump" `isPrefixOf` takeExtension (unpackFS $ srcSpanFile span)
+                                         -> 2
+            | srcSpanFile span == unitFS -> 1
+            | otherwise                  -> 0 :: Int,
+         srcSpanEndLine span - srcSpanStartLine span,
+         srcSpanEndCol span - srcSpanStartCol span)
+      rangeRating _non_source_note = error "rangeRating"
+      isSourceTick SourceNote {} = True
+      isSourceTick _             = False
+  in go Nothing (g_entry g)
+findGoodSourceTicks _other _ = (Nothing, mapUnions [])
 
 -- | Gives type description as meta data or a reference to an existing
 -- metadata node that contains it.
@@ -519,8 +534,11 @@ bufferAsString (len, buf) = liftIO $ do
   -- because the pretty-printing will append a zero byte.
   return $ LMStaticStr str $ LMArray (len + 1) i8
 
-cmmDebugLlvmGens :: ModLocation -> TickMap -> LlvmM ()
-cmmDebugLlvmGens mod_loc tick_map = do
+cmmDebugLlvmGens :: LlvmM ()
+cmmDebugLlvmGens = return ()
+
+  {--
+  TODO...
 
   -- Write debug data as event log
   dflags <- getDynFlag id
@@ -542,6 +560,7 @@ cmmDebugLlvmGens mod_loc tick_map = do
 
   renderLlvm $ pprLlvmData ([lmDebug], [])
   markUsedVar lmDebugVar
+--}
 
 mkI32, mkI64 :: Integer -> LlvmLit
 mkI32 n = LMIntLit n i32

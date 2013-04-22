@@ -22,7 +22,6 @@ import HscTypes
 import DynFlags
 import Config
 import SysTools
-import Debug
 import Stream           (Stream)
 import qualified Stream
 
@@ -49,7 +48,7 @@ codeOutput :: DynFlags
            -> ModLocation
            -> ForeignStubs
            -> [PackageId]
-           -> Stream IO (RawCmmGroup, TickMap) ()                  -- Compiled C--
+           -> Stream IO RawCmmGroup ()                  -- Compiled C--
            -> IO (Bool{-stub_h_exists-}, Maybe FilePath{-stub_c_exists-})
 
 codeOutput dflags this_mod location foreign_stubs pkg_deps cmm_stream
@@ -61,24 +60,23 @@ codeOutput dflags this_mod location foreign_stubs pkg_deps cmm_stream
                     then Stream.mapM do_lint cmm_stream
                     else cmm_stream
 
-              do_lint r@(cmm, _) = do
+              do_lint cmm = do
                 { showPass dflags "CmmLint"
                 ; case cmmLint dflags cmm of
                         Just err -> do { log_action dflags dflags SevDump noSrcSpan defaultDumpStyle err
                                        ; ghcExit dflags 1
                                        }
                         Nothing  -> return ()
-                ; return r
+                ; return cmm
                 }
 
         ; showPass dflags "CodeOutput"
         ; let filenm = hscOutName dflags
         ; stubs_exist <- outputForeignStubs dflags this_mod location foreign_stubs
-        ; let unticked_cmm_stream = Stream.map fst linted_cmm_stream
         ; case hscTarget dflags of {
              HscInterpreted -> return ();
-             HscAsm         -> outputAsm dflags filenm unticked_cmm_stream;
-             HscC           -> outputC dflags filenm unticked_cmm_stream pkg_deps;
+             HscAsm         -> outputAsm dflags filenm linted_cmm_stream;
+             HscC           -> outputC dflags filenm linted_cmm_stream pkg_deps;
              HscLlvm        -> outputLlvm dflags location filenm linted_cmm_stream;
              HscNothing     -> panic "codeOutput: HscNothing"
           }
@@ -163,7 +161,7 @@ outputAsm dflags filenm cmm_stream
 %************************************************************************
 
 \begin{code}
-outputLlvm :: DynFlags -> ModLocation -> FilePath -> Stream IO (RawCmmGroup,TickMap) () -> IO ()
+outputLlvm :: DynFlags -> ModLocation -> FilePath -> Stream IO RawCmmGroup () -> IO ()
 outputLlvm dflags location filenm cmm_stream
   = do ncg_uniqs <- mkSplitUniqSupply 'n'
 
