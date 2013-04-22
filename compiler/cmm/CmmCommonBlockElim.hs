@@ -16,8 +16,10 @@ import Prelude hiding (iterate, succ, unzip, zip)
 
 import Hoopl hiding (ChangeFlag)
 import Data.Bits
+import Data.Maybe (fromMaybe, fromJust)
 import qualified Data.List as List
 import Data.Word
+import qualified Data.Map as M
 import Outputable
 import UniqFM
 
@@ -40,7 +42,7 @@ my_trace = if False then pprTrace else \_ _ a -> a
 
 -- TODO: Use optimization fuel
 elimCommonBlocks :: CmmGraph -> CmmGraph
-elimCommonBlocks g = replaceLabels env g
+elimCommonBlocks g = replaceLabels env $ copyTicks env g
   where
      env = iterate hashed_blocks mapEmpty
      hashed_blocks = map (\b -> (hash_block b, b)) $ postorderDfs g
@@ -60,19 +62,15 @@ type HashCode = Int
 
 -- Try to find a block that is equal (or ``common'') to b.
 common_block :: State -> (HashCode, CmmBlock) -> State
-common_block (old_change, bmap, subst) (hash, b) =
+common_block state0@(old_change, bmap, subst) (hash, b) =
   case lookupUFM bmap hash of
-    Just bs -> case (List.find (eqBlockBodyWith (eqBid subst) b) bs,
-                     mapLookup bid subst) of
-                 (Just b', Nothing)                         -> addSubst b'
-                 (Just b', Just b'') | entryLabel b' /= b'' -> addSubst b'
-                                     | otherwise -> (old_change, bmap, subst)
-                 _ -> (old_change, addToUFM bmap hash (b : bs), subst)
-    Nothing -> (old_change, addToUFM bmap hash [b], subst)
+    Just bs | Just b' <- List.find (eqBlockBodyWith (eqBid subst) b) bs
+            -> if mapLookup bid subst == Just (entryLabel b')
+               then state0
+               else tr b' (True, bmap, mapInsert bid (entryLabel b') subst)
+    m_bs    -> (old_change, addToUFM bmap hash (b : fromMaybe [] m_bs), subst)
   where bid = entryLabel b
-        addSubst b' = my_trace "found new common block" (ppr bid <> char '=' <> ppr (entryLabel b')) $
-                      (True, bmap, mapInsert bid (entryLabel b') subst)
-
+        tr b' = my_trace "found new common block" (ppr bid <> char '=' <> ppr (entryLabel b'))
 
 -- -----------------------------------------------------------------------------
 -- Hashing and equality on blocks
@@ -214,3 +212,13 @@ eqMaybeWith :: (a -> b -> Bool) -> Maybe a -> Maybe b -> Bool
 eqMaybeWith eltEq (Just e) (Just e') = eltEq e e'
 eqMaybeWith _ Nothing Nothing = True
 eqMaybeWith _ _ _ = False
+
+copyTicks :: BlockEnv BlockId -> CmmGraph -> CmmGraph
+copyTicks env g = ofBlockMap (g_entry g) $ mapMap f blockMap
+  where blockMap = toBlockMap g
+        revEnv = mapFoldWithKey insertRev M.empty env
+        insertRev k x = M.insertWith (const (k:)) x [k]
+        f block = case M.lookup (entryLabel block) revEnv of
+          Nothing -> block
+          Just ls -> let findTicks l = blockTicks $ fromJust $ mapLookup l blockMap
+                     in annotateBlock (concatMap findTicks ls) block

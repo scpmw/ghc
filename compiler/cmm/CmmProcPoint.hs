@@ -25,6 +25,7 @@ import Control.Monad
 import Outputable
 import Platform
 import UniqSupply
+import CoreSyn ( Tickish(CoreNote) )
 
 import Hoopl
 
@@ -234,6 +235,20 @@ splitAtProcPoints dflags entry_label callPPs procPoints procMap
 
      graphEnv <- return $ foldGraphBlocks addBlock emptyBlockMap g
 
+     -- Determine what debug ticks to associate with blocks if they
+     -- get floated out.
+     let contextMap = getContextMap g
+         -- We want at least one core-note top-level in every new procedure
+         isCoreNote CoreNote{} = True
+         isCoreNote _          = False
+         enoughTicks = any isCoreNote
+         -- Traverse contexts up from the label until we can assure that
+         ticksFor l = let ts = maybe [] blockTicks (mapLookup l (toBlockMap g))
+                          pts | enoughTicks ts                   = []
+                              | Just p <- mapLookup l contextMap = ticksFor p
+                              | otherwise                        = []
+                      in ts ++ pts
+
      -- Build a map from proc point BlockId to pairs of:
      --  * Labels for their new procedures
      --  * Labels for the info tables of their new procedures (only if
@@ -284,7 +299,9 @@ splitAtProcPoints dflags entry_label callPPs procPoints procMap
                  foldM add_jump_block (mapEmpty, []) needed_jumps
                   -- update the entry block
               let b = expectJust "block in env" $ mapLookup ppId blockEnv
-                  blockEnv' = mapInsert ppId b blockEnv
+                  b' | enoughTicks (blockTicks b) = b
+                     | otherwise                  = annotateBlock (ticksFor ppId) b
+                  blockEnv' = mapInsert ppId b' blockEnv
                   -- replace branches to procpoints with branches to jumps
                   blockEnv'' = toBlockMap $ replaceBranches jumpEnv $ ofBlockMap ppId blockEnv'
                   -- add the jump blocks to the graph

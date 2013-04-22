@@ -57,7 +57,10 @@ module CmmUtils(
 
         analFwd, analBwd, analRewFwd, analRewBwd,
         dataflowPassFwd, dataflowPassBwd, dataflowAnalFwd, dataflowAnalBwd,
-        dataflowAnalFwdBlocks
+        dataflowAnalFwdBlocks,
+
+        -- * Ticks
+        getContextMap, blockTicks, blockContexts, annotateBlock
   ) where
 
 #include "HsVersions.h"
@@ -74,6 +77,7 @@ import Unique
 import UniqSupply
 import DynFlags
 import Util
+import CoreSyn (Tickish)
 
 import Data.Word
 import Data.Maybe
@@ -521,3 +525,33 @@ dataflowPassBwd :: NonLocal n =>
 dataflowPassBwd (CmmGraph {g_entry=entry, g_graph=graph}) facts bwd = do
   (graph, facts, NothingO) <- analyzeAndRewriteBwd bwd (JustC [entry]) graph (mkFactBase (bp_lattice bwd) facts)
   return (CmmGraph {g_entry=entry, g_graph=graph}, facts)
+
+-------------------------------------------------
+-- Tick utilities
+
+-- | Builds the context map for a Cmm graph
+getContextMap :: CmmGraph -> BlockEnv Label
+getContextMap = foldGraphBlocks (foldBlockNodesF3 (goEntry, goStmt, goLast)) mapEmpty
+  where goEntry :: CmmNode C O -> BlockEnv Label -> (Label, BlockEnv Label)
+        goEntry (CmmEntry bl)       ctxMap  = (bl, ctxMap)
+        goStmt :: CmmNode O O -> (Label, BlockEnv Label) -> (Label, BlockEnv Label)
+        goStmt  (CmmContext l) (bl, ctxMap) = (bl, mapInsert l bl ctxMap)
+        goStmt  _other         state        = state
+        goLast  _any           (_,  ctxMap) = ctxMap
+
+blockTicks :: Block CmmNode C C -> [Tickish ()]
+blockTicks b = foldBlockNodesF goStmt b []
+  where goStmt :: CmmNode e x -> [Tickish ()] -> [Tickish ()]
+        goStmt  (CmmTick t) ts = t:ts
+        goStmt  _other      ts = ts
+
+blockContexts :: Block CmmNode C C -> [Label]
+blockContexts b = foldBlockNodesF goStmt b []
+  where goStmt :: CmmNode e x -> [Label] -> [Label]
+        goStmt  (CmmContext l) ls = l:ls
+        goStmt  _other         ls = ls
+
+annotateBlock :: [Tickish ()] -> Block CmmNode C C -> Block CmmNode C C
+annotateBlock ts b = blockJoin hd (tstmts `blockAppend` mid) tl
+  where (hd, mid, tl) = blockSplit b
+        tstmts = foldr blockCons emptyBlock $ map CmmTick ts
