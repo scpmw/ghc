@@ -18,6 +18,7 @@ import BlockId
 import CodeGen.Platform ( activeStgRegs, callerSaves )
 import CLabel
 import Cmm
+import Debug
 import PprCmm
 import CmmUtils
 import Hoopl
@@ -43,6 +44,7 @@ type LlvmStatements = OrdList LlvmStatement
 genLlvmProc :: RawCmmDecl -> LlvmM [LlvmCmmDecl]
 genLlvmProc proc@(CmmProc infos lbl live graph) = do
     meta <- cmmMetaLlvmProc proc
+    addDebugBlock $ cmmProcDebug proc
     let blocks = toBlockListEntryFirst graph
     (lmblocks, lmdata) <- basicBlocksCodeGen live meta blocks
     let info = mapLookup (g_entry graph) infos

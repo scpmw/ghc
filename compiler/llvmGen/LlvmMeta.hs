@@ -32,7 +32,7 @@ import FastString
 import Debug
 import Binary
 
-import BlockId         ( BlockEnv )
+import BlockId         ( blockLbl, BlockEnv )
 import Config          ( cProjectName, cProjectVersion )
 import Cmm
 import CmmUtils        ( toBlockMap, blockTicks, blockContexts )
@@ -41,6 +41,7 @@ import SrcLoc
 import MonadUtils      ( MonadIO(..) )
 import Outputable      ( showSDoc, ppr, renderWithStyle, mkCodeStyle,  CodeStyle(..) )
 import Panic           ( panic )
+import Platform        ( platformOS, OS(..) )
 import Unique          ( getKey, getUnique )
 
 import System.Directory( getCurrentDirectory)
@@ -307,8 +308,8 @@ cmmMetaLlvmBlock :: (LMMetaInt, BlockTicks) -> CmmBlock -> LlvmM (LMMetaInt, LMM
 cmmMetaLlvmBlock (procId, blockTicks) block = do
 
   -- Figure out line information for this tick
-  let blockLbl = entryLabel block
-      tick = mapLookup blockLbl blockTicks
+  let lbl = entryLabel block
+      tick = mapLookup lbl blockTicks
   (file, line, col) <- tickToLoc tick
   fileId <- emitFileMeta file
 
@@ -323,7 +324,7 @@ cmmMetaLlvmBlock (procId, blockTicks) block = do
   -- our data so blocks are always unique. Note we have no
   -- reason to do this for the line annotations though - so
   -- generated DWARF should look no different.
-  let uniqCol = getKey $ getUnique blockLbl
+  let uniqCol = getKey $ getUnique lbl
 
   bid <- getMetaUniqueId
   renderMeta bid $ LMMeta $ map LMLitVar
@@ -350,7 +351,7 @@ cmmMetaLlvmBlock (procId, blockTicks) block = do
   -- above, the name of which will tell the RTS what the block
   -- name actually is.
   dflags <- getDynFlags
-  let bname = renderWithStyle dflags (ppr blockLbl) (mkCodeStyle CStyle)
+  let bname = renderWithStyle dflags (ppr $ blockLbl lbl) (mkCodeStyle CStyle)
       vname = mkFastString ("__debug_ghc_" ++ bname)
   vid <- getMetaUniqueId
   renderMeta vid =<< genVariableMeta vname Nothing i8 bid
@@ -535,15 +536,18 @@ bufferAsString (len, buf) = liftIO $ do
   return $ LMStaticStr str $ LMArray (len + 1) i8
 
 cmmDebugLlvmGens :: LlvmM ()
-cmmDebugLlvmGens = return ()
+cmmDebugLlvmGens = do
 
-  {--
-  TODO...
+  -- Complete debug information structure
+  dflags <- getDynFlag id
+  modLoc <- getModLoc
+  blocks <- getDebugBlocks
+  let dmod = DebugModule { dmodPackage = thisPackage dflags
+                         , dmodLocation = modLoc
+                         , dmodBlocks = blocks }
 
   -- Write debug data as event log
-  dflags <- getDynFlag id
-  lbls <- getLabelMap
-  dbg <- liftIO $ debugWriteEventlog dflags mod_loc tick_map lbls
+  dbg <- liftIO $ debugWriteEventlog dflags dmod
 
   -- Convert to a string
   dbgStr <- bufferAsString dbg
@@ -560,7 +564,6 @@ cmmDebugLlvmGens = return ()
 
   renderLlvm $ pprLlvmData ([lmDebug], [])
   markUsedVar lmDebugVar
---}
 
 mkI32, mkI64 :: Integer -> LlvmLit
 mkI32 n = LMIntLit n i32

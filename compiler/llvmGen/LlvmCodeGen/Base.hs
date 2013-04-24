@@ -17,7 +17,6 @@ module LlvmCodeGen.Base (
         runLlvm, liftStream, withClearVars, varLookup, varInsert,
         markStackReg, checkStackReg,
         funLookup, funInsert, getLlvmVer, getDynFlags, getDynFlag, getLlvmPlatform,
-        labelInsert, getLabelMap,
         renderLlvm, runUs, markUsedVar, getUsedVars,
         ghcInternalFunctions,
 
@@ -26,6 +25,7 @@ module LlvmCodeGen.Base (
         setFileMeta, getFileMeta,
         addProcMeta, getProcMetaIds,
         freshSectionId, getModLoc,
+        addDebugBlock, getDebugBlocks,
 
         cmmToLlvmType, widthToLlvmFloat, widthToLlvmInt, llvmFunTy,
         llvmFunSig, llvmStdFunAttrs, llvmFunAlign, llvmInfAlign,
@@ -42,6 +42,7 @@ import Llvm
 import LlvmCodeGen.Regs
 
 import CLabel
+import Debug
 import CodeGen.Platform ( activeStgRegs )
 import DynFlags
 import FastString
@@ -214,6 +215,7 @@ data LlvmEnv = LlvmEnv
   , envFileMeta :: UniqFM LMMetaInt
   , envProcMeta :: [LMMetaInt]
   , envNextSection :: Int
+  , envDebug :: [DebugBlock]
   }
 
 type LlvmEnvMap = UniqFM LlvmType
@@ -255,6 +257,7 @@ runLlvm dflags mod_loc ver out us m = do
                       , envFileMeta = emptyUFM
                       , envProcMeta = []
                       , envNextSection = 1
+                      , envDebug = []
                       }
 
 -- | Get environment (internal)
@@ -273,7 +276,7 @@ liftStream s = Stream.Stream $ do
     Left b        -> return (Left b)
     Right (a, r2) -> return (Right (a, liftStream r2))
 
--- | Clear variables from the environment.
+-- | Clear variables from the environment for a subcomputation
 withClearVars :: LlvmM a -> LlvmM a
 withClearVars m = LlvmM $ \env -> do
     (x, env') <- runLlvmM m env { envVarMap = emptyUFM, envStackRegs = [] }
@@ -296,13 +299,6 @@ markStackReg r = modifyEnv $ \env -> env { envStackRegs = r : envStackRegs env }
 -- | Check whether a register is allocated on the stack
 checkStackReg :: GlobalReg -> LlvmM Bool
 checkStackReg r = getEnv ((elem r) . envStackRegs)
--- | Register the LLVM label for a CMM label
-labelInsert :: CLabel -> CLabel -> LlvmM ()
-labelInsert cl ll = LlvmM $ \env -> return ((), env { envLabelMap = (cl,ll):envLabelMap env })
-
--- | Lookup LLVM label of a CMM label
-getLabelMap :: LlvmM [(CLabel, CLabel)]
-getLabelMap = LlvmM $ \env -> return (envLabelMap env, env)
 
 -- | Allocate a new global unnamed metadata identifier
 getMetaUniqueId :: LlvmM LMMetaInt
@@ -380,6 +376,13 @@ freshSectionId = LlvmM $ \env -> return (envNextSection env, env { envNextSectio
 getModLoc :: LlvmM ModLocation
 getModLoc = getEnv envModLoc
 
+-- | Adds block information to debug data
+addDebugBlock :: DebugBlock -> LlvmM ()
+addDebugBlock b = modifyEnv $ \e -> e { envDebug = b : envDebug e }
+
+-- | Returns list of block debug information gathered so far
+getDebugBlocks :: LlvmM [DebugBlock]
+getDebugBlocks = getEnv (reverse . envDebug)
 
 -- ----------------------------------------------------------------------------
 -- * Internal functions

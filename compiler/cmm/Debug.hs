@@ -13,12 +13,16 @@ module Debug (
   Tickish(..), -- reexported
 
   DebugModule(..), DebugBlock(..),
+  cmmProcDebug,
   debugWriteEventlog
 
   ) where
 
 import Binary
+import BlockId         ( blockLbl )
 import CLabel
+import Cmm
+import CmmUtils        ( toBlockMap, blockTicks, blockContexts )
 import DynFlags
 import Module
 import CoreSyn
@@ -27,6 +31,8 @@ import UniqFM
 import SrcLoc
 import FastString    ( unpackFS )
 import Var
+
+import Compiler.Hoopl  ( mapLookup )
 
 import Control.Monad ( forM, forM_, foldM )
 
@@ -95,6 +101,22 @@ data DebugBlock = DebugBlock { dblLabel :: CLabel
                              , dblBlocks :: [DebugBlock]
                              }
 
+-- | Extract debug data from a procedure
+cmmProcDebug :: RawCmmDecl -> DebugBlock
+cmmProcDebug (CmmData {})                  = panic "generateDebug: no proc!"
+cmmProcDebug (CmmProc infos entryLbl _ g) =
+  let blockMap = toBlockMap g
+      block l = fmap (mkBlock l) $ mapLookup l blockMap
+      mkBlock l b = DebugBlock { dblLabel = blockLbl l
+                               , dblTicks = blockTicks b
+                               , dblBlocks = mapMaybe block $ blockContexts b }
+      entryBlock = block (g_entry g)
+  in DebugBlock { dblLabel = case mapLookup (g_entry g) infos of
+                     Nothing                  -> entryLbl
+                     Just (Statics infoLbl _) -> infoLbl,
+                  dblTicks  = maybe [] dblTicks entryBlock,
+                  dblBlocks = maybe [] (:[]) entryBlock }
+
 -- | Put a string C-style - null-terminated. We assume that the string
 -- is ASCII.
 --
@@ -118,19 +140,19 @@ putBlock :: BinHandle -> DynFlags -> BlockId -> (BlockId, CoreMap) -> DebugBlock
          -> IO (BlockId, CoreMap)
 putBlock bh dflags pid (bid, coreDone) (DebugBlock lbl ticks blocks) = do
   -- Put sub-blocks
-  (bid', coreDone') <- foldM (putBlock bh dflags bid) (bid+1, coreDone) blocks
+  (bid', coreDoneSub) <- foldM (putBlock bh dflags bid) (bid+1, emptyUFM) blocks
   -- Write our own data
   putEvent bh EVENT_DEBUG_PROCEDURE $ do
     put_ bh bid
     put_ bh pid
     let showSDocC = flip (renderWithStyle dflags) (mkCodeStyle CStyle)
     putString bh $ showSDocC  $ ppr lbl
-  -- Write annotations, keeping track of core that was already written
-  coreDone'' <- foldM (putAnnotEvent bh dflags) coreDone' ticks
-  return (bid', coreDone'')
+  -- Write annotations.
+  coreDoneBlock <- foldM (putAnnotEvent bh dflags coreDoneSub) emptyUFM ticks
+  return (bid', coreDone `plusUFM` coreDoneSub `plusUFM` coreDoneBlock)
 
-putAnnotEvent :: BinHandle -> DynFlags -> CoreMap -> Tickish () -> IO CoreMap
-putAnnotEvent bh _ coreDone (SourceNote ss names _) = do
+putAnnotEvent :: BinHandle -> DynFlags -> CoreMap -> CoreMap -> Tickish () -> IO CoreMap
+putAnnotEvent bh _ _ coreDone (SourceNote ss names _) = do
   putEvent bh EVENT_DEBUG_SOURCE $ do
     put_ bh $ encLoc $ srcSpanStartLine ss
     put_ bh $ encLoc $ srcSpanStartCol ss
@@ -141,19 +163,22 @@ putAnnotEvent bh _ coreDone (SourceNote ss names _) = do
   return coreDone
  where encLoc x = fromIntegral x :: Word16
 
-putAnnotEvent bh dflags coreDone (CoreNote lbl con corePtr)
+putAnnotEvent bh dflags coreDoneSub coreDone (CoreNote lbl con corePtr)
+  -- This piece of core was already covered earlier in this block?
   | not $ (lbl, con) `elemCoreMap` coreDone
   = do doneNew <- putEvent bh EVENT_DEBUG_CORE $ do
          putString bh $ showSDocDump dflags $ ppr lbl
          putString bh $ case con of
            DEFAULT -> ""
            _       -> showSDoc dflags $ ppr con
+         -- Emit core, leaving out (= referencing) any core pieces
+         -- that were emitted from sub-blocks
          case corePtr of
-           ExprPtr core -> putCoreExpr bh dflags coreDone core
-           AltPtr  alt  -> putCoreAlt bh dflags coreDone alt
+           ExprPtr core -> putCoreExpr bh dflags coreDoneSub core
+           AltPtr  alt  -> putCoreAlt bh dflags coreDoneSub alt
        return $ coreDone `plusUFM` doneNew
 
-putAnnotEvent _ _ coreDone _ = return coreDone
+putAnnotEvent _ _ _ coreDone _ = return coreDone
 
 -- | Generates debug data into a buffer
 debugWriteEventlog :: DynFlags -> DebugModule -> IO (Int, ForeignPtr Word8)
