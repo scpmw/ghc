@@ -205,13 +205,17 @@ callContinuation_maybe _ = Nothing
 okToDuplicate :: CmmBlock -> Bool
 okToDuplicate block
   = case blockSplit block of
-      (_, m, CmmBranch _) -> isEmptyBlock m
+      (_, m, CmmBranch _) -> all noCode $ blockToList m
       -- cheap and cheerful; we might expand this in the future to
       -- e.g. spot blocks that represent a single instruction or two.
       -- Be careful: a CmmCall can be more than one instruction, it
       -- has a CmmExpr inside it.
       _otherwise -> False
-
+  where noCode :: CmmNode O O -> Bool
+        noCode CmmComment{} = True
+        noCode CmmTick{}    = True
+        noCode CmmContext{} = False
+        noCode _other       = False
 
 {-  Note [shortcut call returns]
 
