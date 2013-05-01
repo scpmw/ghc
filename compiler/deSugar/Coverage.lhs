@@ -188,9 +188,8 @@ mkDensity dflags
   | ProfAutoAll     <- profAuto dflags   = TickAllFunctions
   | ProfAutoTop     <- profAuto dflags   = TickTopFunctions
   | ProfAutoExports <- profAuto dflags   = TickExportedFunctions
-  | HscLlvm         <- hscTarget dflags  = TickForCoverage
   | ProfAutoCalls   <- profAuto dflags   = TickCallSites
-  | otherwise = panic "density"
+  | otherwise                            = TickForCoverage
 
   -- ToDo: -fhpc is taking priority over -fprof-auto here.  It seems
   -- that coverage works perfectly well with profiling, but you don't

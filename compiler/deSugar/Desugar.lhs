@@ -108,12 +108,7 @@ deSugar hsc_env
                                Just ([], nilOL, [], [], NoStubs, hpcInfo, emptyModBreaks))
                    _        -> do
 
-                     let want_ticks = gopt Opt_Hpc dflags
-                                   || target `elem` [HscInterpreted, HscLlvm]
-                                   || (gopt Opt_SccProfilingOn dflags
-                                       && case profAuto dflags of
-                                            NoProfAuto -> False
-                                            _          -> True)
+                     let want_ticks = True -- at this point they might be useful in any situation
 
                      (binds_cvr,ds_hpc_info, modBreaks)
                          <- if want_ticks && not (isHsBoot hsc_src)
