@@ -73,10 +73,11 @@ dW_ATE_unsigned      = 7
 dW_ATE_unsigned_char = 8
 
 -- | Dwarf section declarations
-dwarfInfoSection, dwarfAbbrevSection, dwarfLineSection :: SDoc
+dwarfInfoSection, dwarfAbbrevSection, dwarfLineSection, dwarfGhcSection :: SDoc
 dwarfInfoSection   = ptext (sLit ".section .debug_info,\"\",@progbits")
 dwarfAbbrevSection = ptext (sLit ".section .debug_abbrev,\"\",@progbits")
 dwarfLineSection   = ptext (sLit ".section .debug_line,\"\",@progbits")
+dwarfGhcSection    = ptext (sLit ".section .debug_ghc,\"\",@progbits")
 
 -- | Dwarf section labels
 dwarfInfoLabel, dwarfAbbrevLabel, dwarfLineLabel :: LitString

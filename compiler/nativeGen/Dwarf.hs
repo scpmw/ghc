@@ -69,7 +69,15 @@ dwarfGen df modLoc us blocks = do
                 ptext dwarfLineLabel <> colon
 
   -- .debug_ghc section: debug data in eventlog format (GHC-specific, obviously)
-  return (infoSct $$ abbrevSct $$ lineSct, us')
+  let dbgMod = DebugModule { dmodPackage = thisPackage df
+                           , dmodLocation = modLoc
+                           , dmodBlocks = blocks
+                           }
+  evData <- debugWriteEventlog df dbgMod
+  let ghcSct = dwarfGhcSection $$
+               pprBuffer evData
+
+  return (infoSct $$ abbrevSct $$ lineSct $$ ghcSct, us')
 
 -- | Header for a compilation unit, establishing global format
 -- parameters
