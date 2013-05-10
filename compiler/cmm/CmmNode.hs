@@ -25,7 +25,7 @@ import DynFlags
 import FastString
 import ForeignCall
 import SMRep
-import CoreSyn (Tickish)
+import CoreSyn (RawTickish)
 
 import Compiler.Hoopl
 import Data.Maybe
@@ -43,7 +43,7 @@ data CmmNode e x where
 
   CmmComment :: FastString -> CmmNode O O
 
-  CmmTick :: Tickish () -> CmmNode O O
+  CmmTick :: RawTickish -> CmmNode O O
   CmmContext :: ULabel -> CmmNode O O
 
   CmmAssign :: !CmmReg -> !CmmExpr -> CmmNode O O

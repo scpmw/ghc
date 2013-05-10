@@ -14,7 +14,6 @@ module LlvmMeta (
   genVariableMeta,
 
   annotateDebug,
-  BlockTicks,
 
   cmmDebugLlvmGens
   ) where
@@ -35,8 +34,8 @@ import Binary
 import BlockId         ( blockLbl, BlockEnv )
 import Config          ( cProjectName, cProjectVersion )
 import Cmm
-import CmmUtils        ( toBlockMap, blockTicks, blockContexts )
-import Compiler.Hoopl  ( mapLookup, mapInsert, mapUnions, entryLabel )
+import CmmUtils
+import Compiler.Hoopl  ( mapLookup, entryLabel )
 import SrcLoc
 import MonadUtils      ( MonadIO(..) )
 import Outputable      ( showSDoc, ppr, renderWithStyle, mkCodeStyle,  CodeStyle(..) )
@@ -45,18 +44,14 @@ import Platform        ( platformOS, OS(..) )
 import Unique          ( getKey, getUnique )
 
 import System.Directory( getCurrentDirectory)
-import Data.List       ( maximumBy, isPrefixOf)
-import Data.Maybe      ( fromMaybe, fromJust, catMaybes )
+import Data.Maybe      ( fromMaybe, fromJust )
 import Data.Char       ( ord, chr, isAscii, isPrint, intToDigit)
 import Data.Word       ( Word8)
 import Data.Bits       ( shiftL)
-import Data.Ord        ( comparing )
 
 import Foreign.Ptr
 import Foreign.ForeignPtr
 import Foreign.Storable
-
-import System.FilePath (takeExtension)
 
 -- Constants
 
@@ -92,6 +87,11 @@ _dW_ATE_unsigned_char = 8
 
 dW_LANG_Haskell :: Integer
 dW_LANG_Haskell  = 0x8042 -- Chosen arbitrarily
+
+mkDwarfMeta :: Word -> [LlvmVar] -> LlvmLit
+mkDwarfMeta tag vars =
+  let tagVar = LMLitVar $ mkI32 $ fromIntegral lLVMDebugVersion + fromIntegral tag
+  in LMMeta (tagVar : vars)
 
 renderMeta :: LMMetaInt -> LlvmLit -> LlvmM ()
 renderMeta n val = renderLlvm $ pprLlvmData ([global], [])
@@ -236,10 +236,8 @@ emitFileMeta filePath = do
 
       return fileId
 
-type BlockTicks = BlockEnv (Tickish ())
-
 -- | Generates meta data for a procedure, returning its meta data ID
-cmmMetaLlvmProc :: RawCmmDecl -> LlvmM (LMMetaInt, BlockTicks)
+cmmMetaLlvmProc :: RawCmmDecl -> LlvmM (LMMetaInt, BlockEnv RawTickish)
 cmmMetaLlvmProc proc@(CmmProc infos cmmLabel _ graph) = do
 
   -- Get entry label name
@@ -295,7 +293,7 @@ cmmMetaLlvmProc _other = panic "cmmMetaLlvmProc: Passed non-proc!"
 
 -- | Make a (file, line, column) tuple from a tick, or fall back to a
 -- standard source location where impossible
-tickToLoc :: Maybe (Tickish ()) -> LlvmM (FastString, Int, Int)
+tickToLoc :: Maybe RawTickish -> LlvmM (FastString, Int, Int)
 tickToLoc (Just (SourceNote { sourceSpan = span } )) 
             = return (srcSpanFile span, srcSpanStartLine span, srcSpanStartCol span)
 tickToLoc _ = do mod_loc <- getModLoc
@@ -304,7 +302,7 @@ tickToLoc _ = do mod_loc <- getModLoc
 
 -- | Generates meta data for a block and returns a meta data ID to use
 -- for annnotating statements
-cmmMetaLlvmBlock :: (LMMetaInt, BlockTicks) -> CmmBlock -> LlvmM (LMMetaInt, LMMetaInt, LMMetaInt)
+cmmMetaLlvmBlock :: (LMMetaInt, BlockEnv RawTickish) -> CmmBlock -> LlvmM (LMMetaInt, LMMetaInt, LMMetaInt)
 cmmMetaLlvmBlock (procId, blockTicks) block = do
 
   -- Figure out line information for this tick
@@ -361,56 +359,6 @@ cmmMetaLlvmBlock (procId, blockTicks) block = do
 -- | Put debug annotations on a list of statements
 annotateDebug :: LMMetaInt -> [LlvmStatement] -> [LlvmStatement]
 annotateDebug annotId = map (MetaStmt [(fsLit "dbg", annotId)])
-
--- | For every block in the procedure find a "good" source note tick
--- that seems useful to associate with it in DWARF, where we are
--- restricted to simple 1-to-1 mapping to source code.
---
--- As this might often give us a whole list of ticks to choose from,
--- we arbitrarily select the biggest source span - preferably from the
--- source file we are currently compiling - and hope that it
--- corresponds to the most useful location in the code. All nothing
--- but guesswork, obviously, but this is meant to be more or lesser
--- filler data anyway.
-findGoodSourceTicks :: RawCmmDecl -> ModLocation
-                    -> (Maybe (Tickish ()), BlockTicks)
-findGoodSourceTicks (CmmProc _ _ _ g) mod_loc =
-  let blockMap = toBlockMap g
-      go ctx lbl =
-        let m_block = mapLookup lbl blockMap
-            sticks = maybe [] (filter isSourceTick . blockTicks) m_block
-            -- Choose ticks from own source notes, or take over tick
-            -- annotation from parent otherwise (if any)
-            myTick0 = case sticks of
-              sts@(_:_) -> Just $ maximumBy (comparing rangeRating) sts
-              []        -> ctx
-            -- Recurse into sub-blocks
-            ctxs = maybe [] blockContexts m_block
-            (recTicks, recMaps) = unzip $ map (go myTick0) ctxs
-            -- When in doubt get ticks from children
-            recTicks' = catMaybes recTicks
-            myTick1 = case myTick0 of
-              Just _     -> myTick0
-              Nothing    | not (null recTicks')
-                         -> Just $ maximumBy (comparing rangeRating) recTicks'
-              _otherwise -> Nothing
-            -- New map
-            newMap = maybe id (mapInsert lbl) myTick1 $ mapUnions recMaps
-        in (myTick1, newMap)
-      unitFS = maybe nilFS mkFastString $ ml_hs_file mod_loc
-      rangeRating (SourceNote span _ _) =
-        (case () of
-          _ | ".dump" `isPrefixOf` takeExtension (unpackFS $ srcSpanFile span)
-                                         -> 2
-            | srcSpanFile span == unitFS -> 1
-            | otherwise                  -> 0 :: Int,
-         srcSpanEndLine span - srcSpanStartLine span,
-         srcSpanEndCol span - srcSpanStartCol span)
-      rangeRating _non_source_note = error "rangeRating"
-      isSourceTick SourceNote {} = True
-      isSourceTick _             = False
-  in go Nothing (g_entry g)
-findGoodSourceTicks _other _ = (Nothing, mapUnions [])
 
 -- | Gives type description as meta data or a reference to an existing
 -- metadata node that contains it.

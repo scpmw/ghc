@@ -60,7 +60,8 @@ module CmmUtils(
         dataflowAnalFwdBlocks,
 
         -- * Ticks
-        getContextMap, blockTicks, blockContexts, annotateBlock
+        getContextMap, blockTicks, blockContexts, annotateBlock,
+        findGoodSourceTicks
   ) where
 
 #include "HsVersions.h"
@@ -72,16 +73,21 @@ import SMRep
 import Cmm
 import BlockId
 import CLabel
+import FastString
+import Module   ( ModLocation(..) )
 import Outputable
 import Unique
 import UniqSupply
 import DynFlags
 import Util
-import CoreSyn (Tickish)
+import CoreSyn  ( RawTickish, Tickish(..) )
+import SrcLoc
 
 import Data.Word
 import Data.Maybe
 import Data.Bits
+import Data.List
+import Data.Ord  ( comparing )
 import Hoopl
 
 ---------------------------------------------------
@@ -539,9 +545,9 @@ getContextMap = foldGraphBlocks (foldBlockNodesF3 (goEntry, goStmt, goLast)) map
         goStmt  _other         state        = state
         goLast  _any           (_,  ctxMap) = ctxMap
 
-blockTicks :: Block CmmNode C C -> [Tickish ()]
+blockTicks :: Block CmmNode C C -> [RawTickish]
 blockTicks b = foldBlockNodesF goStmt b []
-  where goStmt :: CmmNode e x -> [Tickish ()] -> [Tickish ()]
+  where goStmt :: CmmNode e x -> [RawTickish] -> [RawTickish]
         goStmt  (CmmTick t) ts = t:ts
         goStmt  _other      ts = ts
 
@@ -551,7 +557,55 @@ blockContexts b = foldBlockNodesF goStmt b []
         goStmt  (CmmContext l) ls = l:ls
         goStmt  _other         ls = ls
 
-annotateBlock :: [Tickish ()] -> Block CmmNode C C -> Block CmmNode C C
+annotateBlock :: [RawTickish] -> Block CmmNode C C -> Block CmmNode C C
 annotateBlock ts b = blockJoin hd (tstmts `blockAppend` mid) tl
   where (hd, mid, tl) = blockSplit b
         tstmts = foldr blockCons emptyBlock $ map CmmTick ts
+
+-- | For every block in the procedure find a "good" source note tick
+-- that seems useful to associate with for debugging information
+-- where we are restricted to simple 1-to-1 mapping to source code.
+--
+-- As this might often give us a whole list of ticks to choose from,
+-- we arbitrarily select the biggest source span - preferably from the
+-- source file we are currently compiling - and hope that it
+-- corresponds to the most useful location in the code. All nothing
+-- but guesswork, sadly.
+findGoodSourceTicks :: RawCmmDecl -> ModLocation
+                    -> (Maybe RawTickish, BlockEnv RawTickish)
+findGoodSourceTicks (CmmProc _ _ _ g) mod_loc =
+  let blockMap = toBlockMap g
+      go ctx lbl
+        | Just block <- mapLookup lbl blockMap
+        = let sticks = filter isSourceTick $ blockTicks block
+              -- Choose ticks from own source notes, or take over tick
+              -- annotation from parent otherwise (if any)
+              myTick0 = case sticks of
+                sts@(_:_) -> Just $! maximumBy (comparing rangeRating) sts
+                []        -> ctx
+              -- Recurse into sub-blocks
+              (recTicks, recMaps) = unzip $ map (go myTick0) $ blockContexts block
+              -- When in doubt get ticks from children
+              recTicks' = catMaybes recTicks
+              !myTick1 = case myTick0 of
+                Just _     -> myTick0
+                Nothing    | not (null recTicks')
+                           -> Just $! maximumBy (comparing rangeRating) recTicks'
+                _otherwise -> Nothing
+              -- New map
+              !newMap = maybe id (mapInsert lbl) myTick1 $ mapUnions recMaps
+          in (myTick1, newMap)
+      go _ _ = (Nothing, mapEmpty)
+      unitFS = maybe nilFS mkFastString $ ml_hs_file mod_loc
+      rangeRating (SourceNote span _ _) =
+        (case () of
+          _ | isDumpSrcSpan span         -> 2
+            | srcSpanFile span == unitFS -> 1
+            | otherwise                  -> 0 :: Int,
+         srcSpanEndLine span - srcSpanStartLine span,
+         srcSpanEndCol span - srcSpanStartCol span)
+      rangeRating _non_source_note = error "rangeRating"
+      isSourceTick SourceNote {} = True
+      isSourceTick _             = False
+  in go Nothing (g_entry g)
+findGoodSourceTicks _other _ = (Nothing, mapUnions [])

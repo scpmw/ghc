@@ -80,7 +80,7 @@ import Unique
 import UniqSupply
 import FastString
 import Outputable
-import CoreSyn (Tickish)
+import CoreSyn (RawTickish)
 
 import Control.Monad
 import Data.List
@@ -679,7 +679,7 @@ emitComment s = emitCgStmt (CgStmt (CmmComment s))
 emitComment _ = return ()
 #endif
 
-emitTick :: Tickish () -> FCode ()
+emitTick :: RawTickish -> FCode ()
 emitTick = emitCgStmt . CgStmt . CmmTick
 
 emitContext :: Label -> FCode ()

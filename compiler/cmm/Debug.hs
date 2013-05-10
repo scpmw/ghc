@@ -10,7 +10,7 @@
 
 module Debug (
 
-  Tickish(..), -- reexported
+  RawTickish, Tickish(..), -- reexported
 
   DebugModule(..), DebugBlock(..),
   cmmProcDebug,
@@ -97,7 +97,7 @@ data DebugModule = DebugModule { dmodPackage :: PackageId
 -- | Debug information about a block of code. Can be nested to show
 -- context.
 data DebugBlock = DebugBlock { dblLabel :: CLabel
-                             , dblTicks :: [Tickish ()]
+                             , dblTicks :: [RawTickish]
                              , dblBlocks :: [DebugBlock]
                              }
 
@@ -151,7 +151,7 @@ putBlock bh dflags pid (bid, coreDone) (DebugBlock lbl ticks blocks) = do
   coreDoneBlock <- foldM (putAnnotEvent bh dflags coreDoneSub) emptyUFM ticks
   return (bid', coreDone `plusUFM` coreDoneSub `plusUFM` coreDoneBlock)
 
-putAnnotEvent :: BinHandle -> DynFlags -> CoreMap -> CoreMap -> Tickish () -> IO CoreMap
+putAnnotEvent :: BinHandle -> DynFlags -> CoreMap -> CoreMap -> RawTickish -> IO CoreMap
 putAnnotEvent bh _ _ coreDone (SourceNote ss names _) = do
   putEvent bh EVENT_DEBUG_SOURCE $ do
     put_ bh $ encLoc $ srcSpanStartLine ss
