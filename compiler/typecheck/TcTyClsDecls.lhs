@@ -1208,6 +1208,9 @@ chooseBoxingStrategy dflags arg_ty bang
 	               HsNoBang -> HsNoBang
 	               HsStrict | gopt Opt_UnboxStrictFields dflags
                                 -> can_unbox HsStrict arg_ty
+	                        | gopt Opt_UnboxStrictPrimitiveFields dflags &&
+                                  can_unbox_prim arg_ty
+                                -> HsUnpack
                                 | otherwise -> HsStrict
                        HsNoUnpack -> HsStrict
 	               HsUnpack   -> can_unbox HsUnpackFailed arg_ty
@@ -1234,6 +1237,46 @@ chooseBoxingStrategy dflags arg_ty bang
                  else HsUnpack
 
               | otherwise -> fail_bang
+
+    -- TODO: Deal with type synonyms?
+
+    can_unbox_prim :: TcType -> Bool
+    -- We unpack any field which final unpacked size would be smaller
+    -- or equal to the size of a pointer.
+    can_unbox_prim arg_ty
+       = case splitTyConApp_maybe arg_ty of
+            Nothing -> False
+
+            Just (arg_tycon, _)
+              | isAbstractTyCon arg_tycon -> False
+                      -- See Note [Don't complain about UNPACK on abstract TyCons]
+              | isPrimTyCon arg_tycon && hasPtrSizedRep (tyConPrimRep arg_tycon)
+              -> True
+              -- TODO: Check that the PrimTyCon corresponds to a type
+              -- with pointer-sized representation.
+              | isEmptyDataTyCon arg_tycon -> True
+              | not (isRecursiveTyCon arg_tycon)        -- Note [Recusive unboxing]
+              , Just ty <- tyConSingleFieldDataCon_maybe arg_tycon
+              -> can_unbox_prim ty
+              | otherwise -> False
+
+
+-- | Return True if representation can be considered pointer-sized (or
+-- smaller) in the context of unpacking.
+hasPtrSizedRep :: PrimRep -> Bool
+-- We explicitly enumerate the PrimReps so that if another PrimRep is
+-- ever added we'll get a pattern match warning which will make sure
+-- we consider the new case here:
+hasPtrSizedRep IntRep   = True
+hasPtrSizedRep WordRep  = True
+hasPtrSizedRep Int64Rep = True  -- See Note [Primitive size exception]
+hasPtrSizedRep Word64Rep= True  -- See Note [Primitive size exception]
+hasPtrSizedRep FloatRep = True  -- NB. might not take a full word
+hasPtrSizedRep DoubleRep= True  -- See Note [Primitive size exception]
+hasPtrSizedRep AddrRep  = True
+hasPtrSizedRep PtrRep   = True
+hasPtrSizedRep VoidRep  = True
+
 \end{code}
 
 Note [Don't complain about UNPACK on abstract TyCons]
@@ -1259,6 +1302,13 @@ good for T, because then we'd get an infinite number of arguments.
 But it's the *argument* type that matters. This is fine:
 	data S = MkS S !Int
 because Int is non-recursive.
+
+Note [Primitive size exception]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+For consistency reasons we make an exception to the size requirement
+for Doubles, Word64s, and Int64s on 32-bit architectures. Not doing so
+might have surprising performance implications if code is moved from a
+64-bit to a 32-bit architecture.
 
 
 %************************************************************************
