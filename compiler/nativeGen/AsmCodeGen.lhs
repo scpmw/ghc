@@ -262,7 +262,7 @@ nativeCodeGen' dflags modLoc ncgImpl h us cmms
         bufh <- newBufHandle h
 
         -- Generate code
-        ((imports, prof), us') <- cmmNativeGenStream dflags modLoc ncgImpl us split_cmms (bufh, emptyUFM, ([], [])) 0
+        ((imports, prof), us') <- cmmNativeGenStream dflags modLoc ncgImpl us split_cmms (bufh, emptyUFM, ([], []))
         let (native, colorStats, linearStats, debugs) = unzip4 prof
 
         -- Write debug data and finish
@@ -326,10 +326,9 @@ cmmNativeGenStream :: (Outputable statics, Outputable instr, Instruction instr)
               -> UniqSupply
               -> Stream IO RawCmmGroup ()
               -> NativeGenState statics instr
-              -> Int
               -> IO (NativeGenAcc statics instr, UniqSupply)
 
-cmmNativeGenStream dflags modloc ncgImpl us cmm_stream ngs@(h, _, nga) count
+cmmNativeGenStream dflags modloc ncgImpl us cmm_stream ngs@(h, _, nga)
  = do
         r <- Stream.runStream cmm_stream
         case r of
@@ -338,7 +337,7 @@ cmmNativeGenStream dflags modloc ncgImpl us cmm_stream ngs@(h, _, nga) count
             (impAcc, profAcc) ->
               return ((reverse impAcc, reverse profAcc), us)
           Right (cmms, cmm_stream') -> do
-            (nga',us',fileIds') <- cmmNativeGens dflags modloc ncgImpl us cmms ngs count
+            (nga',us',fileIds') <- cmmNativeGens dflags modloc ncgImpl us cmms ngs 0
             cmmNativeGenStream dflags modloc ncgImpl us' cmm_stream' (h, fileIds', nga') count
 
 -- | Do native code generation on all these cmms.
