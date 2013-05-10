@@ -154,12 +154,12 @@ data NcgImpl statics instr jumpDest = NcgImpl {
     }
 
 --------------------
-nativeCodeGen :: DynFlags -> ModLocation -> Handle -> UniqSupply -> Stream IO RawCmmGroup ()
+nativeCodeGen :: DynFlags -> ModLocation -> [(Handle, DynFlags)] -> UniqSupply -> Stream IO RawCmmGroup ()
               -> IO UniqSupply
-nativeCodeGen dflags modLoc h us cmms
+nativeCodeGen dflags modLoc hds us cmms
  = let platform = targetPlatform dflags
        nCG' :: (Outputable statics, Outputable instr, Instruction instr) => NcgImpl statics instr jumpDest -> IO UniqSupply
-       nCG' ncgImpl = nativeCodeGen' dflags modLoc ncgImpl h us cmms
+       nCG' ncgImpl = nativeCodeGen' dflags modLoc ncgImpl hds us cmms
        x86NcgImpl = NcgImpl {
                          cmmTopCodeGen             = X86.CodeGen.cmmTopCodeGen
                         ,generateJumpTableForInstr = X86.CodeGen.generateJumpTableForInstr dflags
@@ -240,7 +240,7 @@ noAllocMoreStack amount _
         ++  "   You can still file a bug report if you like.\n"
 
 
-type NativeGenState statics instr = (BufHandle, DwarfFiles, NativeGenAcc statics instr)
+type NativeGenState statics instr = (BufHandle, DynFlags, ModLocation, DwarfFiles, NativeGenAcc statics instr)
 type NativeGenAcc statics instr
         = ([[CLabel]],
            [([NatCmmDecl statics instr],
@@ -251,17 +251,22 @@ type NativeGenAcc statics instr
 nativeCodeGen' :: (Outputable statics, Outputable instr, Instruction instr)
                => DynFlags -> ModLocation
                -> NcgImpl statics instr jumpDest
-               -> Handle -> UniqSupply -> Stream IO RawCmmGroup () -> IO UniqSupply
-nativeCodeGen' dflags modLoc ncgImpl h us cmms
+               -> [(Handle, DynFlags)]
+               -> UniqSupply
+               -> Stream IO RawCmmGroup ()
+               -> IO UniqSupply
+nativeCodeGen' dflags modLoc ncgImpl hds us cmms
  = do
         let split_cmms  = Stream.map add_split cmms
         -- BufHandle is a performance hack.  We could hide it inside
         -- Pretty if it weren't for the fact that we do lots of little
         -- printDocs here (in order to do codegen in constant space).
-        bufh <- newBufHandle h
-        let ngss = [(bufh, emptyUFM, ([], []))]
-        (ngss', us') <- cmmNativeGenStream dflags modLoc ncgImpl us split_cmms ngss
-        us'' <- foldM (finishNativeGen dflags modLoc ncgImpl) us' ngss'
+        let mkNgs (h, dflags) = do
+              bufh <- newBufHandle h
+              return (bufh, dflags, modLoc, emptyUFM, ([], []))
+        ngss <- mapM mkNgs hds
+        (ngss', us') <- cmmNativeGenStream ncgImpl us split_cmms ngss
+        us'' <- foldM (finishNativeGen ncgImpl) us' ngss'
 
         return us''
 
@@ -274,13 +279,11 @@ nativeCodeGen' dflags modLoc ncgImpl h us cmms
 
 
 finishNativeGen :: Instruction instr
-                => DynFlags
-                -> ModLocation
-                -> NcgImpl statics instr jumpDest
+                => NcgImpl statics instr jumpDest
                 -> UniqSupply
                 -> NativeGenState statics instr
                 -> IO UniqSupply
-finishNativeGen dflags modLoc ncgImpl us (bufh@(BufHandle _ _ h), _, (imports, prof))
+finishNativeGen ncgImpl us (bufh@(BufHandle _ _ h), dflags, modLoc, _, (imports, prof))
  = do
         let platform = targetPlatform dflags
         let (native, colorStats, linearStats, debugs)
@@ -334,58 +337,52 @@ finishNativeGen dflags modLoc ncgImpl us (bufh@(BufHandle _ _ h), _, (imports, p
         return us'
 
 cmmNativeGenStream :: (Outputable statics, Outputable instr, Instruction instr)
-              => DynFlags
-              -> ModLocation
-              -> NcgImpl statics instr jumpDest
+              => NcgImpl statics instr jumpDest
               -> UniqSupply
               -> Stream IO RawCmmGroup ()
               -> [NativeGenState statics instr]
               -> IO ([NativeGenState statics instr], UniqSupply)
 
-cmmNativeGenStream dflags modLoc ncgImpl us cmm_stream ngss
+cmmNativeGenStream ncgImpl us cmm_stream ngss
  = do r <- Stream.runStream cmm_stream
       case r of
           Left () ->
-              return ([ (h, fids, (reverse impAcc, reverse profAcc))
-                      | (h, fids, (impAcc, profAcc)) <- ngss ]
+              return ([ (h, dflags, ml, fids, (reverse impAcc, reverse profAcc))
+                      | (h, dflags, ml, fids, (impAcc, profAcc)) <- ngss ]
                      , us)
           Right (cmms, cmm_stream') -> do
-              (ngss',us') <- cmmNativeGens dflags modLoc ncgImpl us cmms ngss
-              cmmNativeGenStream dflags modLoc ncgImpl us' cmm_stream' ngss'
+              (ngss',us') <- cmmNativeGens ncgImpl us cmms ngss
+              cmmNativeGenStream ncgImpl us' cmm_stream' ngss'
 
 -- | Do native code generation on all these cmms.
 --
 cmmNativeGens :: (Outputable statics, Outputable instr, Instruction instr)
-              => DynFlags
-              -> ModLocation
-              -> NcgImpl statics instr jumpDest
+              => NcgImpl statics instr jumpDest
               -> UniqSupply
               -> [RawCmmDecl]
               -> [NativeGenState statics instr]
               -> IO ([NativeGenState statics instr], UniqSupply)
 
-cmmNativeGens _      _      _       us _    [] = return ([], us)
-cmmNativeGens dflags modLoc ncgImpl us cmms (ngs : ngss)
- = do (ngs', us') <- cmmNativeGens' dflags modLoc ncgImpl us cmms ngs 0
-      (ngss', us'') <- cmmNativeGens dflags modLoc ncgImpl us' cmms ngss
+cmmNativeGens _       us _    [] = return ([], us)
+cmmNativeGens ncgImpl us cmms (ngs : ngss)
+ = do (ngs', us') <- cmmNativeGens' ncgImpl us cmms ngs 0
+      (ngss', us'') <- cmmNativeGens ncgImpl us' cmms ngss
       return (ngs' : ngss', us'')
 
 -- | Do native code generation on all these cmms.
 --
 cmmNativeGens' :: (Outputable statics, Outputable instr, Instruction instr)
-               => DynFlags
-               -> ModLocation
-               -> NcgImpl statics instr jumpDest
+               => NcgImpl statics instr jumpDest
                -> UniqSupply
                -> [RawCmmDecl]
                -> NativeGenState statics instr
                -> Int
                -> IO (NativeGenState statics instr, UniqSupply)
 
-cmmNativeGens' _ _ _ us [] ngs _
+cmmNativeGens' _ us [] ngs _
         = return (ngs, us)
 
-cmmNativeGens' dflags modLoc ncgImpl us (cmm : cmms) (h, fileIds, (impAcc, profAcc)) count
+cmmNativeGens' ncgImpl us (cmm : cmms) (h, dflags, modLoc, fileIds, (impAcc, profAcc)) count
  = do
         (us', fileIds', native, debug, imports, colorStats, linearStats)
                 <- {-# SCC "cmmNativeGen" #-} cmmNativeGen dflags modLoc ncgImpl us fileIds cmm count
@@ -405,8 +402,8 @@ cmmNativeGens' dflags modLoc ncgImpl us (cmm : cmms) (h, fileIds, (impAcc, profA
         -- force evaulation all this stuff to avoid space leaks
         {-# SCC "seqString" #-} evaluate $ seqString (showSDoc dflags $ vcat $ map ppr imports)
 
-        cmmNativeGens' dflags modLoc ncgImpl
-            us' cmms (h, fileIds',
+        cmmNativeGens' ncgImpl
+            us' cmms (h, dflags, modLoc, fileIds',
                       ((imports : impAcc),
                        ((lsPprNative, colorStats, linearStats, debug) : profAcc)))
                      count'
