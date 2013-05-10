@@ -240,6 +240,14 @@ noAllocMoreStack amount _
         ++  "   You can still file a bug report if you like.\n"
 
 
+type NativeGenState statics instr = (BufHandle, DwarfFiles, NativeGenAcc statics instr)
+type NativeGenAcc statics instr
+        = ([[CLabel]],
+           [([NatCmmDecl statics instr],
+             Maybe [Color.RegAllocStats statics instr],
+             Maybe [Linear.RegAllocStats],
+             Maybe DebugBlock)])
+
 nativeCodeGen' :: (Outputable statics, Outputable instr, Instruction instr)
                => DynFlags -> ModLocation
                -> NcgImpl statics instr jumpDest
@@ -254,7 +262,7 @@ nativeCodeGen' dflags modLoc ncgImpl h us cmms
         bufh <- newBufHandle h
 
         -- Generate code
-        (imports, prof, us') <- cmmNativeGenStream dflags modLoc ncgImpl bufh us emptyUFM split_cmms [] [] 0
+        ((imports, prof), us') <- cmmNativeGenStream dflags modLoc ncgImpl us split_cmms (bufh, emptyUFM, ([], [])) 0
         let (native, colorStats, linearStats, debugs) = unzip4 prof
 
         -- Write debug data and finish
@@ -315,34 +323,23 @@ cmmNativeGenStream :: (Outputable statics, Outputable instr, Instruction instr)
               => DynFlags
               -> ModLocation
               -> NcgImpl statics instr jumpDest
-              -> BufHandle
               -> UniqSupply
-              -> DwarfFiles
               -> Stream IO RawCmmGroup ()
-              -> [[CLabel]]
-              -> [ ([NatCmmDecl statics instr],
-                   Maybe [Color.RegAllocStats statics instr],
-                   Maybe [Linear.RegAllocStats],
-                   Maybe DebugBlock) ]
+              -> NativeGenState statics instr
               -> Int
-              -> IO ( [[CLabel]],
-                      [([NatCmmDecl statics instr],
-                      Maybe [Color.RegAllocStats statics instr],
-                      Maybe [Linear.RegAllocStats],
-                      Maybe DebugBlock)],
-                      UniqSupply )
+              -> IO (NativeGenAcc statics instr, UniqSupply)
 
-cmmNativeGenStream dflags modloc ncgImpl h us fileIds cmm_stream impAcc profAcc count
+cmmNativeGenStream dflags modloc ncgImpl us cmm_stream ngs@(h, _, nga) count
  = do
         r <- Stream.runStream cmm_stream
         case r of
-          Left () -> return (reverse impAcc, reverse profAcc, us)
+          Left () ->
+            case nga of
+            (impAcc, profAcc) ->
+              return ((reverse impAcc, reverse profAcc), us)
           Right (cmms, cmm_stream') -> do
-            (impAcc,profAcc,us',fileIds') <- cmmNativeGens dflags modloc ncgImpl h us fileIds cmms
-                                              impAcc profAcc count
-            cmmNativeGenStream dflags modloc ncgImpl h us' fileIds' cmm_stream'
-                                              impAcc profAcc count
-
+            (nga',us',fileIds') <- cmmNativeGens dflags modloc ncgImpl us cmms ngs count
+            cmmNativeGenStream dflags modloc ncgImpl us' cmm_stream' (h, fileIds', nga') count
 
 -- | Do native code generation on all these cmms.
 --
@@ -350,28 +347,16 @@ cmmNativeGens :: (Outputable statics, Outputable instr, Instruction instr)
               => DynFlags
               -> ModLocation
               -> NcgImpl statics instr jumpDest
-              -> BufHandle
               -> UniqSupply
-              -> DwarfFiles
               -> [RawCmmDecl]
-              -> [[CLabel]]
-              -> [ ([NatCmmDecl statics instr],
-                   Maybe [Color.RegAllocStats statics instr],
-                   Maybe [Linear.RegAllocStats],
-                   Maybe DebugBlock) ]
+              -> NativeGenState statics instr
               -> Int
-              -> IO ( [[CLabel]],
-                      [([NatCmmDecl statics instr],
-                       Maybe [Color.RegAllocStats statics instr],
-                       Maybe [Linear.RegAllocStats],
-                       Maybe DebugBlock)],
-                      UniqSupply,
-                      DwarfFiles )
+              -> IO (NativeGenAcc statics instr, UniqSupply, DwarfFiles)
 
-cmmNativeGens _ _ _ _ us fileIds [] impAcc profAcc _
-        = return (impAcc,profAcc,us,fileIds)
+cmmNativeGens _ _ _ us [] (_, fileIds, nga) _
+        = return (nga, us, fileIds)
 
-cmmNativeGens dflags modloc ncgImpl h us fileIds (cmm : cmms) impAcc profAcc count
+cmmNativeGens dflags modloc ncgImpl us (cmm : cmms) (h, fileIds, (impAcc, profAcc)) count
  = do
         (us', fileIds', native, debug, imports, colorStats, linearStats)
                 <- {-# SCC "cmmNativeGen" #-} cmmNativeGen dflags modloc ncgImpl us fileIds cmm count
@@ -392,10 +377,10 @@ cmmNativeGens dflags modloc ncgImpl h us fileIds (cmm : cmms) impAcc profAcc cou
         {-# SCC "seqString" #-} evaluate $ seqString (showSDoc dflags $ vcat $ map ppr imports)
 
         cmmNativeGens dflags modloc ncgImpl
-            h us' fileIds' cmms
-                        (imports : impAcc)
-                        ((lsPprNative, colorStats, linearStats, debug) : profAcc)
-                        count'
+            us' cmms (h, fileIds',
+                      ((imports : impAcc),
+                       ((lsPprNative, colorStats, linearStats, debug) : profAcc)))
+                     count'
 
  where  seqString []            = ()
         seqString (x:xs)        = x `seq` seqString xs
