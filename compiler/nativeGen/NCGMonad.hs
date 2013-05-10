@@ -14,6 +14,7 @@ module NCGMonad (
         addImportNat,
         getUniqueNat,
         mapAccumLNat,
+        getModLoc,
         setDeltaNat,
         getDeltaNat,
         getBlockIdNat,
@@ -22,7 +23,8 @@ module NCGMonad (
         getNewRegPairNat,
         getPicBaseMaybeNat,
         getPicBaseNat,
-        getDynFlags
+        getDynFlags,
+        getFileId
 )
 
 where
@@ -32,12 +34,16 @@ where
 import Reg
 import Size
 import TargetReg
+import Dwarf.Types
 
 import BlockId
 import CLabel           ( CLabel, mkAsmTempLabel )
+import FastString       ( FastString )
+import UniqFM
 import UniqSupply
 import Unique           ( Unique )
 import DynFlags
+import Module           ( ModLocation )
 
 data NatM_State
         = NatM_State {
@@ -45,7 +51,9 @@ data NatM_State
                 natm_delta   :: Int,
                 natm_imports :: [(CLabel)],
                 natm_pic     :: Maybe Reg,
-                natm_dflags  :: DynFlags
+                natm_fileid  :: DwarfFiles,
+                natm_dflags  :: DynFlags,
+                natm_modloc  :: ModLocation
         }
 
 newtype NatM result = NatM (NatM_State -> (result, NatM_State))
@@ -53,9 +61,9 @@ newtype NatM result = NatM (NatM_State -> (result, NatM_State))
 unNat :: NatM a -> NatM_State -> (a, NatM_State)
 unNat (NatM a) = a
 
-mkNatM_State :: UniqSupply -> Int -> DynFlags -> NatM_State
-mkNatM_State us delta dflags
-        = NatM_State us delta [] Nothing dflags
+mkNatM_State :: UniqSupply -> Int -> DwarfFiles -> DynFlags -> ModLocation -> NatM_State
+mkNatM_State us delta fileIds dflags modloc
+        = NatM_State us delta [] Nothing fileIds dflags modloc
 
 initNat :: NatM_State -> NatM a -> (a, NatM_State)
 initNat init_st m
@@ -89,14 +97,16 @@ mapAccumLNat f b (x:xs)
        return (b__3, x__2:xs__2)
 
 getUniqueNat :: NatM Unique
-getUniqueNat = NatM $ \ (NatM_State us delta imports pic dflags) ->
-    case takeUniqFromSupply us of
-         (uniq, us') -> (uniq, (NatM_State us' delta imports pic dflags))
+getUniqueNat = NatM $ \ st ->
+    case takeUniqFromSupply (natm_us st) of
+         (uniq, us') -> (uniq, st { natm_us = us'} )
 
 instance HasDynFlags NatM where
-    getDynFlags = NatM $ \ (NatM_State us delta imports pic dflags) ->
-                             (dflags, (NatM_State us delta imports pic dflags))
+    getDynFlags = NatM $ \ st -> (natm_dflags st, st)
 
+getModLoc :: NatM ModLocation
+getModLoc
+        = NatM $ \ st -> (natm_modloc st, st)
 
 getDeltaNat :: NatM Int
 getDeltaNat
@@ -105,14 +115,12 @@ getDeltaNat
 
 setDeltaNat :: Int -> NatM ()
 setDeltaNat delta
-        = NatM $ \ (NatM_State us _ imports pic dflags) ->
-                   ((), NatM_State us delta imports pic dflags)
+        = NatM $ \ st -> ((), st { natm_delta = delta } )
 
 
 addImportNat :: CLabel -> NatM ()
 addImportNat imp
-        = NatM $ \ (NatM_State us delta imports pic dflags) ->
-                   ((), NatM_State us delta (imp:imports) pic dflags)
+        = NatM $ \ st -> ((), st { natm_imports = imp : natm_imports st } )
 
 
 getBlockIdNat :: NatM BlockId
@@ -158,3 +166,11 @@ getPicBaseNat rep
                  -> do
                         reg <- getNewRegNat rep
                         NatM (\state -> (reg, state { natm_pic = Just reg }))
+
+getFileId :: FastString -> NatM Int
+getFileId f = NatM $ \st ->
+  case lookupUFM (natm_fileid st) f of
+    Just (_,n) -> (n, st)
+    Nothing    -> let !n = 1 + sizeUFM (natm_fileid st)
+                      !fids = addToUFM (natm_fileid st) f (f,n)
+                  in (n, st { natm_fileid = fids  })

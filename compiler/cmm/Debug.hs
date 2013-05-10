@@ -32,7 +32,7 @@ import SrcLoc
 import FastString    ( unpackFS )
 import Var
 
-import Compiler.Hoopl  ( mapLookup )
+import Compiler.Hoopl
 
 import Control.Monad ( forM, forM_, foldM )
 
@@ -96,26 +96,43 @@ data DebugModule = DebugModule { dmodPackage :: PackageId
 
 -- | Debug information about a block of code. Can be nested to show
 -- context.
-data DebugBlock = DebugBlock { dblLabel :: CLabel
+data DebugBlock = DebugBlock { dblProcedure :: Bool
+                             , dblLabel :: Label
+                             , dblCLabel :: CLabel
                              , dblTicks :: [RawTickish]
+                             , dblOptimizedOut :: Bool
                              , dblBlocks :: [DebugBlock]
                              }
 
 -- | Extract debug data from a procedure
-cmmProcDebug :: RawCmmDecl -> DebugBlock
-cmmProcDebug (CmmData {})                  = panic "generateDebug: no proc!"
-cmmProcDebug (CmmProc infos entryLbl _ g) =
-  let blockMap = toBlockMap g
+cmmProcDebug :: RawCmmDecl -> [GenCmmDecl d h (ListGraph i)] -> DebugBlock
+cmmProcDebug (CmmData {})                 _    = panic "cmmProcDebug: no proc!"
+cmmProcDebug (CmmProc infos entryLbl _ g) nats =
+  let -- Check whether blocks were actually generated (likely, but we
+      -- don't want to run into problems when late-stage optimizations
+      -- for some reason remove things)
+      getBlocks (CmmProc _ _ _ (ListGraph bs)) = bs
+      getBlocks _other                         = []
+      natBlockSet :: LabelSet
+      natBlockSet = setFromList $ map blockId $ concatMap getBlocks nats
+
+      blockMap = toBlockMap g
       block l = fmap (mkBlock l) $ mapLookup l blockMap
-      mkBlock l b = DebugBlock { dblLabel = blockLbl l
+      mkBlock l b = DebugBlock { dblProcedure = False
+                               , dblLabel = l
+                               , dblCLabel = blockLbl l
                                , dblTicks = blockTicks b
+                               , dblOptimizedOut = not $ l `setMember` natBlockSet
                                , dblBlocks = mapMaybe block $ blockContexts b }
       entryBlock = block (g_entry g)
-  in DebugBlock { dblLabel = case mapLookup (g_entry g) infos of
+  in DebugBlock { dblProcedure = True
+                , dblLabel = g_entry g
+                , dblCLabel = case mapLookup (g_entry g) infos of
                      Nothing                  -> entryLbl
-                     Just (Statics infoLbl _) -> infoLbl,
-                  dblTicks  = maybe [] dblTicks entryBlock,
-                  dblBlocks = maybe [] (:[]) entryBlock }
+                     Just (Statics infoLbl _) -> infoLbl
+                , dblOptimizedOut = False
+                , dblTicks  = maybe [] dblTicks entryBlock
+                , dblBlocks = maybe [] (:[]) entryBlock }
 
 -- | Put a string C-style - null-terminated. We assume that the string
 -- is ASCII.
@@ -138,7 +155,7 @@ type BlockId = Word16
 
 putBlock :: BinHandle -> DynFlags -> BlockId -> (BlockId, CoreMap) -> DebugBlock
          -> IO (BlockId, CoreMap)
-putBlock bh dflags pid (bid, coreDone) (DebugBlock lbl ticks blocks) = do
+putBlock bh dflags pid (bid, coreDone) (DebugBlock _ _ lbl ticks _ blocks) = do
   -- Put sub-blocks
   (bid', coreDoneSub) <- foldM (putBlock bh dflags bid) (bid+1, emptyUFM) blocks
   -- Write our own data
@@ -146,7 +163,7 @@ putBlock bh dflags pid (bid, coreDone) (DebugBlock lbl ticks blocks) = do
     put_ bh bid
     put_ bh pid
     let showSDocC = flip (renderWithStyle dflags) (mkCodeStyle CStyle)
-    putString bh $ showSDocC  $ ppr lbl
+    putString bh $ showSDocC $ ppr lbl
   -- Write annotations.
   coreDoneBlock <- foldM (putAnnotEvent bh dflags coreDoneSub) emptyUFM ticks
   return (bid', coreDone `plusUFM` coreDoneSub `plusUFM` coreDoneBlock)

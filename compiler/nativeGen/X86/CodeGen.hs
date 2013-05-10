@@ -46,6 +46,8 @@ import CmmUtils
 import Cmm
 import Hoopl
 import CLabel
+import CoreSyn          ( RawTickish, Tickish(..) )
+import SrcLoc
 
 -- The rest:
 import ForeignCall      ( CCallConv(..) )
@@ -95,9 +97,12 @@ cmmTopCodeGen
         :: RawCmmDecl
         -> NatM [NatCmmDecl (Alignment, CmmStatics) Instr]
 
-cmmTopCodeGen (CmmProc info lab live graph) = do
+cmmTopCodeGen cmm@(CmmProc info lab live graph) = do
+  modloc <- getModLoc
   let blocks = toBlockListEntryFirst graph
-  (nat_blocks,statics) <- mapAndUnzipM basicBlockCodeGen blocks
+      (_, ticks) = findGoodSourceTicks cmm modloc
+      addTick b = (b, mapLookup (entryLabel b) ticks)
+  (nat_blocks,statics) <- mapAndUnzipM basicBlockCodeGen $ map addTick blocks
   picBaseMb <- getPicBaseMaybeNat
   dflags <- getDynFlags
   let proc = CmmProc info lab live (ListGraph $ concat nat_blocks)
@@ -113,16 +118,22 @@ cmmTopCodeGen (CmmData sec dat) = do
 
 
 basicBlockCodeGen
-        :: CmmBlock
+        :: (CmmBlock, Maybe RawTickish)
         -> NatM ( [NatBasicBlock Instr]
                 , [NatCmmDecl (Alignment, CmmStatics) Instr])
 
-basicBlockCodeGen block = do
+basicBlockCodeGen (block, tick) = do
   let (CmmEntry id, nodes, tail)  = blockSplit block
       stmts = blockToList nodes
+  -- Generate location directive
+  loc_instrs <- case tick of
+    Just (SourceNote span name _)
+      -> do fileId <- getFileId (srcSpanFile span)
+            return $ unitOL $ LOCATION fileId (srcSpanStartLine span) (srcSpanStartCol span) name
+    _ -> return nilOL
   mid_instrs <- stmtsToInstrs stmts
   tail_instrs <- stmtToInstrs tail
-  let instrs = mid_instrs `appOL` tail_instrs
+  let instrs = loc_instrs `appOL` mid_instrs `appOL` tail_instrs
   -- code generation may introduce new basic block boundaries, which
   -- are indicated by the NEWBLOCK instruction.  We must split up the
   -- instruction stream into basic blocks again.  Also, we extract

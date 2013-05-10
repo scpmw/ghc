@@ -159,6 +159,9 @@ data Instr
         -- comment pseudo-op
         = COMMENT FastString
 
+        -- location pseudo-op (file, line, col, name)
+        | LOCATION Int Int Int String
+
         -- some static data spat out during code
         -- generation.  Will be extracted before
         -- pretty-printing.
@@ -407,6 +410,7 @@ x86_regUsageOfInstr platform instr
     FETCHPC  reg        -> mkRU [] [reg]
 
     COMMENT _           -> noUsage
+    LOCATION{}          -> noUsage
     DELTA   _           -> noUsage
 
     POPCNT _ src dst -> mkRU (use_R src []) [dst]
@@ -542,6 +546,7 @@ x86_patchRegsOfInstr instr env
 
     NOP                 -> instr
     COMMENT _           -> instr
+    LOCATION {}         -> instr
     DELTA _             -> instr
 
     JXX _ _             -> instr
@@ -688,6 +693,7 @@ x86_isMetaInstr
 x86_isMetaInstr instr
  = case instr of
         COMMENT{}       -> True
+        LOCATION{}      -> True
         LDATA{}         -> True
         NEWBLOCK{}      -> True
         DELTA{}         -> True

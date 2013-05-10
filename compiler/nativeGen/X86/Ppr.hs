@@ -31,7 +31,6 @@ import Size
 import Reg
 import PprBase
 
-
 import BlockId
 import BasicTypes       (Alignment)
 import DynFlags
@@ -63,6 +62,7 @@ pprNatCmmDecl proc@(CmmProc top_info lbl _ (ListGraph blocks)) =
            pprSectionHeader Text $$
            pprLabel lbl $$ -- blocks guaranteed not null, so label needed
            vcat (map (pprBasicBlock top_info) blocks) $$
+           ppr (mkAsmTempEndLabel lbl) <> char ':' $$
            pprSizeDecl lbl
 
     Just (Statics info_lbl _) ->
@@ -87,6 +87,7 @@ pprNatCmmDecl proc@(CmmProc top_info lbl _ (ListGraph blocks)) =
                   <+> char '-'
                   <+> ppr (mkDeadStripPreventer info_lbl)
              else empty) $$
+      ppr (mkAsmTempEndLabel info_lbl) <> char ':' $$
       pprSizeDecl info_lbl
 
 -- | Output the ELF .size directive.
@@ -101,9 +102,11 @@ pprSizeDecl lbl
 pprBasicBlock :: BlockEnv CmmStatics -> NatBasicBlock Instr -> SDoc
 pprBasicBlock info_env (BasicBlock blockid instrs)
   = maybe_infotable $$
-    pprLabel (mkAsmTempLabel (getUnique blockid)) $$
-    vcat (map pprInstr instrs)
+    pprLabel asmLbl $$
+    vcat (map pprInstr instrs) $$
+    ppr (mkAsmTempEndLabel asmLbl) <> char ':'
   where
+    asmLbl = mkAsmTempLabel (getUnique blockid)
     maybe_infotable = case mapLookup blockid info_env of
        Nothing   -> empty
        Just (Statics info_lbl info) ->
@@ -489,6 +492,10 @@ pprInstr (COMMENT _) = empty -- nuke 'em
 {-
 pprInstr (COMMENT s) = ptext (sLit "# ") <> ftext s
 -}
+pprInstr (LOCATION file line _ name)
+   = ptext (sLit "\t.loc ") <> ppr file <+> ppr line
+     <> ptext (sLit " # ") <> text name
+
 pprInstr (DELTA d)
    = pprInstr (COMMENT (mkFastString ("\tdelta = " ++ show d)))
 

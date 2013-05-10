@@ -42,13 +42,13 @@ type LlvmStatements = OrdList LlvmStatement
 -- | Top-level of the LLVM proc Code generator
 --
 genLlvmProc :: RawCmmDecl -> LlvmM [LlvmCmmDecl]
-genLlvmProc proc@(CmmProc infos lbl live graph) = do
-    meta <- cmmMetaLlvmProc proc
-    addDebugBlock $ cmmProcDebug proc
+genLlvmProc raw@(CmmProc infos lbl live graph) = do
+    meta <- cmmMetaLlvmProc raw
     let blocks = toBlockListEntryFirst graph
     (lmblocks, lmdata) <- basicBlocksCodeGen live meta blocks
     let info = mapLookup (g_entry graph) infos
         proc = CmmProc info lbl live (ListGraph lmblocks)
+    addDebugBlock $ cmmProcDebug raw (proc:lmdata)
     return (proc:lmdata)
 
 genLlvmProc _ = panic "genLlvmProc: case that shouldn't reach here!"

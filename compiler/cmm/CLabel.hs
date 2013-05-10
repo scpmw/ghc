@@ -44,6 +44,7 @@ module CLabel (
         mkStringLitLabel,
 
         mkAsmTempLabel,
+        mkAsmTempEndLabel,
 
         mkPlainModuleInitLabel,
 
@@ -95,7 +96,7 @@ module CLabel (
         mkHpcDebugData,
 
         hasCAF,
-        needsCDecl, isAsmTemp, maybeAsmTemp, externallyVisibleCLabel,
+        needsCDecl, maybeAsmTemp, externallyVisibleCLabel,
         isMathFun,
         isCFunctionLabel, isGcPtrLabel, labelDynamic,
 
@@ -187,6 +188,8 @@ data CLabel
 
   | AsmTempLabel
         {-# UNPACK #-} !Unique
+  | AsmTempEndLabel
+        CLabel
 
   | StringLitLabel
         {-# UNPACK #-} !Unique
@@ -541,6 +544,9 @@ mkStringLitLabel                = StringLitLabel
 mkAsmTempLabel :: Uniquable a => a -> CLabel
 mkAsmTempLabel a                = AsmTempLabel (getUnique a)
 
+mkAsmTempEndLabel :: CLabel -> CLabel
+mkAsmTempEndLabel = AsmTempEndLabel
+
 mkPlainModuleInitLabel :: Module -> CLabel
 mkPlainModuleInitLabel mod      = PlainModuleInitLabel mod
 
@@ -606,6 +612,7 @@ needsCDecl (PlainModuleInitLabel _)     = True
 
 needsCDecl (StringLitLabel _)           = False
 needsCDecl (AsmTempLabel _)             = False
+needsCDecl (AsmTempEndLabel _)          = False
 needsCDecl (RtsLabel _)                 = False
 
 needsCDecl (CmmLabel pkgId _ _)
@@ -624,12 +631,6 @@ needsCDecl (HpcDebugData _)             = True
 needsCDecl (DynamicLinkerLabel {})      = panic "needsCDecl DynamicLinkerLabel"
 needsCDecl PicBaseLabel                 = panic "needsCDecl PicBaseLabel"
 needsCDecl (DeadStripPreventer {})      = panic "needsCDecl DeadStripPreventer"
-
--- | Check whether a label is a local temporary for native code generation
-isAsmTemp  :: CLabel -> Bool
-isAsmTemp (AsmTempLabel _)              = True
-isAsmTemp _                             = False
-
 
 -- | If a label is a local temporary used for native code generation
 --      then return just its unique, otherwise nothing.
@@ -736,6 +737,7 @@ externallyVisibleCLabel :: CLabel -> Bool -- not C "static"
 externallyVisibleCLabel (CaseLabel _ _)         = False
 externallyVisibleCLabel (StringLitLabel _)      = False
 externallyVisibleCLabel (AsmTempLabel _)        = False
+externallyVisibleCLabel (AsmTempEndLabel _)     = False
 externallyVisibleCLabel (PlainModuleInitLabel _)= True
 externallyVisibleCLabel (RtsLabel _)            = True
 externallyVisibleCLabel (CmmLabel _ _ _)        = True
@@ -813,7 +815,6 @@ idInfoLabelType info =
     ClosureTable  -> DataLabel
     RednCounts    -> DataLabel
     _             -> CodeLabel
-
 
 -- -----------------------------------------------------------------------------
 -- Does a CLabel need dynamic linkage?
@@ -953,6 +954,13 @@ pprCLabel platform (AsmTempLabel u)
      else
         char '_' <> pprUnique u
 
+pprCLabel platform (AsmTempEndLabel l)
+ | cGhcWithNativeCodeGen == "YES"
+   = ptext (asmTempLabelPrefix platform) <>
+     (case l of AsmTempLabel u -> pprUnique u
+                _other         -> pprCLabel platform l
+     ) <> ptext (sLit "_end")
+
 pprCLabel platform (DynamicLinkerLabel info lbl)
  | cGhcWithNativeCodeGen == "YES"
    = pprDynamicLinkerAsmLabel platform info lbl
@@ -1081,6 +1089,7 @@ pprCLbl (HpcDebugData mod)
   = ptext (sLit "_hpc_debug_data_")  <> ppr mod <> ptext (sLit "_hpc")
 
 pprCLbl (AsmTempLabel {})       = panic "pprCLbl AsmTempLabel"
+pprCLbl (AsmTempEndLabel {})    = panic "pprCLbl AsmTempEndLabel"
 pprCLbl (DynamicLinkerLabel {}) = panic "pprCLbl DynamicLinkerLabel"
 pprCLbl (PicBaseLabel {})       = panic "pprCLbl PicBaseLabel"
 pprCLbl (DeadStripPreventer {}) = panic "pprCLbl DeadStripPreventer"

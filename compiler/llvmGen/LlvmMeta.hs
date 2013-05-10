@@ -30,6 +30,7 @@ import DynFlags
 import FastString
 import Debug
 import Binary
+import Dwarf.Constants
 
 import BlockId         ( blockLbl, BlockEnv )
 import Config          ( cProjectName, cProjectVersion )
@@ -46,47 +47,15 @@ import Unique          ( getKey, getUnique )
 import System.Directory( getCurrentDirectory)
 import Data.Maybe      ( fromMaybe, fromJust )
 import Data.Char       ( ord, chr, isAscii, isPrint, intToDigit)
-import Data.Word       ( Word8)
+import Data.Word       ( Word8, Word )
 import Data.Bits       ( shiftL)
 
 import Foreign.Ptr
 import Foreign.ForeignPtr
 import Foreign.Storable
 
--- Constants
-
-lLVMDebugVersion, dW_TAG_compile_unit, dW_TAG_subroutine_type :: Integer
-dW_TAG_file_type, dW_TAG_subprogram, dW_TAG_lexical_block :: Integer
-dW_TAG_base_type, dW_TAG_structure_type, dW_TAG_pointer_type :: Integer
-dW_TAG_array_type, dW_TAG_subrange_type, dW_TAG_typedef :: Integer
-dW_TAG_arg_variable, dW_TAG_auto_variable :: Integer
-lLVMDebugVersion       = 0x90000
-dW_TAG_array_type      = 1   + lLVMDebugVersion
-dW_TAG_lexical_block   = 11  + lLVMDebugVersion
-dW_TAG_pointer_type    = 15  + lLVMDebugVersion
-dW_TAG_compile_unit    = 17  + lLVMDebugVersion
-dW_TAG_structure_type  = 19  + lLVMDebugVersion
-dW_TAG_typedef         = 22  + lLVMDebugVersion
-dW_TAG_subroutine_type = 32  + lLVMDebugVersion
-dW_TAG_subrange_type   = 33  + lLVMDebugVersion
-dW_TAG_base_type       = 36  + lLVMDebugVersion
-dW_TAG_file_type       = 41  + lLVMDebugVersion
-dW_TAG_subprogram      = 46  + lLVMDebugVersion
-dW_TAG_auto_variable   = 256 + lLVMDebugVersion
-dW_TAG_arg_variable    = 257 + lLVMDebugVersion
-
-_dW_ATE_address, _dW_ATE_boolean, dW_ATE_float, dW_ATE_signed,
-  _dW_ATE_signed_char, _dW_ATE_unsigned, _dW_ATE_unsigned_char :: Integer
-_dW_ATE_address       = 1
-_dW_ATE_boolean       = 2
-dW_ATE_float          = 4
-dW_ATE_signed         = 5
-_dW_ATE_signed_char   = 6
-_dW_ATE_unsigned      = 7
-_dW_ATE_unsigned_char = 8
-
-dW_LANG_Haskell :: Integer
-dW_LANG_Haskell  = 0x8042 -- Chosen arbitrarily
+lLVMDebugVersion :: Word
+lLVMDebugVersion = 0x90000
 
 mkDwarfMeta :: Word -> [LlvmVar] -> LlvmLit
 mkDwarfMeta tag vars =
@@ -180,10 +149,9 @@ cmmMetaLlvmUnit = do
 
   -- Emit compile unit information.
   opt <- getDynFlag optLevel
-  renderMeta unitId $ LMMeta $ map LMLitVar
-    [ mkI32 dW_TAG_compile_unit
-    , nullLit                  -- "unused"
-    , mkI32 dW_LANG_Haskell            -- DWARF language identifier
+  renderMeta unitId $ mkDwarfMeta dW_TAG_compile_unit $ map LMLitVar
+    [ nullLit                  -- "unused"
+    , mkI32 (fromIntegral dW_LANG_Haskell) -- DWARF language identifier
     , LMMetaString (fsLit srcFile)     -- Source code name
     , LMMetaString (fsLit srcPath)     -- Compilation base directory
     , LMMetaString (fsLit producerName)-- Producer
@@ -226,9 +194,8 @@ emitFileMeta filePath = do
       fileId <- getMetaUniqueId
       Just unitId <- getUniqMeta unitN
       srcPath <- liftIO $ getCurrentDirectory
-      renderMeta fileId $ LMMeta $ map LMLitVar
-        [ mkI32 dW_TAG_file_type
-        , LMMetaString (filePath)                    -- Source file name
+      renderMeta fileId $ mkDwarfMeta dW_TAG_file_type $ map LMLitVar
+        [ LMMetaString (filePath)                    -- Source file name
         , LMMetaString (mkFastString srcPath)        -- Source file directory
         , LMMetaRef unitId                           -- Reference to compile unit
         ]
@@ -268,9 +235,8 @@ cmmMetaLlvmProc proc@(CmmProc infos cmmLabel _ graph) = do
   procTypeMeta <- typeToMeta funTy
 
   procId <- getMetaUniqueId
-  renderMeta procId $ LMMeta $ map LMLitVar
-    [ mkI32 dW_TAG_subprogram
-    , mkI32 0                                    -- "Unused"
+  renderMeta procId $ mkDwarfMeta dW_TAG_subprogram $ map LMLitVar
+    [ mkI32 0                                    -- "Unused"
     , LMMetaRef unitId                           -- Reference to file
     , LMMetaString procedureName                 -- Procedure name
     , LMMetaString displayName                   -- Display name
@@ -325,9 +291,8 @@ cmmMetaLlvmBlock (procId, blockTicks) block = do
   let uniqCol = getKey $ getUnique lbl
 
   bid <- getMetaUniqueId
-  renderMeta bid $ LMMeta $ map LMLitVar
-    [ mkI32 $ dW_TAG_lexical_block
-    , LMMetaRef procId
+  renderMeta bid $ mkDwarfMeta dW_TAG_lexical_block $ map LMLitVar
+    [ LMMetaRef procId
     , mkI32 $ fromIntegral line               -- Source line
     , mkI32 $ fromIntegral uniqCol            -- Source column
     , LMMetaRef fileId                        -- File context
@@ -394,9 +359,8 @@ typeToMeta' ty = case ty of
   mkType tag fields = do
    Just unitMeta <- getUniqMeta unitN
    df <- getDynFlags
-   return $ LMMeta $ map LMLitVar $
-    [ mkI32 tag
-    , LMMetaRef unitMeta                              -- Context
+   return $ mkDwarfMeta tag $ map LMLitVar $
+    [ LMMetaRef unitMeta                              -- Context
     , LMMetaString $ mkFastString $ showSDoc df $ ppr ty -- Name
     , nullLit                                         -- File reference
     , mkI32 0                                         -- Line number
@@ -406,7 +370,7 @@ typeToMeta' ty = case ty of
     ] ++ fields
   baseType enc = mkType dW_TAG_base_type
     [ mkI32 0                                         -- Flags
-    , mkI32 enc                                       -- DWARF type encoding
+    , mkI32 $ fromIntegral enc                        -- DWARF type encoding
     ]
   derivedType tag subty = mkType tag
     [ mkI64 0                                         -- Offset in bits
@@ -419,9 +383,8 @@ typeToMeta' ty = case ty of
     , LMMeta (map LMLitVar members)                   -- Member descriptors
     , mkI32 0                                         -- Runtime languages
     ]
-  subrangeDesc n = LMMeta $ map LMLitVar $
-    [ mkI32 $ dW_TAG_subrange_type
-    , mkI64 0                                         -- Low value
+  subrangeDesc n = mkDwarfMeta dW_TAG_subrange_type $ map LMLitVar $
+    [ mkI64 0                                         -- Low value
     , mkI64 (fromIntegral $ n-1)                      -- High value
     ]
 
@@ -430,7 +393,7 @@ genVariableMeta vname par vty scopeId = do
   tyDesc <- typeToMeta vty
   Just fileId <- getUniqMeta fileN
   return $ LMMeta $ map LMLitVar
-    [ mkI32 $ case par of
+    [ mkI32 $ fromIntegral $ case par of
          Nothing -> dW_TAG_auto_variable
          Just _  -> dW_TAG_arg_variable
     , LMMetaRef scopeId                               -- Context
