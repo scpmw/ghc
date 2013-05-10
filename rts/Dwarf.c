@@ -415,7 +415,10 @@ void dwarf_load_ghc_debug_data(Elf *elf)
 			dwarf_ghc_debug_data_size += data->d_size;
 		}
 
-		return;
+		// Try to find more sections with matching name - this might
+		// happen for example when compiling object files from LLVM
+		// and the native back-end together: They set different section
+		// flags, so they don't end up merged.
 	}
 
 }
@@ -616,7 +619,7 @@ void dwarf_load_proc_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_sp
 
 			ref = 0;
 			dwarf_dieoffset(die, &ref, &error);
-			errorBelch("DWARF <%x>: subroutine without name or abstract origin!\n", ref);
+			errorBelch("DWARF <%x>: subroutine without name or abstract origin!\n", (unsigned int)ref);
 			return;
 		}
 	}
@@ -650,31 +653,39 @@ void dwarf_load_block_die(DwarfUnit *unit, Dwarf_Debug dbg, Dwarf_Die die, seg_s
         || tag != DW_TAG_lexical_block)
         return;
 
-    // Find a variable starting with "__debug_ghc_" - this is our marker.
-    char *MARKER_PREFIX = "__debug_ghc_";
-    int marker_len = strlen(MARKER_PREFIX);
-    Dwarf_Die bchild;
-    Dwarf_Half btag = 0;
+    // Block has a name?
     char *bname = 0;
-    int res;
-    for (res = dwarf_child(die, &bchild, &error);
-         res == DW_DLV_OK;
-         res = dwarf_siblingof(dbg, bchild, &bchild, &error)) {
+    if (dwarf_diename(die, &bname, &error) != DW_DLV_OK) {
 
-        if (dwarf_tag(bchild, &btag, &error) != DW_DLV_OK
-            || btag != DW_TAG_variable)
-            continue;
+        // Fallback to looking for a variable starting with
+        // "__debug_ghc_" (marker inserted by LLVM backend, as we
+        // can't name blocks there).
+        char *MARKER_PREFIX = "__debug_ghc_";
+        int marker_len = strlen(MARKER_PREFIX);
+        Dwarf_Die bchild;
+        Dwarf_Half btag = 0;
+        int res;
+        for (res = dwarf_child(die, &bchild, &error);
+             res == DW_DLV_OK;
+             res = dwarf_siblingof(dbg, bchild, &bchild, &error)) {
 
-        // Get name, check prefix
-        if (dwarf_diename(bchild, &bname, &error) != DW_DLV_OK
-            || strncmp(bname, MARKER_PREFIX, marker_len)) {
-            bname = 0;
-            continue;
+            if (dwarf_tag(bchild, &btag, &error) != DW_DLV_OK
+                || btag != DW_TAG_variable)
+                continue;
+
+            // Get name, check prefix
+            if (dwarf_diename(bchild, &bname, &error) != DW_DLV_OK
+                || strncmp(bname, MARKER_PREFIX, marker_len)) {
+                bname = 0;
+                continue;
+            }
+
+            // Go over prefix - the rest of the string is the name of
+            // the block this code was generated from.
+            bname += marker_len;
+            break;
         }
 
-        // Go over prefix - the rest of the string is the name of
-        // the block this code was generated from.
-        bname += marker_len;
     }
 
     // Marker not found? Then this lexical block isn't interesting to
@@ -856,7 +867,7 @@ void dwarf_trace_debug_data()
 		StgWord16 size = (((StgWord16)sizeh) << 8) + sizel;
 
 		// Sanity-check size
-		if (dbg + size >= dbg_limit) {
+		if (dbg + size > dbg_limit) {
 			errorBelch("Debug data packet num %d exceeds section size! Probably corrupt debug data.", num);
 			break;
 		}
