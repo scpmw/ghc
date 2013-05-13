@@ -387,8 +387,10 @@ cmmproc :: { CmmParse () }
                 { do ((entry_ret_label, info, stk_formals, formals), agraph) <-
                        getCodeR $ loopDecls $ do {
                          (entry_ret_label, info, stk_formals) <- $1;
+                         dflags <- getDynFlags;
                          formals <- sequence (fromMaybe [] $3);
-                         $4;
+                         withName (showSDoc dflags (ppr entry_ret_label))
+                           $4;
                          return (entry_ret_label, info, stk_formals, formals) }
                      let do_layout = isJust $3
                      code (emitProcWithStackFrame $2 info
@@ -399,9 +401,9 @@ maybe_conv :: { Convention }
            : {- empty -}        { NativeNodeCall }
            | 'return'           { NativeReturn }
 
-maybe_body :: { CmmParse SrcSpan }
-           : ';'                { return (UnhelpfulSpan nilFS) }
-           | '{' body '}'       { $2 >> return (combineSrcSpans (getLoc $1) (getLoc $3)) }
+maybe_body :: { CmmParse () }
+           : ';'                { return () }
+           | '{' body '}'       { withSourceNote $1 $3 $2 }
 
 info    :: { CmmParse (CLabel, Maybe CmmInfoTable, [LocalReg]) }
         : NAME
@@ -583,7 +585,7 @@ stmt    :: { CmmParse () }
         | 'if' bool_expr 'goto' NAME
                 { do l <- lookupLabel $4; cmmRawIf $2 l }
         | 'if' bool_expr '{' body '}' else      
-                { cmmIfThenElse $2 $4 $6 }
+                { cmmIfThenElse $2 (withSourceNote $3 $5 $4) $6 }
         | 'push' '(' exprs0 ')' maybe_body
                 { pushStackFrame $3 $5 }
 
@@ -631,7 +633,7 @@ arm     :: { CmmParse ([Int],Either BlockId (CmmParse ())) }
         : 'case' ints ':' arm_body      { do b <- $4; return ($2, b) }
 
 arm_body :: { CmmParse (Either BlockId (CmmParse ())) }
-        : '{' body '}'                  { return (Right $2) }
+        : '{' body '}'                  { return (Right (withSourceNote $1 $3 $2)) }
         | 'goto' NAME ';'               { do l <- lookupLabel $2; return (Left l) }
 
 ints    :: { [Int] }
@@ -639,7 +641,7 @@ ints    :: { [Int] }
         | INT ',' ints                  { fromIntegral $1 : $3 }
 
 default :: { Maybe (CmmParse ()) }
-        : 'default' ':' '{' body '}'    { Just $4 }
+        : 'default' ':' '{' body '}'    { Just (withSourceNote $3 $5 $4) }
         -- taking a few liberties with the C-- syntax here; C-- doesn't have
         -- 'default' branches
         | {- empty -}                   { Nothing }
@@ -648,7 +650,7 @@ default :: { Maybe (CmmParse ()) }
 -- CmmNode does.
 else    :: { CmmParse () }
         : {- empty -}                   { return () }
-        | 'else' '{' body '}'           { $3 }
+        | 'else' '{' body '}'           { withSourceNote $2 $4 $3 }
 
 -- we have to write this out longhand so that Happy's precedence rules
 -- can kick in.
@@ -1199,6 +1201,15 @@ emitCond (e1 `BoolAnd` e2) then_id = do
   emitCond e2 then_id
   emitLabel else_id
 
+-- -----------------------------------------------------------------------------
+-- Source code notes
+
+withSourceNote :: Located a -> Located b -> CmmParse c -> CmmParse c
+withSourceNote a b parse = do
+  name <- getName
+  case combineSrcSpans (getLoc a) (getLoc b) of
+    RealSrcSpan span -> code (emitTick (SourceNote span name 0)) >> parse
+    _other           -> parse
 
 -- -----------------------------------------------------------------------------
 -- Table jumps
@@ -1278,7 +1289,8 @@ parseCmmFile dflags filename = do
         return ((emptyBag, unitBag msg), Nothing)
     POk pst code -> do
         st <- initC
-        let (cmm,_) = runC dflags no_module st (getCmm (unEC code (initEnv dflags) [] >> return ()))
+        let fcode = getCmm $ unEC code "global" (initEnv dflags) [] >> return ()
+            (cmm,_) = runC dflags no_module st fcode
         let ms = getMessages pst
         if (errorsFound dflags ms)
          then return (ms, Nothing)

@@ -16,6 +16,9 @@ module StgCmmExtCode (
         loopDecls,
         getEnv,
 
+        withName,
+        getName,
+
         newLocal,
         newLabel,
         newBlockId,
@@ -65,24 +68,24 @@ type Decls      = [(FastString,Named)]
 
 -- | Does a computation in the FCode monad, with a current environment
 --      and a list of local declarations. Returns the resulting list of declarations.
-newtype CmmParse a      
-        = EC { unEC :: Env -> Decls -> FCode (Decls, a) }
+newtype CmmParse a
+        = EC { unEC :: String -> Env -> Decls -> FCode (Decls, a) }
 
 type ExtCode = CmmParse ()
 
 returnExtFC :: a -> CmmParse a
-returnExtFC a   = EC $ \_ s -> return (s, a)
+returnExtFC a   = EC $ \_ _ s -> return (s, a)
 
 thenExtFC :: CmmParse a -> (a -> CmmParse b) -> CmmParse b
-thenExtFC (EC m) k = EC $ \e s -> do (s',r) <- m e s; unEC (k r) e s'
+thenExtFC (EC m) k = EC $ \c e s -> do (s',r) <- m c e s; unEC (k r) c e s'
 
 instance Monad CmmParse where
   (>>=) = thenExtFC
   return = returnExtFC
 
 instance HasDynFlags CmmParse where
-    getDynFlags = EC (\_ d -> do dflags <- getDynFlags
-                                 return (d, dflags))
+    getDynFlags = EC (\_ _ d -> do dflags <- getDynFlags
+                                   return (d, dflags))
 
 
 -- | Takes the variable decarations and imports from the monad
@@ -93,26 +96,34 @@ instance HasDynFlags CmmParse where
 --
 loopDecls :: CmmParse a -> CmmParse a
 loopDecls (EC fcode) =
-      EC $ \e globalDecls -> do
-        (_, a) <- F.fixC (\ ~(decls, _) -> fcode (addListToUFM e (decls ++ globalDecls)) globalDecls)
+      EC $ \c e globalDecls -> do
+        (_, a) <- F.fixC (\ ~(decls, _) -> fcode c (addListToUFM e (decls ++ globalDecls)) globalDecls)
         return (globalDecls, a)
 
 
 -- | Get the current environment from the monad.
 getEnv :: CmmParse Env
-getEnv  = EC $ \e s -> return (s, e)
+getEnv  = EC $ \_ e s -> return (s, e)
+
+-- | Get the current context name from the monad
+getName :: CmmParse String
+getName  = EC $ \c _ s -> return (s, c)
+
+-- | Set context name for a sub-parse
+withName :: String -> CmmParse a -> CmmParse a
+withName c' (EC fcode) = EC $ \_ e s -> fcode c' e s
 
 
 -- | Add a new variable to the list of local declarations. 
 --      The CmmExpr says where the value is stored. 
 addVarDecl :: FastString -> CmmExpr -> ExtCode
 addVarDecl var expr 
-        = EC $ \_ s -> return ((var, VarN expr):s, ())
+        = EC $ \_ _ s -> return ((var, VarN expr):s, ())
 
 -- | Add a new label to the list of local declarations.
 addLabel :: FastString -> BlockId -> ExtCode
 addLabel name block_id 
-        = EC $ \_ s -> return ((name, LabelN block_id):s, ())
+        = EC $ \_ _ s -> return ((name, LabelN block_id):s, ())
 
 
 -- | Create a fresh local variable of a given type.
@@ -145,7 +156,7 @@ newFunctionName
         -> ExtCode
         
 newFunctionName name pkg
-        = EC $ \_ s -> return ((name, FunN pkg):s, ())
+        = EC $ \_ _ s -> return ((name, FunN pkg):s, ())
         
         
 -- | Add an imported foreign label to the list of local declarations.
@@ -187,7 +198,7 @@ lookupName name = do
 
 -- | Lift an FCode computation into the CmmParse monad
 code :: FCode a -> CmmParse a
-code fc = EC $ \_ s -> do 
+code fc = EC $ \_ _ s -> do
                 r <- fc
                 return (s, r)
 
@@ -204,13 +215,13 @@ emitStore :: CmmExpr  -> CmmExpr -> CmmParse ()
 emitStore l r = code (F.emitStore l r)
 
 getCode :: CmmParse a -> CmmParse CmmAGraph
-getCode (EC ec) = EC $ \e s -> do
-  ((s',_), gr) <- F.getCodeR (ec e s)
+getCode (EC ec) = EC $ \c e s -> do
+  ((s',_), gr) <- F.getCodeR (ec c e s)
   return (s', gr)
 
 getCodeR :: CmmParse a -> CmmParse (a, CmmAGraph)
-getCodeR (EC ec) = EC $ \e s -> do
-  ((s', r), gr) <- F.getCodeR (ec e s)
+getCodeR (EC ec) = EC $ \c e s -> do
+  ((s', r), gr) <- F.getCodeR (ec c e s)
   return (s', (r,gr))
 
 emitOutOfLine :: BlockId -> CmmAGraph -> CmmParse ()
@@ -218,7 +229,7 @@ emitOutOfLine l g = code (F.emitOutOfLine l g)
 
 withUpdFrameOff :: UpdFrameOffset -> CmmParse () -> CmmParse ()
 withUpdFrameOff size inner
-  = EC $ \e s -> F.withUpdFrameOff size $ (unEC inner) e s
+  = EC $ \c e s -> F.withUpdFrameOff size $ (unEC inner) c e s
 
 getUpdFrameOff :: CmmParse UpdFrameOffset
 getUpdFrameOff = code $ F.getUpdFrameOff
