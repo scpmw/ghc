@@ -1151,6 +1151,8 @@ genCCall' dflags gcp target dest_regs args0
                     MO_F64_Tanh  -> (fsLit "tanh", False)
                     MO_F64_Pwr   -> (fsLit "pow", False)
 
+                    MO_UF_Conv w -> (fsLit $ word2FloatLabel w, False)
+
                     MO_Memcpy    -> (fsLit "memcpy", False)
                     MO_Memset    -> (fsLit "memset", False)
                     MO_Memmove   -> (fsLit "memmove", False)

@@ -204,6 +204,16 @@ genCall (PrimTarget MO_WriteBarrier) _ _ = do
 genCall (PrimTarget MO_Touch) _ _
  = return (nilOL, [])
 
+genCall (PrimTarget (MO_UF_Conv w)) [dst] [e] = do
+    dstV <- getCmmReg (CmmLocal dst)
+    let width = widthToLlvmFloat w
+    (ve, stmts, top) <- exprToVar e
+    let stmt = Assignment dstV $ Cast LM_Uitofp ve width
+    return (stmts `snocOL` stmt, top)
+genCall (PrimTarget (MO_UF_Conv _)) [_] args =
+    panic $ "genCall: Too many arguments to MO_UF_Conv. " ++
+    "Can only handle 1, given" ++ show (length args) ++ "."
+
 -- Handle popcnt function specifically since GHC only really has i32 and i64
 -- types and things like Word8 are backed by an i32 and just present a logical
 -- i8 range. So we must handle conversions from i32 to i8 explicitly as LLVM
@@ -521,6 +531,7 @@ cmmPrimOpFunctions mop = do
     MO_U_Mul2 {}     -> unsupported
     MO_WriteBarrier  -> unsupported
     MO_Touch         -> unsupported
+    MO_UF_Conv _     -> unsupported
 
 -- | Tail function calls
 genJump :: CmmExpr -> [GlobalReg] -> LlvmM StmtData

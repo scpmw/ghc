@@ -182,6 +182,7 @@ import StgCmmClosure
 import StgCmmLayout     hiding (ArgRep(..))
 import StgCmmTicky
 import StgCmmBind       ( emitBlackHoleCode, emitUpdateFrame )
+import CoreSyn          ( Tickish(SourceNote) )
 
 import MkGraph
 import Cmm
@@ -398,9 +399,9 @@ maybe_conv :: { Convention }
            : {- empty -}        { NativeNodeCall }
            | 'return'           { NativeReturn }
 
-maybe_body :: { CmmParse () }
-           : ';'                { return () }
-           | '{' body '}'       { $2 }
+maybe_body :: { CmmParse SrcSpan }
+           : ';'                { return (UnhelpfulSpan nilFS) }
+           | '{' body '}'       { $2 >> return (combineSrcSpans (getLoc $1) (getLoc $3)) }
 
 info    :: { CmmParse (CLabel, Maybe CmmInfoTable, [LocalReg]) }
         : NAME
