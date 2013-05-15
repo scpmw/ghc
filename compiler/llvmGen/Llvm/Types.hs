@@ -20,6 +20,8 @@ import Unique
 -- from NCG
 import PprBase
 
+import GHC.Float
+
 -- -----------------------------------------------------------------------------
 -- * LLVM Basic Types and Variables
 --
@@ -230,7 +232,7 @@ ppLit :: LlvmLit -> SDoc
 ppLit (LMIntLit i (LMInt 32))  = ppr (fromInteger i :: Int32)
 ppLit (LMIntLit i (LMInt 64))  = ppr (fromInteger i :: Int64)
 ppLit (LMIntLit   i _       )  = ppr ((fromInteger i)::Int)
-ppLit (LMFloatLit r LMFloat )  = ppFloat $ realToFrac r
+ppLit (LMFloatLit r LMFloat )  = ppFloat $ narrowFp r
 ppLit (LMFloatLit r LMDouble)  = ppDouble r
 ppLit f@(LMFloatLit _ _)       = sdocWithDynFlags (\dflags ->
                                    error $ "Can't print this float literal!" ++ showSDoc dflags (ppr f))
@@ -799,6 +801,8 @@ instance Outputable LlvmCastOp where
 -- | Convert a Haskell Double to an LLVM hex encoded floating point form. In
 -- Llvm float literals can be printed in a big-endian hexadecimal format,
 -- regardless of underlying architecture.
+--
+-- See Note [LLVM Float Types].
 ppDouble :: Double -> SDoc
 ppDouble d
   = let bs     = doubleToBytes d
@@ -811,13 +815,33 @@ ppDouble d
         str  = map toUpper $ concat $ fixEndian $ map hex bs
     in  text "0x" <> hcat (map char str)
 
--- | Convert a Haskell Float to an LLVM hex encoded floating point form.
--- LLVM uses the same encoding for both floats and doubles (16 digit hex
--- string) but floats must have the last half all zeroes so it can fit into
--- a float size type.
-{-# NOINLINE ppFloat #-}
+-- Note [LLVM Float Types]
+-- ~~~~~~~~~~~~~~~~~~~~~~~
+-- We use 'ppDouble' for both printing Float and Double floating point types. This is
+-- as LLVM expects all floating point constants (single & double) to be in IEEE
+-- 754 Double precision format. However, for single precision numbers (Float)
+-- they should be *representable* in IEEE 754 Single precision format. So the
+-- easiest way to do this is to narrow and widen again.
+-- (i.e., Double -> Float -> Double). We must be careful doing this that GHC
+-- doesn't optimize that away.
+
+-- Note [narrowFp & widenFp]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~
+-- NOTE: we use float2Double & co directly as GHC likes to optimize away
+-- successive calls of 'realToFrac', defeating the narrowing. (Bug #7600).
+-- 'realToFrac' has inconsistent behaviour with optimisation as well that can
+-- also cause issues, these methods don't.
+
+narrowFp :: Double -> Float
+{-# NOINLINE narrowFp #-}
+narrowFp = double2Float
+
+widenFp :: Float -> Double
+{-# NOINLINE widenFp #-}
+widenFp = float2Double
+
 ppFloat :: Float -> SDoc
-ppFloat = ppDouble . realToFrac
+ppFloat = ppDouble . widenFp
 
 -- | Reverse or leave byte data alone to fix endianness on this target.
 fixEndian :: [a] -> [a]
