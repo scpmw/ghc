@@ -206,10 +206,14 @@ genCall (PrimTarget MO_Touch) _ _
 
 genCall (PrimTarget (MO_UF_Conv w)) [dst] [e] = do
     dstV <- getCmmReg (CmmLocal dst)
-    let width = widthToLlvmFloat w
+    let ty = cmmToLlvmType $ localRegType dst
+        width = widthToLlvmFloat w
+    castV <- mkLocalVar ty
     (ve, stmts, top) <- exprToVar e
-    let stmt = Assignment dstV $ Cast LM_Uitofp ve width
-    return (stmts `snocOL` stmt, top)
+    let stmt3 = Assignment castV $ Cast LM_Uitofp ve width
+        stmt4 = Store castV dstV
+    return (stmts `snocOL` stmt3 `snocOL` stmt4, top)
+
 genCall (PrimTarget (MO_UF_Conv _)) [_] args =
     panic $ "genCall: Too many arguments to MO_UF_Conv. " ++
     "Can only handle 1, given" ++ show (length args) ++ "."
