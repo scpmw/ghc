@@ -51,6 +51,8 @@ llvmCodeGen dflags location h us cmm_stream
        writeIORef (llvmVersion dflags) ver
 
        -- warn if unsupported
+       debugTraceMsg dflags 2
+            (text "Using LLVM version:" <+> text (show ver))
        let doWarn = wopt Opt_WarnUnsupportedLlvmVersion dflags
        when (ver < minSupportLlvmVersion && doWarn) $
            errorMsg dflags (text "You are using an old version of LLVM that"
