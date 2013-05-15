@@ -27,7 +27,9 @@ module DynFlags (
         wopt, wopt_set, wopt_unset,
         xopt, xopt_set, xopt_unset,
         lang_set,
-        whenGeneratingDynamicToo, ifGeneratingDynamicToo, doDynamicToo,
+        whenGeneratingDynamicToo, ifGeneratingDynamicToo,
+        whenCannotGenerateDynamicToo,
+        doDynamicToo,
         DynFlags(..),
         HasDynFlags(..), ContainsDynFlags(..),
         RtsOptsEnabled(..),
@@ -171,20 +173,19 @@ data DumpFlag
 
    -- debugging flags
    = Opt_D_dump_cmm
-   | Opt_D_dump_raw_cmm
-   | Opt_D_dump_cmmz
-   -- All of the cmmz subflags (there are a lot!)  Automatically
-   -- enabled if you run -ddump-cmmz
-   | Opt_D_dump_cmmz_cfg
-   | Opt_D_dump_cmmz_cbe
-   | Opt_D_dump_cmmz_proc
-   | Opt_D_dump_cmmz_rewrite
-   | Opt_D_dump_cmmz_sp
-   | Opt_D_dump_cmmz_procmap
-   | Opt_D_dump_cmmz_split
-   | Opt_D_dump_cmmz_info
-   -- end cmmz subflags
-   | Opt_D_dump_cps_cmm
+   | Opt_D_dump_cmm_raw
+   -- All of the cmm subflags (there are a lot!)  Automatically
+   -- enabled if you run -ddump-cmm
+   | Opt_D_dump_cmm_cfg
+   | Opt_D_dump_cmm_cbe
+   | Opt_D_dump_cmm_proc
+   | Opt_D_dump_cmm_rewrite
+   | Opt_D_dump_cmm_sp
+   | Opt_D_dump_cmm_procmap
+   | Opt_D_dump_cmm_split
+   | Opt_D_dump_cmm_info
+   | Opt_D_dump_cmm_cps
+   -- end cmm subflags
    | Opt_D_dump_asm
    | Opt_D_dump_asm_native
    | Opt_D_dump_asm_liveness
@@ -201,6 +202,7 @@ data DumpFlag
    | Opt_D_dump_inlinings
    | Opt_D_dump_rule_firings
    | Opt_D_dump_rule_rewrites
+   | Opt_D_dump_simpl_trace
    | Opt_D_dump_occur_anal
    | Opt_D_dump_parsed
    | Opt_D_dump_rn
@@ -270,7 +272,7 @@ data GeneralFlag
    | Opt_DoEtaReduction
    | Opt_CaseMerge
    | Opt_UnboxStrictFields
-   | Opt_UnboxStrictPrimitiveFields
+   | Opt_UnboxSmallStrictFields
    | Opt_DictsCheap
    | Opt_EnableRewriteRules             -- Apply rewrite rules during simplification
    | Opt_Vectorise
@@ -383,6 +385,7 @@ data GeneralFlag
 
 data WarningFlag =
      Opt_WarnDuplicateExports
+   | Opt_WarnDuplicateConstraints
    | Opt_WarnHiShadows
    | Opt_WarnImplicitPrelude
    | Opt_WarnIncompletePatterns
@@ -698,7 +701,7 @@ data DynFlags = DynFlags {
 
   interactivePrint      :: Maybe String,
 
-  llvmVersion           :: IORef (Int),
+  llvmVersion           :: IORef Int,
 
   nextWrapperNum        :: IORef Int
  }
@@ -1116,12 +1119,24 @@ whenGeneratingDynamicToo :: MonadIO m => DynFlags -> m () -> m ()
 whenGeneratingDynamicToo dflags f = ifGeneratingDynamicToo dflags f (return ())
 
 ifGeneratingDynamicToo :: MonadIO m => DynFlags -> m a -> m a -> m a
-ifGeneratingDynamicToo dflags f g
+ifGeneratingDynamicToo dflags f g = generateDynamicTooConditional dflags f g g
+
+whenCannotGenerateDynamicToo :: MonadIO m => DynFlags -> m () -> m ()
+whenCannotGenerateDynamicToo dflags f
+    = ifCannotGenerateDynamicToo dflags f (return ())
+
+ifCannotGenerateDynamicToo :: MonadIO m => DynFlags -> m a -> m a -> m a
+ifCannotGenerateDynamicToo dflags f g
+    = generateDynamicTooConditional dflags g f g
+
+generateDynamicTooConditional :: MonadIO m
+                              => DynFlags -> m a -> m a -> m a -> m a
+generateDynamicTooConditional dflags canGen cannotGen notTryingToGen
     = if gopt Opt_BuildDynamicToo dflags
       then do let ref = canGenerateDynamicToo dflags
               b <- liftIO $ readIORef ref
-              if b then f else g
-      else g
+              if b then canGen else cannotGen
+      else notTryingToGen
 
 doDynamicToo :: DynFlags -> DynFlags
 doDynamicToo dflags0 = let dflags1 = unSetGeneralFlag' Opt_Static dflags0
@@ -1415,6 +1430,7 @@ dopt f dflags = (fromEnum f `IntSet.member` dumpFlags dflags)
           enableIfVerbose Opt_D_dump_splices                = False
           enableIfVerbose Opt_D_dump_rule_firings           = False
           enableIfVerbose Opt_D_dump_rule_rewrites          = False
+          enableIfVerbose Opt_D_dump_simpl_trace            = False
           enableIfVerbose Opt_D_dump_rtti                   = False
           enableIfVerbose Opt_D_dump_inlinings              = False
           enableIfVerbose Opt_D_dump_core_stats             = False
@@ -2051,18 +2067,17 @@ dynamic_flags = [
   , Flag "dstg-stats"     (NoArg (setGeneralFlag Opt_StgStats))
 
   , Flag "ddump-cmm"               (setDumpFlag Opt_D_dump_cmm)
-  , Flag "ddump-raw-cmm"           (setDumpFlag Opt_D_dump_raw_cmm)
-  , Flag "ddump-cmmz"              (setDumpFlag Opt_D_dump_cmmz)
-  , Flag "ddump-cmmz-cfg"          (setDumpFlag Opt_D_dump_cmmz_cfg)
-  , Flag "ddump-cmmz-cbe"          (setDumpFlag Opt_D_dump_cmmz_cbe)
-  , Flag "ddump-cmmz-proc"         (setDumpFlag Opt_D_dump_cmmz_proc)
-  , Flag "ddump-cmmz-rewrite"      (setDumpFlag Opt_D_dump_cmmz_rewrite)
-  , Flag "ddump-cmmz-sp"           (setDumpFlag Opt_D_dump_cmmz_sp)
-  , Flag "ddump-cmmz-procmap"      (setDumpFlag Opt_D_dump_cmmz_procmap)
-  , Flag "ddump-cmmz-split"        (setDumpFlag Opt_D_dump_cmmz_split)
-  , Flag "ddump-cmmz-info"         (setDumpFlag Opt_D_dump_cmmz_info)
+  , Flag "ddump-cmm-raw"           (setDumpFlag Opt_D_dump_cmm_raw)
+  , Flag "ddump-cmm-cfg"           (setDumpFlag Opt_D_dump_cmm_cfg)
+  , Flag "ddump-cmm-cbe"           (setDumpFlag Opt_D_dump_cmm_cbe)
+  , Flag "ddump-cmm-proc"          (setDumpFlag Opt_D_dump_cmm_proc)
+  , Flag "ddump-cmm-rewrite"       (setDumpFlag Opt_D_dump_cmm_rewrite)
+  , Flag "ddump-cmm-sp"            (setDumpFlag Opt_D_dump_cmm_sp)
+  , Flag "ddump-cmm-procmap"       (setDumpFlag Opt_D_dump_cmm_procmap)
+  , Flag "ddump-cmm-split"         (setDumpFlag Opt_D_dump_cmm_split)
+  , Flag "ddump-cmm-info"          (setDumpFlag Opt_D_dump_cmm_info)
+  , Flag "ddump-cmm-cps"           (setDumpFlag Opt_D_dump_cmm_cps)
   , Flag "ddump-core-stats"        (setDumpFlag Opt_D_dump_core_stats)
-  , Flag "ddump-cps-cmm"           (setDumpFlag Opt_D_dump_cps_cmm)
   , Flag "ddump-asm"               (setDumpFlag Opt_D_dump_asm)
   , Flag "ddump-asm-native"        (setDumpFlag Opt_D_dump_asm_native)
   , Flag "ddump-asm-liveness"      (setDumpFlag Opt_D_dump_asm_liveness)
@@ -2079,6 +2094,7 @@ dynamic_flags = [
   , Flag "ddump-inlinings"         (setDumpFlag Opt_D_dump_inlinings)
   , Flag "ddump-rule-firings"      (setDumpFlag Opt_D_dump_rule_firings)
   , Flag "ddump-rule-rewrites"     (setDumpFlag Opt_D_dump_rule_rewrites)
+  , Flag "ddump-simpl-trace"       (setDumpFlag Opt_D_dump_simpl_trace)
   , Flag "ddump-occur-anal"        (setDumpFlag Opt_D_dump_occur_anal)
   , Flag "ddump-parsed"            (setDumpFlag Opt_D_dump_parsed)
   , Flag "ddump-rn"                (setDumpFlag Opt_D_dump_rn)
@@ -2312,6 +2328,7 @@ fWarningFlags = [
   ( "warn-dodgy-exports",               Opt_WarnDodgyExports, nop ),
   ( "warn-dodgy-imports",               Opt_WarnDodgyImports, nop ),
   ( "warn-duplicate-exports",           Opt_WarnDuplicateExports, nop ),
+  ( "warn-duplicate-constraints",       Opt_WarnDuplicateConstraints, nop ),
   ( "warn-hi-shadowing",                Opt_WarnHiShadows, nop ),
   ( "warn-implicit-prelude",            Opt_WarnImplicitPrelude, nop ),
   ( "warn-incomplete-patterns",         Opt_WarnIncompletePatterns, nop ),
@@ -2386,7 +2403,7 @@ fFlags = [
   ( "do-eta-reduction",                 Opt_DoEtaReduction, nop ),
   ( "case-merge",                       Opt_CaseMerge, nop ),
   ( "unbox-strict-fields",              Opt_UnboxStrictFields, nop ),
-  ( "unbox-strict-primitive-fields",    Opt_UnboxStrictPrimitiveFields, nop ),
+  ( "unbox-small-strict-fields",        Opt_UnboxSmallStrictFields, nop ),
   ( "dicts-cheap",                      Opt_DictsCheap, nop ),
   ( "excess-precision",                 Opt_ExcessPrecision, nop ),
   ( "eager-blackholing",                Opt_EagerBlackHoling, nop ),
@@ -2728,7 +2745,8 @@ standardWarnings
         Opt_WarnAlternativeLayoutRuleTransitional,
         Opt_WarnPointlessPragmas,
         Opt_WarnUnsupportedCallingConventions,
-        Opt_WarnInlineRuleShadowing
+        Opt_WarnInlineRuleShadowing,
+        Opt_WarnDuplicateConstraints
       ]
 
 minusWOpts :: [WarningFlag]

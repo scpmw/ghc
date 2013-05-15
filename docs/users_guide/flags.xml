@@ -789,12 +789,6 @@
             <entry><option>-XTraditionalRecordSyntax</option></entry>
           </row>
           <row>
-            <entry><option>-XNoMonoPatBinds</option></entry>
-            <entry>Make <link linkend="monomorphism">pattern bindings polymorphic</link></entry>
-            <entry>dynamic</entry>
-            <entry><option>-XMonoPatBinds</option></entry>
-          </row>
-          <row>
             <entry><option>-XRelaxedPolyRec</option></entry>
             <entry>Relaxed checking for <link linkend="typing-binds">mutually-recursive polymorphic functions</link></entry>
             <entry>dynamic</entry>
@@ -862,6 +856,7 @@
           <row>
             <entry><option>-XMonoLocalBinds</option></entry>
             <entry>Enable <link linkend="mono-local-binds">do not generalise local bindings</link>.
+              Implied by <option>-XTypeFamilies</option> and <option>-XGADTs</option>.
             </entry>
             <entry>dynamic</entry>
             <entry><option>-XNoMonoLocalBinds</option></entry>
@@ -1238,6 +1233,13 @@
             <entry>warn about uses of commandline flags that are deprecated</entry>
             <entry>dynamic</entry>
             <entry><option>-fno-warn-deprecated-flags</option></entry>
+          </row>
+
+          <row>
+            <entry><option>-fwarn-duplicate-constraints</option></entry>
+            <entry>warn when a constraint appears duplicated in a type signature</entry>
+            <entry>dynamic</entry>
+            <entry><option>-fno-warn-duplicate-constraints</option></entry>
           </row>
 
           <row>
@@ -1740,11 +1742,11 @@
           </row>
 
           <row>
-            <entry><option>-funbox-strict-primitive-fields</option></entry>
+            <entry><option>-funbox-small-strict-fields</option></entry>
             <entry>Flatten strict constructor fields with a
               pointer-sized representation</entry>
             <entry>dynamic</entry>
-            <entry><option>-fno-unbox-strict-primitive-fields</option></entry>
+            <entry><option>-fno-unbox-small-strict-fields</option></entry>
           </row>
 
           <row>

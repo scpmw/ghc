@@ -142,7 +142,7 @@ mkBootModDetailsTc hsc_env
   = do  { let dflags = hsc_dflags hsc_env
         ; showPass dflags CoreTidy
 
-        ; let { insts'     = tidyInstances globaliseAndTidyId insts
+        ; let { insts'     = map (tidyClsInstDFun globaliseAndTidyId) insts
               ; dfun_ids   = map instanceDFunId insts'
               ; type_env1  = mkBootTypeEnv (availsToNameSet exports)
                                 (typeEnvIds type_env) tcs fam_insts
@@ -159,7 +159,7 @@ mkBootModDetailsTc hsc_env
         }
   where
 
-mkBootTypeEnv :: NameSet -> [Id] -> [TyCon] -> [FamInst] -> TypeEnv
+mkBootTypeEnv :: NameSet -> [Id] -> [TyCon] -> [FamInst Branched] -> TypeEnv
 mkBootTypeEnv exports ids tcs fam_insts
   = tidyTypeEnv True $
        typeEnvFromEntities final_ids tcs fam_insts
@@ -342,7 +342,7 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
               ; tidy_type_env = tidyTypeEnv omit_prags
                                       (extendTypeEnvWithIds type_env final_ids)
 
-              ; tidy_insts    = tidyInstances (lookup_dfun tidy_type_env) insts
+              ; tidy_insts    = map (tidyClsInstDFun (lookup_dfun tidy_type_env)) insts
                 -- A DFunId will have a binding in tidy_binds, and so
                 -- will now be in final_env, replete with IdInfo
                 -- Its name will be unchanged since it was born, but
@@ -453,14 +453,6 @@ trimThing (AnId id)
 
 trimThing other_thing
   = other_thing
-
-
-tidyInstances :: (DFunId -> DFunId) -> [ClsInst] -> [ClsInst]
-tidyInstances tidy_dfun ispecs
-  = map tidy ispecs
-  where
-    tidy ispec = setInstanceDFunId ispec $
-                 tidy_dfun (instanceDFunId ispec)
 \end{code}
 
 \begin{code}
