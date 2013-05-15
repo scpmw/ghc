@@ -365,6 +365,7 @@ Library
         TcHsType
         TcInstDcls
         TcMType
+        TcValidity
         TcMatches
         TcPat
         TcRnDriver
