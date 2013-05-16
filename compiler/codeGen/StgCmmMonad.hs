@@ -696,7 +696,7 @@ newLabelC :: FCode BlockId
 newLabelC = do { u <- newUnique
                ; let l = mkBlockId u
                ; emitContext l
-               ; return $ mkBlockId u }
+               ; return l }
 
 emit :: CmmAGraph -> FCode ()
 emit ag

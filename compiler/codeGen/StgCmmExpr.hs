@@ -42,7 +42,6 @@ import Maybes
 import Util
 import FastString
 import Outputable
-import UniqSupply
 
 import Control.Monad (when,void)
 
@@ -66,8 +65,7 @@ cgExpr (StgLit lit)       = do cmm_lit <- cgLit lit
 
 cgExpr (StgLet binds expr)             = do { cgBind binds;     cgExpr expr }
 cgExpr (StgLetNoEscape _ _ binds expr) =
-  do { us <- newUniqSupply
-     ; let join_id = mkBlockId (uniqFromSupply us)
+  do { join_id <- newLabelC
      ; cgLneBinds join_id binds
      ; r <- cgExpr expr
      ; emitLabel join_id
@@ -125,6 +123,7 @@ cgLetNoEscapeRhs join_id local_cc bndr rhs =
   do { (info, rhs_code) <- cgLetNoEscapeRhsBody local_cc bndr rhs
      ; let (bid, _) = expectJust "cgLetNoEscapeRhs" $ maybeLetNoEscape info
      ; let code = do { body <- getCode rhs_code
+                     ; emitContext bid
                      ; emitOutOfLine bid (body <*> mkBranch join_id) }
      ; return (info, code)
      }
