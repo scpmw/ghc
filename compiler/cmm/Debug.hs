@@ -105,16 +105,18 @@ data DebugBlock = DebugBlock { dblProcedure :: Bool
                              }
 
 -- | Extract debug data from a procedure
-cmmProcDebug :: RawCmmDecl -> [GenCmmDecl d h (ListGraph i)] -> DebugBlock
-cmmProcDebug (CmmData {})                 _    = panic "cmmProcDebug: no proc!"
-cmmProcDebug (CmmProc infos entryLbl _ g) nats =
+cmmProcDebug :: RawCmmDecl -> (i -> Bool) -> [GenCmmDecl d h (ListGraph i)] -> DebugBlock
+cmmProcDebug (CmmData {})                 _      _    = panic "cmmProcDebug: no proc!"
+cmmProcDebug (CmmProc infos entryLbl _ g) isMeta nats =
   let -- Check whether blocks were actually generated (likely, but we
       -- don't want to run into problems when late-stage optimizations
       -- for some reason remove things)
       getBlocks (CmmProc _ _ _ (ListGraph bs)) = bs
       getBlocks _other                         = []
+      allMeta (BasicBlock _ instrs) = all isMeta instrs
       natBlockSet :: LabelSet
-      natBlockSet = setFromList $ map blockId $ concatMap getBlocks nats
+      natBlockSet = setFromList $ map blockId $ filter (not . allMeta) $
+                    concatMap getBlocks nats
 
       blockMap = toBlockMap g
       block l = fmap (mkBlock l) $ mapLookup l blockMap

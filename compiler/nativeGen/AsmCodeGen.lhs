@@ -596,9 +596,12 @@ cmmNativeGen dflags modLoc ncgImpl us fileIds cmm count
                 Opt_D_dump_asm_expanded "Synthetic instructions expanded"
                 (vcat $ map (pprNatCmmDecl ncgImpl) expanded)
 
-        ---- generate debug information
-        let debug | CmmProc{} <- cmm  = Just $ cmmProcDebug opt_cmm expanded
-                  | otherwise         = Nothing
+        ---- generate debug information. Ignore blocks entirely made
+        ---- of meta instructions, as those are prone to getting
+        ---- ignored by the assembler.
+        let debug = case cmm of
+              CmmProc{} -> Just $ cmmProcDebug opt_cmm isMetaInstr expanded
+              _other    -> Nothing
 
         return  ( usAlloc
                 , fileIds'
