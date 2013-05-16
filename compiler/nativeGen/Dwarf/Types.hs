@@ -174,6 +174,7 @@ pprBuffer (len, buf) = Unsafe.unsafePerformIO $ do
         | c == ord '\\'  = putB '\\' >> putB '\\'
         | c == ord '\"'  = putB '\\' >> putB '"'
         | c == ord '\n'  = putB '\\' >> putB 'n'
+        | c == ord '?'   = putB '\\' >> putB '?' -- silence trigraph warnings
         | isAscii (chr c) && isPrint (chr c)
                          = putByte bh (fromIntegral c)
         | otherwise      = do putB '\\'
