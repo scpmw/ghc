@@ -210,6 +210,8 @@ ppLlvmExpression expr
         Call       tp fp args attrs -> ppCall tp fp args attrs
         Cast       op from to       -> ppCast op from to
         Compare    op left right    -> ppCmpOp op left right
+        Extract    vec idx          -> ppExtract vec idx
+        Insert     vec elt idx      -> ppInsert vec elt idx
         GetElemPtr inb ptr indexes  -> ppGetElementPtr inb ptr indexes
         Load       ptr              -> ppLoad ptr
         Malloc     tp amount        -> ppMalloc tp amount
@@ -360,6 +362,19 @@ ppAsm asm constraints rty vars sideeffect alignstack =
       align = if alignstack then text "alignstack" else empty
   in text "call" <+> rty' <+> text "asm" <+> side <+> align <+> asm' <> comma
         <+> cons <> vars'
+
+ppExtract :: LlvmVar -> LlvmVar -> SDoc
+ppExtract vec idx =
+    text "extractelement"
+    <+> ppr (getVarType vec) <+> ppName vec <> comma
+    <+> ppr idx
+
+ppInsert :: LlvmVar -> LlvmVar -> LlvmVar -> SDoc
+ppInsert vec elt idx =
+    text "insertelement"
+    <+> ppr (getVarType vec) <+> ppName vec <> comma
+    <+> ppr (getVarType elt) <+> ppName elt <> comma
+    <+> ppr idx
 
 ppMetaStatement :: [MetaData] -> LlvmStatement -> SDoc
 ppMetaStatement meta stmt = case stmt of

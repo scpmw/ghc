@@ -45,7 +45,7 @@ module Llvm (
         -- ** Operations on the type system.
         isGlobal, getLitType, getVarType,
         getLink, getStatType, pVarLift, pVarLower,
-        pLift, pLower, isInt, isFloat, isPointer, llvmWidthInBits,
+        pLift, pLower, isInt, isFloat, isPointer, isVector, llvmWidthInBits,
 
         -- * Pretty Printing
         ppLit, ppName, ppPlainName,

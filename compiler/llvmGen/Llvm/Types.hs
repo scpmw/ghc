@@ -40,35 +40,37 @@ type LlvmAlias = (LMString, LlvmType)
 
 -- | Llvm Types
 data LlvmType
-  = LMInt Int            -- ^ An integer with a given width in bits.
-  | LMFloat              -- ^ 32 bit floating point
-  | LMDouble             -- ^ 64 bit floating point
-  | LMFloat80            -- ^ 80 bit (x86 only) floating point
-  | LMFloat128           -- ^ 128 bit floating point
-  | LMPointer LlvmType   -- ^ A pointer to a 'LlvmType'
-  | LMArray Int LlvmType -- ^ An array of 'LlvmType'
-  | LMLabel              -- ^ A 'LlvmVar' can represent a label (address)
-  | LMVoid               -- ^ Void type
-  | LMStruct [LlvmType]  -- ^ Structure type
-  | LMAlias LlvmAlias    -- ^ A type alias
-  | LMMetaType           -- ^ Type of meta data
+  = LMInt Int             -- ^ An integer with a given width in bits.
+  | LMFloat               -- ^ 32 bit floating point
+  | LMDouble              -- ^ 64 bit floating point
+  | LMFloat80             -- ^ 80 bit (x86 only) floating point
+  | LMFloat128            -- ^ 128 bit floating point
+  | LMPointer LlvmType    -- ^ A pointer to a 'LlvmType'
+  | LMArray Int LlvmType  -- ^ An array of 'LlvmType'
+  | LMVector Int LlvmType -- ^ A vector of 'LlvmType'
+  | LMLabel               -- ^ A 'LlvmVar' can represent a label (address)
+  | LMVoid                -- ^ Void type
+  | LMStruct [LlvmType]   -- ^ Structure type
+  | LMAlias LlvmAlias     -- ^ A type alias
+  | LMMetaType            -- ^ Type of meta data
 
   -- | Function type, used to create pointers to functions
   | LMFunction LlvmFunctionDecl
   deriving (Eq)
 
 instance Outputable LlvmType where
-  ppr (LMInt size    ) = text "i" <> ppr size
-  ppr (LMFloat       ) = text "float"
-  ppr (LMDouble      ) = text "double"
-  ppr (LMFloat80     ) = text "x86_fp80"
-  ppr (LMFloat128    ) = text "fp128"
-  ppr (LMPointer x   ) = ppr x <> text "*"
-  ppr (LMArray nr tp ) = text "[" <> ppr nr <> text " x " <> ppr tp <> text "]"
-  ppr (LMLabel       ) = text "label"
-  ppr (LMVoid        ) = text "void"
-  ppr (LMStruct tys  ) = text "<{" <> ppCommaJoin tys <> text "}>"
-  ppr (LMMetaType    ) = text "metadata"
+  ppr (LMInt size     ) = text "i" <> ppr size
+  ppr (LMFloat        ) = text "float"
+  ppr (LMDouble       ) = text "double"
+  ppr (LMFloat80      ) = text "x86_fp80"
+  ppr (LMFloat128     ) = text "fp128"
+  ppr (LMPointer x    ) = ppr x <> text "*"
+  ppr (LMArray nr tp  ) = text "[" <> ppr nr <> text " x " <> ppr tp <> text "]"
+  ppr (LMVector nr tp ) = char '<' <> ppr nr <> text " x " <> ppr tp <> char '>'
+  ppr (LMLabel        ) = text "label"
+  ppr (LMVoid         ) = text "void"
+  ppr (LMStruct tys   ) = text "<{" <> ppCommaJoin tys <> text "}>"
+  ppr (LMMetaType     ) = text "metadata"
 
   ppr (LMFunction (LlvmFunctionDecl _ _ _ r varg p _))
     = ppr r <+> lparen <> ppParams varg p <> rparen
@@ -137,6 +139,8 @@ data LlvmLit
   | LMFloatLit Double LlvmType
   -- | Literal NULL, only applicable to pointer types
   | LMNullLit LlvmType
+  -- | Vector literal
+  | LMVectorLit [LlvmLit]
   -- | Undefined value, random bit pattern. Useful for optimisations.
   | LMUndefLit LlvmType
 
@@ -151,7 +155,8 @@ data LlvmLit
   deriving (Eq)
 
 instance Outputable LlvmLit where
-  ppr l = ppr (getLitType l) <+> ppLit l
+  ppr l@(LMVectorLit {}) = ppLit l
+  ppr l                  = ppr (getLitType l) <+> ppLit l
 
 
 -- | Llvm Static Data.
@@ -236,6 +241,7 @@ ppLit (LMFloatLit r LMFloat )  = ppFloat $ narrowFp r
 ppLit (LMFloatLit r LMDouble)  = ppDouble r
 ppLit f@(LMFloatLit _ _)       = sdocWithDynFlags (\dflags ->
                                    error $ "Can't print this float literal!" ++ showSDoc dflags (ppr f))
+ppLit (LMVectorLit ls  )       = char '<' <+> ppCommaJoin ls <+> char '>'
 ppLit (LMNullLit _     )       = text "null"
 ppLit (LMUndefLit _    )       = text "undef"
 ppLit (LMMeta ls)              = text "!{" <> ppCommaJoin ls <> text "}"
@@ -256,6 +262,8 @@ getVarType (LMMetaNamed _          ) = LMMetaType
 getLitType :: LlvmLit -> LlvmType
 getLitType (LMIntLit   _ t) = t
 getLitType (LMFloatLit _ t) = t
+getLitType (LMVectorLit [])  = panic "getLitType"
+getLitType (LMVectorLit ls)  = LMVector (length ls) (getLitType (head ls))
 getLitType (LMNullLit    t) = t
 getLitType (LMUndefLit   t) = t
 getLitType (LMMeta       _) = LMMetaType
@@ -331,6 +339,11 @@ isPointer :: LlvmType -> Bool
 isPointer (LMPointer _) = True
 isPointer _             = False
 
+-- | Test if the given 'LlvmType' is an 'LMVector' construct
+isVector :: LlvmType -> Bool
+isVector (LMVector {}) = True
+isVector _             = False
+
 -- | Test if a 'LlvmVar' is global.
 isGlobal :: LlvmVar -> Bool
 isGlobal (LMGlobalVar _ _ _ _ _ _) = True
@@ -349,6 +362,7 @@ llvmWidthInBits _      (LMFloat128)    = 128
 --      should use the former, but arrays the latter.
 llvmWidthInBits dflags (LMPointer _)   = llvmWidthInBits dflags (llvmWord dflags)
 llvmWidthInBits dflags (LMArray n t)   = n * llvmWidthInBits dflags t
+llvmWidthInBits dflags (LMVector n ty) = n * llvmWidthInBits dflags ty
 llvmWidthInBits _      LMLabel         = 0
 llvmWidthInBits _      LMVoid          = 0
 llvmWidthInBits dflags (LMStruct tys)  = sum $ map (llvmWidthInBits dflags) tys
