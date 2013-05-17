@@ -34,7 +34,7 @@ import UniqSupply
 import Unique
 
 import Data.List ( nub )
-import Data.Maybe ( catMaybes, fromMaybe )
+import Data.Maybe ( catMaybes )
 
 type LlvmStatements = OrdList LlvmStatement
 
@@ -705,7 +705,7 @@ genCondBranch :: CmmExpr -> BlockId -> BlockId -> LlvmM StmtData
 genCondBranch cond idT idF = do
     let labelT = blockIdToLlvm idT
     let labelF = blockIdToLlvm idF
-    -- See Note [Literals and branch conditions]
+    -- See Note [Literals and branch conditions].
     (vc, stmts, top) <- exprToVarOpt i1Option cond
     if getVarType vc == i1
         then do
@@ -797,32 +797,30 @@ type ExprData = (LlvmVar, LlvmStatements, [LlvmCmmDecl])
 
 -- | Values which can be passed to 'exprToVar' to configure its
 -- behaviour in certain circumstances.
-data EOption = EOption {
-        -- | The expected LlvmType for the returned variable.
-        --
-        -- Currently just used for determining if a comparison should return
-        -- a boolean (i1) or a int (i32/i64).
-        eoExpectedType :: Maybe LlvmType
-  }
+--
+-- Currently just used for determining if a comparison should return
+-- a boolean (i1) or a word. See Note [Literals and branch conditions].
+newtype EOption = EOption { i1Expected :: Bool }
+-- XXX: EOption is an ugly and inefficient solution to this problem.
 
+-- | i1 type expected (condition scrutinee).
 i1Option :: EOption
-i1Option = EOption (Just i1)
+i1Option = EOption True
 
-wordOption :: DynFlags -> EOption
-wordOption dflags = EOption (Just (llvmWord dflags))
-
+-- | Word type expected (usual).
+wordOption :: EOption
+wordOption = EOption False
 
 -- | Convert a CmmExpr to a list of LlvmStatements with the result of the
 -- expression being stored in the returned LlvmVar.
 exprToVar :: CmmExpr -> LlvmM ExprData
-exprToVar e = do dflags <- getDynFlags
-                 exprToVarOpt (wordOption dflags) e
+exprToVar = exprToVarOpt wordOption
 
 exprToVarOpt :: EOption -> CmmExpr -> LlvmM ExprData
 exprToVarOpt opt e = case e of
 
     CmmLit lit
-        -> genLit opt lit -- See Note [Literals and branch conditions]
+        -> genLit opt lit
 
     CmmLoad e' ty
         -> genLoad e' ty
@@ -1067,29 +1065,18 @@ genMachOp_slow opt op [x, y] = case op of
 
         -- | Need to use EOption here as Cmm expects word size results from
         -- comparisons while LLVM return i1. Need to extend to llvmWord type
-        -- if expected
+        -- if expected. See Note [Literals and branch conditions].
         genBinComp opt cmp = do
-            ed@(v1, stmts, top) <- binLlvmOp (\_ -> i1) $ Compare cmp
-
+            ed@(v1, stmts, top) <- binLlvmOp (\_ -> i1) (Compare cmp)
+            dflags <- getDynFlags
             if getVarType v1 == i1
-                then
-                    case eoExpectedType opt of
-                         Nothing ->
-                             return ed
-
-                         Just t | t == i1 ->
-                                    return ed
-
-                                | isInt t -> do
-                                    (v2, s1) <- doExpr t $ Cast LM_Zext v1 t
-                                    return (v2, stmts `snocOL` s1, top)
-
-                                | otherwise -> do
-                                    dflags <- getDynFlags
-                                    panic $ "genBinComp: Can't case i1 compare"
-                                        ++ "res to non int type " ++ showSDoc dflags (ppr t)
-                else do
-                    dflags <- getDynFlags
+                then case i1Expected opt of
+                    True  -> return ed
+                    False -> do
+                        let w_ = llvmWord dflags
+                        (v2, s1) <- doExpr w_ $ Cast LM_Zext v1 w_
+                        return (v2, stmts `snocOL` s1, top)
+                else
                     panic $ "genBinComp: Compare returned type other then i1! "
                         ++ (showSDoc dflags $ ppr $ getVarType v1)
 
@@ -1281,10 +1268,15 @@ allocReg _ = panic $ "allocReg: Global reg encountered! Global registers should"
 
 -- | Generate code for a literal
 genLit :: EOption -> CmmLit -> LlvmM ExprData
-genLit (EOption opt) (CmmInt i w)
-  -- See Note [Literals and branch conditions]
-  = let width = fromMaybe (LMInt $ widthInBits w) opt
-	in return (mkIntLit width i, nilOL, [])
+genLit opt (CmmInt i w)
+  -- See Note [Literals and branch conditions].
+  = let width | i1Expected opt = i1
+              | otherwise      = LMInt (widthInBits w)
+        -- comm  = Comment [ fsLit $ "EOption: " ++ show opt
+        --                 , fsLit $ "Width  : " ++ show w
+        --                 , fsLit $ "Width' : " ++ show (widthInBits w)
+        --                 ]
+    in return (mkIntLit width i, nilOL, [])
 
 genLit _ (CmmFloat r w)
   = return (LMLitVar $ LMFloatLit (fromRational r) (widthToLlvmFloat w),
