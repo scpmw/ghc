@@ -103,6 +103,27 @@ data MachOp
   | MO_SS_Conv Width Width      -- Signed int -> Signed int
   | MO_UU_Conv Width Width      -- unsigned int -> unsigned int
   | MO_FF_Conv Width Width      -- Float -> Float
+
+  -- Vector element insertion and extraction operations
+  | MO_V_Insert  Length Width   -- Insert scalar into vector
+  | MO_V_Extract Length Width   -- Extract scalar from vector
+  
+  -- Integer vector operations
+  | MO_V_Add Length Width  
+  | MO_V_Sub Length Width  
+  | MO_V_Mul Length Width
+
+  -- Signed vector multiply/divide
+  | MO_VS_Quot Length Width
+  | MO_VS_Rem  Length Width
+  | MO_VS_Neg  Length Width
+
+  -- Floating point vector operations
+  | MO_VF_Add  Length Width  
+  | MO_VF_Sub  Length Width  
+  | MO_VF_Neg  Length Width             -- unary -
+  | MO_VF_Mul  Length Width
+  | MO_VF_Quot Length Width
   deriving (Eq, Show)
 
 pprMachOp :: MachOp -> SDoc
@@ -338,6 +359,23 @@ machOpResultType dflags mop tys =
     MO_FS_Conv _ to     -> cmmBits to
     MO_SF_Conv _ to     -> cmmFloat to
     MO_FF_Conv _ to     -> cmmFloat to
+
+    MO_V_Insert {}      -> ty1
+    MO_V_Extract {}     -> vecElemType ty1
+    
+    MO_V_Add {}         -> ty1
+    MO_V_Sub {}         -> ty1
+    MO_V_Mul {}         -> ty1
+
+    MO_VS_Quot {}       -> ty1
+    MO_VS_Rem {}        -> ty1
+    MO_VS_Neg {}        -> ty1
+
+    MO_VF_Add {}        -> ty1
+    MO_VF_Sub {}        -> ty1
+    MO_VF_Mul {}        -> ty1
+    MO_VF_Quot {}       -> ty1
+    MO_VF_Neg {}        -> ty1
   where
     (ty1:_) = tys
 
@@ -404,6 +442,23 @@ machOpArgReps dflags op =
     MO_SF_Conv from _   -> [from]
     MO_FS_Conv from _   -> [from]
     MO_FF_Conv from _   -> [from]
+
+    MO_V_Insert  l r    -> [typeWidth (vec l (cmmFloat r)),r,wordWidth dflags]
+    MO_V_Extract l r    -> [typeWidth (vec l (cmmFloat r)),wordWidth dflags]
+
+    MO_V_Add _ r        -> [r,r]
+    MO_V_Sub _ r        -> [r,r]
+    MO_V_Mul _ r        -> [r,r]
+
+    MO_VS_Quot _ r      -> [r,r]
+    MO_VS_Rem  _ r      -> [r,r]
+    MO_VS_Neg  _ r      -> [r]
+
+    MO_VF_Add  _ r      -> [r,r]
+    MO_VF_Sub  _ r      -> [r,r]
+    MO_VF_Mul  _ r      -> [r,r]
+    MO_VF_Quot _ r      -> [r,r]
+    MO_VF_Neg  _ r      -> [r]
 
 -----------------------------------------------------------------------------
 -- CallishMachOp

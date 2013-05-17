@@ -879,6 +879,20 @@ genMachOp _ op [x] = case op of
     MO_FF_Conv from to
         -> sameConv from (widthToLlvmFloat to) LM_Fptrunc LM_Fpext
 
+    MO_VS_Neg len w ->
+        let ty    = widthToLlvmInt w
+            vecty = LMVector len ty
+            all0  = LMIntLit (-0) ty
+            all0s = LMLitVar $ LMVectorLit (replicate len all0)
+        in negate vecty all0s LM_MO_Sub
+
+    MO_VF_Neg len w ->
+        let ty    = widthToLlvmFloat w
+            vecty = LMVector len ty
+            all0  = LMFloatLit (-0) ty
+            all0s = LMLitVar $ LMVectorLit (replicate len all0)
+        in negate vecty all0s LM_MO_FSub
+
     -- Handle unsupported cases explicitly so we get a warning
     -- of missing case when new MachOps added
     MO_Add _          -> panicOp
@@ -919,6 +933,21 @@ genMachOp _ op [x] = case op of
     MO_Shl          _ -> panicOp
     MO_U_Shr        _ -> panicOp
     MO_S_Shr        _ -> panicOp
+ 
+    MO_V_Insert   _ _ -> panicOp
+    MO_V_Extract  _ _ -> panicOp
+  
+    MO_V_Add      _ _ -> panicOp
+    MO_V_Sub      _ _ -> panicOp
+    MO_V_Mul      _ _ -> panicOp
+
+    MO_VS_Quot    _ _ -> panicOp
+    MO_VS_Rem     _ _ -> panicOp
+
+    MO_VF_Add     _ _ -> panicOp
+    MO_VF_Sub     _ _ -> panicOp
+    MO_VF_Mul     _ _ -> panicOp
+    MO_VF_Quot    _ _ -> panicOp
 
     where
         negate ty v2 negOp = do
@@ -981,6 +1010,24 @@ genMachOp_fast opt op r n e
 -- This handles all the cases not handle by the specialised genMachOp_fast.
 genMachOp_slow :: EOption -> MachOp -> [CmmExpr] -> LlvmM ExprData
 
+-- Element extraction
+genMachOp_slow _ (MO_V_Extract {}) [val, idx] = do
+    (vval, stmts1, top1) <- exprToVar val
+    (vidx, stmts2, top2) <- exprToVar idx
+    let (LMVector _ ty)  =  getVarType vval
+    (v1, s1)             <- doExpr ty $ Extract vval vidx
+    return (v1, stmts1 `appOL` stmts2 `snocOL` s1, top1 ++ top2)
+
+-- Element insertion
+genMachOp_slow _ (MO_V_Insert {}) [val, elt, idx] = do
+    (vval, stmts1, top1) <- exprToVar val
+    (velt, stmts2, top2) <- exprToVar elt
+    (vidx, stmts3, top3) <- exprToVar idx
+    let ty               =  getVarType vval
+    (v1, s1)             <- doExpr ty $ Insert vval velt vidx
+    return (v1, stmts1 `appOL` stmts2 `appOL` stmts3 `snocOL` s1,
+            top1 ++ top2 ++ top3)
+
 -- Binary MachOp
 genMachOp_slow opt op [x, y] = case op of
 
@@ -1030,6 +1077,18 @@ genMachOp_slow opt op [x, y] = case op of
     MO_U_Shr _ -> genBinMach LM_MO_LShr
     MO_S_Shr _ -> genBinMach LM_MO_AShr
 
+    MO_V_Add _ _   -> genBinMach LM_MO_Add
+    MO_V_Sub _ _   -> genBinMach LM_MO_Sub
+    MO_V_Mul _ _   -> genBinMach LM_MO_Mul
+
+    MO_VS_Quot _ _ -> genBinMach LM_MO_SDiv
+    MO_VS_Rem _ _  -> genBinMach LM_MO_SRem
+ 
+    MO_VF_Add _ _  -> genBinMach LM_MO_FAdd
+    MO_VF_Sub _ _  -> genBinMach LM_MO_FSub
+    MO_VF_Mul _ _  -> genBinMach LM_MO_FMul
+    MO_VF_Quot _ _ -> genBinMach LM_MO_FDiv
+
     MO_Not _       -> panicOp
     MO_S_Neg _     -> panicOp
     MO_F_Neg _     -> panicOp
@@ -1039,6 +1098,13 @@ genMachOp_slow opt op [x, y] = case op of
     MO_SS_Conv _ _ -> panicOp
     MO_UU_Conv _ _ -> panicOp
     MO_FF_Conv _ _ -> panicOp
+
+    MO_V_Insert  {} -> panicOp
+    MO_V_Extract {} -> panicOp
+
+    MO_VS_Neg {} -> panicOp
+
+    MO_VF_Neg {} -> panicOp
 
     where
         binLlvmOp ty binOp = do
