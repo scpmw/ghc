@@ -291,6 +291,7 @@ Library
         InteractiveEval
         PackageConfig
         Packages
+        PlatformConstants
         PprTyThing
         StaticFlags
         SysTools
