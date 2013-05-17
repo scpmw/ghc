@@ -34,7 +34,7 @@ import UniqSupply
 import Unique
 
 import Data.List ( nub )
-import Data.Maybe ( catMaybes )
+import Data.Maybe ( catMaybes, fromMaybe )
 
 type LlvmStatements = OrdList LlvmStatement
 
@@ -705,6 +705,7 @@ genCondBranch :: CmmExpr -> BlockId -> BlockId -> LlvmM StmtData
 genCondBranch cond idT idF = do
     let labelT = blockIdToLlvm idT
     let labelF = blockIdToLlvm idF
+    -- See Note [Literals and branch conditions]
     (vc, stmts, top) <- exprToVarOpt i1Option cond
     if getVarType vc == i1
         then do
@@ -713,6 +714,57 @@ genCondBranch cond idT idF = do
         else do
             dflags <- getDynFlags
             panic $ "genCondBranch: Cond expr not bool! (" ++ showSDoc dflags (ppr vc) ++ ")"
+
+{- Note [Literals and branch conditions]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It is important that whenever we generate branch conditions for
+literals like '1', they are properly narrowed to an LLVM expression of
+type 'i1' (for bools.) Otherwise, nobody is happy. So when we convert
+a CmmExpr to an LLVM expression for a branch conditional, exprToVarOpt
+must be certain to return a properly narrowed type. genLit is
+responsible for this, in the case of literal integers.
+
+Often, we won't see direct statements like:
+
+    if(1) {
+      ...
+    } else {
+      ...
+    }
+
+at this point in the pipeline, because the Glorious Code Generator
+will do trivial branch elimination in the sinking pass (among others,)
+which will eliminate the expression entirely.
+
+However, it's certainly possible and reasonable for this to occur in
+hand-written C-- code. Consider something like:
+
+    #ifndef SOME_CONDITIONAL
+    #define CHECK_THING(x) 1
+    #else
+    #define CHECK_THING(x) some_operation((x))
+    #endif
+
+    f() {
+
+      if (CHECK_THING(xyz)) {
+        ...
+      } else {
+        ...
+      }
+
+    }
+
+In such an instance, CHECK_THING might result in an *expression* in
+one case, and a *literal* in the other, depending on what in
+particular was #define'd. So we must be sure to properly narrow the
+literal in this case to i1 as it won't be eliminated beforehand.
+
+For a real example of this, see ./rts/StgStdThunks.cmm
+
+-}
+
 
 
 -- | Switch branch
@@ -770,7 +822,7 @@ exprToVarOpt :: EOption -> CmmExpr -> LlvmM ExprData
 exprToVarOpt opt e = case e of
 
     CmmLit lit
-        -> genLit lit
+        -> genLit opt lit -- See Note [Literals and branch conditions]
 
     CmmLoad e' ty
         -> genLoad e' ty
@@ -1228,32 +1280,34 @@ allocReg _ = panic $ "allocReg: Global reg encountered! Global registers should"
 
 
 -- | Generate code for a literal
-genLit :: CmmLit -> LlvmM ExprData
-genLit (CmmInt i w)
-  = return (mkIntLit (LMInt $ widthInBits w) i, nilOL, [])
+genLit :: EOption -> CmmLit -> LlvmM ExprData
+genLit (EOption opt) (CmmInt i w)
+  -- See Note [Literals and branch conditions]
+  = let width = fromMaybe (LMInt $ widthInBits w) opt
+	in return (mkIntLit width i, nilOL, [])
 
-genLit (CmmFloat r w)
+genLit _ (CmmFloat r w)
   = return (LMLitVar $ LMFloatLit (fromRational r) (widthToLlvmFloat w),
               nilOL, [])
 
-genLit cmm@(CmmLabel l)
+genLit _ cmm@(CmmLabel l)
   = do var <- getGlobalPtr =<< strCLabel_llvm l
        dflags <- getDynFlags
        let lmty = cmmToLlvmType $ cmmLitType dflags cmm
        (v1, s1) <- doExpr lmty $ Cast LM_Ptrtoint var (llvmWord dflags)
        return (v1, unitOL s1, [])
 
-genLit (CmmLabelOff label off) = do
+genLit opt (CmmLabelOff label off) = do
     dflags <- getDynFlags
-    (vlbl, stmts, stat) <- genLit (CmmLabel label)
+    (vlbl, stmts, stat) <- genLit opt (CmmLabel label)
     let voff = toIWord dflags off
     (v1, s1) <- doExpr (getVarType vlbl) $ LlvmOp LM_MO_Add vlbl voff
     return (v1, stmts `snocOL` s1, stat)
 
-genLit (CmmLabelDiffOff l1 l2 off) = do
+genLit opt (CmmLabelDiffOff l1 l2 off) = do
     dflags <- getDynFlags
-    (vl1, stmts1, stat1) <- genLit (CmmLabel l1)
-    (vl2, stmts2, stat2) <- genLit (CmmLabel l2)
+    (vl1, stmts1, stat1) <- genLit opt (CmmLabel l1)
+    (vl2, stmts2, stat2) <- genLit opt (CmmLabel l2)
     let voff = toIWord dflags off
     let ty1 = getVarType vl1
     let ty2 = getVarType vl2
@@ -1269,10 +1323,10 @@ genLit (CmmLabelDiffOff l1 l2 off) = do
         else
             panic "genLit: CmmLabelDiffOff encountered with different label ty!"
 
-genLit (CmmBlock b)
-  = genLit (CmmLabel $ infoTblLbl b)
+genLit opt (CmmBlock b)
+  = genLit opt (CmmLabel $ infoTblLbl b)
 
-genLit CmmHighStackMark
+genLit _ CmmHighStackMark
   = panic "genStaticLit - CmmHighStackMark unsupported!"
 
 
