@@ -1670,6 +1670,8 @@ genCCall _ (PrimTarget MO_WriteBarrier) _ _ = return nilOL
 
 genCCall _ (PrimTarget MO_Touch) _ _ = return nilOL
 
+genCCall _ (PrimTarget MO_Prefetch_Data) _ _ = return nilOL
+
 genCCall is32Bit (PrimTarget (MO_PopCnt width)) dest_regs@[dst]
          args@[src] = do
     sse4_2 <- sse4_2Enabled
@@ -2339,6 +2341,7 @@ outOfLineCmmOp mop res args
               MO_U_Mul2 {}     -> unsupported
               MO_WriteBarrier  -> unsupported
               MO_Touch         -> unsupported
+              MO_Prefetch_Data -> unsupported
         unsupported = panic ("outOfLineCmmOp: " ++ show mop
                           ++ " not supported here")
 
