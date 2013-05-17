@@ -155,10 +155,11 @@ llvmFunArgs :: DynFlags -> LiveGlobalRegs -> [LlvmVar]
 llvmFunArgs dflags live =
     map (lmGlobalRegArg dflags) (filter isPassed (activeStgRegs platform))
     where platform = targetPlatform dflags
-          isPassed r = not (isFloat r) || r `elem` alwaysLive || r `elem` live
-          isFloat (FloatReg _)  = True
-          isFloat (DoubleReg _) = True
-          isFloat _             = False
+          isPassed r = not (isSSE r) || r `elem` alwaysLive || r `elem` live
+          isSSE (FloatReg _)  = True
+          isSSE (DoubleReg _) = True
+          isSSE (XmmReg _)    = True
+          isSSE _             = False
 
 -- | Position of a register in function arguments
 llvmRegArgPos :: DynFlags -> GlobalReg -> Maybe Int
