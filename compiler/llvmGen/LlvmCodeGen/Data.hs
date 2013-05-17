@@ -88,6 +88,17 @@ genStaticLit (CmmInt i w)
 genStaticLit (CmmFloat r w)
     = return $ LMStaticLit (LMFloatLit (fromRational r) (widthToLlvmFloat w))
 
+genStaticLit (CmmVec ls)
+    = do sls <- mapM toLlvmLit ls
+         return $ LMStaticLit (LMVectorLit sls)
+  where
+    toLlvmLit :: CmmLit -> LlvmM LlvmLit
+    toLlvmLit lit = do
+      slit <- genStaticLit lit
+      case slit of
+        LMStaticLit llvmLit -> return llvmLit
+        _ -> panic "genStaticLit"
+
 -- Leave unresolved, will fix later
 genStaticLit cmm@(CmmLabel l) = do
     var <- getGlobalPtr =<< strCLabel_llvm l

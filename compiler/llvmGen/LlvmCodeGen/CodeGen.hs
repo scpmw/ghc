@@ -1282,6 +1282,17 @@ genLit _ (CmmFloat r w)
   = return (LMLitVar $ LMFloatLit (fromRational r) (widthToLlvmFloat w),
               nilOL, [])
 
+genLit opt (CmmVec ls)
+  = do llvmLits <- mapM toLlvmLit ls
+       return (LMLitVar $ LMVectorLit llvmLits, nilOL, [])
+  where
+    toLlvmLit :: CmmLit -> LlvmM LlvmLit
+    toLlvmLit lit = do
+        (llvmLitVar, _, _) <- genLit opt lit
+        case llvmLitVar of
+          LMLitVar llvmLit -> return llvmLit
+          _ -> panic "genLit"
+
 genLit _ cmm@(CmmLabel l)
   = do var <- getGlobalPtr =<< strCLabel_llvm l
        dflags <- getDynFlags
