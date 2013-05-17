@@ -123,6 +123,7 @@ $$(foreach way,$$($1_$2_WAYS),$$(eval \
 # If dyn libs are not being built then $$($1_$2_dyn_LIB) will just
 # expand to the empty string, and be ignored.
 $1_$2_PROGRAM_DEP_LIB = $$($1_$2_v_LIB) $$($1_$2_dyn_LIB)
+$$($1_PACKAGE)-$$($1_$2_VERSION)_$2_PROGRAM_DEP_LIB = $$($1_$2_PROGRAM_DEP_LIB)
 
 # C and S files are possibly built the "dyn" way.
 ifeq "$$(BuildSharedLibs)" "YES"
@@ -135,14 +136,6 @@ $(call all-target,$1,all_$1_$2)
 #     all_libraries: all_libraries/base_dist-install
 ifneq "$$($1_$2_GROUP)" ""
 all_$$($1_$2_GROUP): all_$1_$2
-endif
-
-ifneq "$$(CHECKED_$1)" "YES"
-CHECKED_$1 = YES
-check_packages: check_$1
-.PHONY: check_$1
-check_$1: $$(GHC_CABAL_INPLACE)
-	CROSS_COMPILE="$(CrossCompilePrefix)" $$(GHC_CABAL_INPLACE) check $1
 endif
 
 ifneq "$3" "0"

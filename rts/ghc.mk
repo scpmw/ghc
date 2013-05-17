@@ -153,8 +153,6 @@ endif
 $(call distdir-way-opts,rts,dist,$1)
 $(call c-suffix-rules,rts,dist,$1,YES)
 $(call cmm-suffix-rules,rts,dist,$1)
-$(call hs-suffix-rules-srcdir,rts,dist,$1,.)
-# hs-suffix-rules-srcdir is needed when BootingFromHc to get the .hc rules
 
 rts_$1_LIB_NAME = libHSrts$$($1_libsuf)
 rts_$1_LIB = rts/dist/build/$$(rts_$1_LIB_NAME)
@@ -282,11 +280,6 @@ endif
 ifeq "$(UseLibFFIForAdjustors)" "YES"
 rts_CC_OPTS += -DUSE_LIBFFI_FOR_ADJUSTORS
 endif
-
-# Mac OS X: make sure we compile for the right OS version
-rts_CC_OPTS += $(MACOSX_DEPLOYMENT_CC_OPTS)
-rts_HC_OPTS += $(addprefix -optc, $(MACOSX_DEPLOYMENT_CC_OPTS))
-rts_LD_OPTS += $(addprefix -optl, $(MACOSX_DEPLOYMENT_LD_OPTS))
 
 # We *want* type-checking of hand-written cmm.
 rts_HC_OPTS += -dcmm-lint 
@@ -564,9 +557,7 @@ endif
 
 $(eval $(call manual-package-config,rts))
 
-ifneq "$(BootingFromHc)" "YES"
 rts/package.conf.inplace : $(includes_H_CONFIG) $(includes_H_PLATFORM)
-endif
 
 # -----------------------------------------------------------------------------
 # installing
