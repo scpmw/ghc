@@ -368,7 +368,7 @@ And so the code for let(rec)-things:
 %*                                                                      *
 %************************************************************************
 
-Finally for @scc@ expressions we introduce a new STG construct.
+Finally for @hpc@ expressions we introduce a new STG construct.
 
 \begin{code}
   | StgTick

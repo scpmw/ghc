@@ -75,6 +75,15 @@ else
 $1_$2_WAYS = $$(filter-out $$($1_$2_EXCLUDED_WAYS),$$(GhcLibWays))
 endif
 
+$1_$2_DYNAMIC_TOO = NO
+ifneq "$$(DYNAMIC_TOO)" "NO"
+ifneq "$$(filter v,$$($1_$2_WAYS))" ""
+ifneq "$$(filter dyn,$$($1_$2_WAYS))" ""
+$1_$2_DYNAMIC_TOO = YES
+endif
+endif
+endif
+
 # We must use a different dependency file if $(GhcLibWays) changes, so
 # encode the ways into the name of the file.
 $1_$2_WAYS_DASHED = $$(subst $$(space),,$$(patsubst %,-%,$$(strip $$($1_$2_WAYS))))
@@ -105,6 +114,7 @@ endif
 $(call hs-sources,$1,$2)
 $(call c-sources,$1,$2)
 $(call includes-sources,$1,$2)
+$(call distdir-opts,$1,$2,$3)
 
 $(call dependencies,$1,$2,$3)
 
@@ -130,6 +140,8 @@ ifeq "$$(BuildSharedLibs)" "YES"
 $(call c-objs,$1,$2,dyn)
 $(call c-suffix-rules,$1,$2,dyn,YES)
 endif
+$$(foreach dir,$$($1_$2_HS_SRC_DIRS),\
+  $$(eval $$(call hs-suffix-rules-srcdir,$1,$2,$$(dir))))
 
 $(call all-target,$1,all_$1_$2)
 # This give us things like

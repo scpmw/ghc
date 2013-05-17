@@ -57,8 +57,8 @@ endif
 
 rts_AUTO_APPLY_CMM = rts/dist/build/AutoApply.cmm
 
-$(rts_AUTO_APPLY_CMM): $(GENAPPLY_INPLACE)
-	"$(GENAPPLY_INPLACE)" >$@
+$(rts_AUTO_APPLY_CMM): $$(genapply_INPLACE)
+	"$(genapply_INPLACE)" >$@
 
 rts/dist/build/sm/Evac_thr.c : rts/sm/Evac.c | $$(dir $$@)/.
 	cp $< $@
@@ -73,8 +73,8 @@ rts_H_FILES += $(DTRACEPROBES_H)
 endif
 
 # collect the -l flags that we need to link the rts dyn lib.
-rts/libs.depend : $(GHC_PKG_INPLACE)
-	"$(GHC_PKG_INPLACE)" field rts extra-libraries \
+rts/libs.depend : $$(ghc-pkg_INPLACE)
+	"$(ghc-pkg_INPLACE)" field rts extra-libraries \
 	  | sed -e 's/^extra-libraries: //' -e 's/\([a-z0-9]*\)[ ]*/-l\1 /g' > $@
 
 
@@ -221,6 +221,8 @@ endef
 
 # And expand the above for each way:
 $(foreach way,$(rts_WAYS),$(eval $(call build-rts-way,$(way))))
+
+$(eval $(call distdir-opts,rts,dist))
 
 #-----------------------------------------------------------------------------
 # Flags for compiling every file
