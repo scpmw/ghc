@@ -345,6 +345,7 @@ typeToMeta' ty = case ty of
   LMFloat128{}  -> baseType dW_ATE_float
   (LMPointer t) -> derivedType dW_TAG_pointer_type =<< typeToMeta t
   (LMArray n t) -> compositeType dW_TAG_array_type [subrangeDesc n] =<< typeToMeta t
+  (LMVector n t)-> compositeType dW_TAG_array_type [subrangeDesc n] =<< typeToMeta t
   LMLabel       -> derivedType dW_TAG_pointer_type =<< typeToMeta LMVoid
   LMVoid        -> return nullLit
   (LMStruct ts) -> do members <- mapM typeToMeta ts
