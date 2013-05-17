@@ -187,6 +187,7 @@ import CoreSyn          ( Tickish(SourceNote) )
 import MkGraph
 import Cmm
 import CmmUtils
+import CmmInfo
 import BlockId
 import CmmLex
 import CLabel

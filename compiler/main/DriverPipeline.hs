@@ -1454,14 +1454,17 @@ runPhase LlvmLlc input_fn dflags
                                       else if (elem VFPv3D16 ext)
                                            then ["-mattr=+v7,+vfp3,+d16"]
                                            else []
+                   ArchARM ARMv6 ext _ -> if (elem VFPv2 ext)
+                                          then ["-mattr=+v6,+vfp2"]
+                                          else ["-mattr=+v6"]
                    _                 -> []
         -- On Ubuntu/Debian with ARM hard float ABI, LLVM's llc still
         -- compiles into soft-float ABI. We need to explicitly set abi
         -- to hard
         abiOpts = case platformArch (targetPlatform dflags) of
-                    ArchARM ARMv7 _ HARD -> ["-float-abi=hard"]
-                    ArchARM ARMv7 _ _    -> []
-                    _                    -> []
+                    ArchARM _ _ HARD -> ["-float-abi=hard"]
+                    ArchARM _ _ _    -> []
+                    _                -> []
 
         sseOpts | isSse4_2Enabled dflags = ["-mattr=+sse42"]
                 | isSse2Enabled dflags   = ["-mattr=+sse2"]
@@ -1752,7 +1755,16 @@ linkBinary dflags o_files dep_packages = do
                   rpath = if gopt Opt_RPath dflags
                           then ["-Wl,-rpath",      "-Wl," ++ libpath]
                           else []
-              in ["-L" ++ l, "-Wl,-rpath-link", "-Wl," ++ l] ++ rpath
+                  -- Solaris 11's linker does not support -rpath-link option. It silently
+                  -- ignores it and then complains about next option which is -l<some
+                  -- dir> as being a directory and not expected object file, E.g
+                  -- ld: elf error: file
+                  -- /tmp/ghc-src/libraries/base/dist-install/build:
+                  -- elf_begin: I/O error: region read: Is a directory
+                  rpathlink = if (platformOS platform) == OSSolaris2
+                              then []
+                              else ["-Wl,-rpath-link", "-Wl," ++ l]
+              in ["-L" ++ l] ++ rpathlink ++ rpath
          | otherwise = ["-L" ++ l]
 
     let lib_paths = libraryPaths dflags
@@ -1819,7 +1831,7 @@ linkBinary dflags o_files dep_packages = do
             let os = platformOS (targetPlatform dflags)
             in if os == OSOsf3 then ["-lpthread", "-lexc"]
                else if os `elem` [OSMinGW32, OSFreeBSD, OSOpenBSD,
-                                  OSNetBSD, OSHaiku]
+                                  OSNetBSD, OSHaiku, OSQNXNTO]
                then []
                else ["-lpthread"]
          | otherwise               = []
