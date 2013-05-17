@@ -227,13 +227,19 @@ basicKnownKeyNames
         -- Stable pointers
         newStablePtrName,
 
-    -- GHC Extensions
+        -- GHC Extensions
         groupWithName,
 
         -- Strings and lists
         unpackCStringName,
         unpackCStringFoldrName, unpackCStringUtf8Name,
-
+        
+        -- Overloaded lists
+        isListClassName,
+        fromListName,
+        fromListNName,
+        toListName,
+        
         -- List operations
         concatName, filterName, mapName,
         zipName, foldrName, buildName, augmentName, appendName,
@@ -570,6 +576,11 @@ plus_RDR                = varQual_RDR gHC_NUM (fsLit "+")
 fromString_RDR :: RdrName
 fromString_RDR          = nameRdrName fromStringName
 
+fromList_RDR, fromListN_RDR, toList_RDR :: RdrName
+fromList_RDR = nameRdrName fromListName
+fromListN_RDR = nameRdrName fromListNName
+toList_RDR = nameRdrName toListName
+
 compose_RDR :: RdrName
 compose_RDR             = varQual_RDR gHC_BASE (fsLit ".")
 
@@ -642,8 +653,8 @@ u1DataCon_RDR, par1DataCon_RDR, rec1DataCon_RDR,
   prodDataCon_RDR, comp1DataCon_RDR,
   unPar1_RDR, unRec1_RDR, unK1_RDR, unComp1_RDR,
   from_RDR, from1_RDR, to_RDR, to1_RDR,
-  datatypeName_RDR, moduleName_RDR, conName_RDR,
-  conFixity_RDR, conIsRecord_RDR,
+  datatypeName_RDR, moduleName_RDR, isNewtypeName_RDR,
+  conName_RDR, conFixity_RDR, conIsRecord_RDR,
   noArityDataCon_RDR, arityDataCon_RDR, selName_RDR,
   prefixDataCon_RDR, infixDataCon_RDR, leftAssocDataCon_RDR,
   rightAssocDataCon_RDR, notAssocDataCon_RDR :: RdrName
@@ -672,6 +683,7 @@ to1_RDR   = varQual_RDR gHC_GENERICS (fsLit "to1")
 
 datatypeName_RDR  = varQual_RDR gHC_GENERICS (fsLit "datatypeName")
 moduleName_RDR    = varQual_RDR gHC_GENERICS (fsLit "moduleName")
+isNewtypeName_RDR = varQual_RDR gHC_GENERICS (fsLit "isNewtype")
 selName_RDR       = varQual_RDR gHC_GENERICS (fsLit "selName")
 conName_RDR       = varQual_RDR gHC_GENERICS (fsLit "conName")
 conFixity_RDR     = varQual_RDR gHC_GENERICS (fsLit "conFixity")
@@ -1000,6 +1012,13 @@ concatName, filterName, zipName :: Name
 concatName        = varQual gHC_LIST (fsLit "concat") concatIdKey
 filterName        = varQual gHC_LIST (fsLit "filter") filterIdKey
 zipName           = varQual gHC_LIST (fsLit "zip") zipIdKey
+
+-- Overloaded lists
+isListClassName, fromListName, fromListNName, toListName :: Name
+isListClassName = clsQual gHC_EXTS (fsLit "IsList") isListClassKey
+fromListName = methName gHC_EXTS (fsLit "fromList") fromListClassOpKey
+fromListNName = methName gHC_EXTS (fsLit "fromListN") fromListNClassOpKey
+toListName = methName gHC_EXTS (fsLit "toList") toListClassOpKey
 
 -- Class Show
 showClassName :: Name
@@ -1742,6 +1761,12 @@ mzipIdKey       = mkPreludeMiscIdUnique 196
 ghciStepIoMClassOpKey :: Unique
 ghciStepIoMClassOpKey = mkPreludeMiscIdUnique 197
 
+-- Overloaded lists
+isListClassKey, fromListClassOpKey, fromListNClassOpKey, toListClassOpKey :: Unique
+isListClassKey = mkPreludeMiscIdUnique 198
+fromListClassOpKey = mkPreludeMiscIdUnique 199
+fromListNClassOpKey = mkPreludeMiscIdUnique 500
+toListClassOpKey = mkPreludeMiscIdUnique 501
 
 ---------------- Template Haskell -------------------
 --      USES IdUniques 200-499
