@@ -68,7 +68,7 @@ Library
     if flag(ghci)
         Build-Depends: template-haskell
         CPP-Options: -DGHCI
-        Include-Dirs: ../rts/dist/build
+        Include-Dirs: ../rts/dist/build @FFIIncludeDir@
 
     Build-Depends: bin-package-db
     Build-Depends: hoopl
@@ -211,6 +211,7 @@ Library
         StgCmmGran
         StgCmmHeap
         StgCmmHpc
+        StgCmmArgRep
         StgCmmLayout
         StgCmmMonad
         StgCmmPrim
@@ -289,6 +290,7 @@ Library
         HscStats
         HscTypes
         InteractiveEval
+        InteractiveEvalTypes
         PackageConfig
         Packages
         PlatformConstants

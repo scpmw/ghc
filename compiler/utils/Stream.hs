@@ -70,7 +70,7 @@ collect2 str = go str []
 fromList :: Monad m => [a] -> Stream m a ()
 fromList = mapM_ yield
 
--- | Apply a function to each element of a 'Stream', lazilly
+-- | Apply a function to each element of a 'Stream', lazily
 map :: Monad m => (a -> b) -> Stream m a x -> Stream m b x
 map f str = Stream $ do
    r <- runStream str
@@ -78,7 +78,7 @@ map f str = Stream $ do
      Left x -> return (Left x)
      Right (a, str') -> return (Right (f a, Stream.map f str'))
 
--- | Apply a monadic operation to each element of a 'Stream', lazilly
+-- | Apply a monadic operation to each element of a 'Stream', lazily
 mapM :: Monad m => (a -> m b) -> Stream m a x -> Stream m b x
 mapM f str = Stream $ do
    r <- runStream str

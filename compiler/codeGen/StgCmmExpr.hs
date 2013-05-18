@@ -157,10 +157,11 @@ cgLetNoEscapeClosure bndr cc_slot _unused_cc args body
        return ( lneIdInfo dflags bndr args
               , code )
   where
-   code = forkProc $ do
-                  { restoreCurrentCostCentre cc_slot
-                  ; arg_regs <- bindArgsToRegs args
-                  ; void $ noEscapeHeapCheck arg_regs (cgExpr body) }
+   code = forkProc $ do {
+            ; withNewTickyCounterLNE (idName bndr) args $ do
+            ; restoreCurrentCostCentre cc_slot
+            ; arg_regs <- bindArgsToRegs args
+            ; void $ noEscapeHeapCheck arg_regs (tickyEnterLNE >> cgExpr body) }
 
 
 ------------------------------------------------------------------------
@@ -412,6 +413,7 @@ cgCase scrut bndr alt_type alts
                     | isSingleton alts = False
                     | up_hp_usg > 0    = False
                     | otherwise        = True
+               -- cf Note [Compiling case expressions]
              gc_plan = if do_gc then GcInAlts alt_regs else NoGcInAlts
 
        ; mb_cc <- maybeSaveCostCentre simple_scrut

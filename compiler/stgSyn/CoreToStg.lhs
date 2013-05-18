@@ -7,13 +7,6 @@ And, as we have the info in hand, we may convert some lets to
 let-no-escapes.
 
 \begin{code}
-{-# OPTIONS -fno-warn-tabs #-}
--- The above warning supression flag is a temporary kludge.
--- While working on this module you are encouraged to remove it and
--- detab the module (please do the detabbing in a separate patch). See
---     http://hackage.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
--- for details
-
 module CoreToStg ( coreToStg, coreExprToStg ) where
 
 #include "HsVersions.h"
@@ -25,7 +18,7 @@ import StgSyn
 
 import Type
 import TyCon
-import MkId		( coercionTokenId )
+import MkId             ( coercionTokenId )
 import Id
 import IdInfo
 import DataCon
@@ -370,8 +363,8 @@ coreToStgExpr (Cast expr _)
 
 -- Cases require a little more real work.
 
-coreToStgExpr (Case scrut _ _ []) 
-  = coreToStgExpr scrut   
+coreToStgExpr (Case scrut _ _ [])
+  = coreToStgExpr scrut
     -- See Note [Empty case alternatives] in CoreSyn If the case
     -- alternatives are empty, the scrutinee must diverge or raise an
     -- exception, so we can just dive into it.
@@ -380,7 +373,7 @@ coreToStgExpr (Case scrut _ _ [])
     -- belt-and-braces approach would be to move this case into the
     -- code generator, and put a return point anyway that calls a
     -- runtime system error function.
-        
+
 
 coreToStgExpr (Case scrut bndr _ alts) = do
     (alts2, alts_fvs, alts_escs)
@@ -428,7 +421,7 @@ coreToStgExpr (Case scrut bndr _ alts) = do
   where
     vars_alt alt@(con, binders, rhs)
       | DataAlt c <- con, c == unboxedUnitDataCon
-      = -- This case is a bit smelly. 
+      = -- This case is a bit smelly.
         -- See Note [Nullary unboxed tuple] in Type.lhs
         -- where a nullary tuple is mapped to (State# World#)
         ASSERT( null binders )
@@ -824,7 +817,7 @@ mkStgRhs rhs_fvs srt binder_info annot rhs
     assumptions (namely that they will be entered only once).
 
     upd_flag | isPAP env rhs  = ReEntrant
-	     | otherwise      = Updatable
+             | otherwise      = Updatable
   -}
 
 {- ToDo:
