@@ -124,6 +124,14 @@ $1_$2_$3_ALL_HC_OPTS = \
  $$(if $$(findstring YES,$$($1_$2_DYNAMIC_TOO)),$$(if $$(findstring v,$3),-dynamic-too))
 
 ifeq "$3" "dyn"
+ifeq "$$(HostOS_CPP)" "mingw32"
+ifneq "$$($1_$2_dll0_MODULES)" ""
+$1_$2_$3_ALL_HC_OPTS += -dll-split $1/$2/dll-split
+endif
+endif
+endif
+
+ifeq "$3" "dyn"
 ifneq "$4" "0"
 ifeq "$$(TargetElf)" "YES"
 $1_$2_$3_GHC_LD_OPTS += \
@@ -131,18 +139,6 @@ $1_$2_$3_GHC_LD_OPTS += \
     $$(foreach d,$$($1_$2_TRANSITIVE_DEPS),-optl-Wl$$(comma)-rpath -optl-Wl$$(comma)'$$$$ORIGIN/../$$d') -optl-Wl,-z -optl-Wl,origin
 else ifeq "$$(TargetOS_CPP)" "darwin"
 $1_$2_$3_GHC_LD_OPTS += -optl-Wl,-headerpad_max_install_names
-endif
-
-# This is a rather ugly hack to fix dynamically linked GHC on Windows.
-# If GHC is linked with -threaded, then it links against libHSrts_thr.
-# But if base is linked against libHSrts, then both end up getting
-# loaded, and things go wrong. We therefore link the libraries with the
-# same RTS flags that we link GHC with.
-ifeq "$$(GhcThreaded)" "YES"
-$1_$2_$3_GHC_LD_OPTS += -threaded
-endif
-ifeq "$$(GhcDebugged)" "YES"
-$1_$2_$3_GHC_LD_OPTS += -debug
 endif
 endif
 endif

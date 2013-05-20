@@ -377,7 +377,7 @@ cmmNativeGens :: (Outputable statics, Outputable instr, Instruction instr)
               -> Int
               -> IO (NativeGenAcc statics instr, UniqSupply)
 
-cmmNativeGens _ _ _ _ us [] ngs _
+cmmNativeGens _ _ _ _ _ us [] ngs _
         = return (ngs, us)
 
 cmmNativeGens dflags this_mod modLoc ncgImpl h us (cmm : cmms) (impAcc, profAcc, fileIds) count

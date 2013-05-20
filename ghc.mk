@@ -565,18 +565,6 @@ $(error Unknown integer library: $(INTEGER_LIBRARY))
 endif
 endif
 
-# ----------------------------------------
-# Workarounds for problems building DLLs on Windows
-
-ifeq "$(TargetOS_CPP)" "mingw32"
-# We don't build the GHC package the dyn way on Windows, so
-# we can't build these packages the dyn way either. See trac #5987
-libraries/dph/dph-lifted-base_dist-install_EXCLUDED_WAYS := dyn
-libraries/dph/dph-lifted-boxed_dist-install_EXCLUDED_WAYS := dyn
-libraries/dph/dph-lifted-copy_dist-install_EXCLUDED_WAYS := dyn
-libraries/dph/dph-lifted-vseg_dist-install_EXCLUDED_WAYS := dyn
-endif
-
 # -----------------------------------------------------------------------------
 # Include build instructions from all subdirs
 
@@ -893,8 +881,8 @@ install_packages: rts/package.conf.install
 	$(foreach p, $(INSTALL_PACKAGES),                             \
 	    $(call make-command,                                      \
 	           "$(ghc-cabal_INPLACE)" copy                        \
-	                                  "$(STRIP_CMD)"              \
 	                                  $p $(INSTALL_DISTDIR_$p)    \
+	                                  "$(STRIP_CMD)"              \
 	                                  '$(DESTDIR)'                \
 	                                  '$(prefix)'                 \
 	                                  '$(ghclibdir)'              \
@@ -903,10 +891,10 @@ install_packages: rts/package.conf.install
 	$(foreach p, $(INSTALL_PACKAGES),                             \
 	    $(call make-command,                                      \
 	           "$(ghc-cabal_INPLACE)" register                    \
+	                                  $p $(INSTALL_DISTDIR_$p)    \
 	                                  "$(INSTALLED_GHC_REAL)"     \
 	                                  "$(INSTALLED_GHC_PKG_REAL)" \
 	                                  "$(DESTDIR)$(topdir)"       \
-	                                  $p $(INSTALL_DISTDIR_$p)    \
 	                                  '$(DESTDIR)'                \
 	                                  '$(prefix)'                 \
 	                                  '$(ghclibdir)'              \
