@@ -214,8 +214,6 @@ lintStgExpr (StgCase scrut _ _ bndr _ alts_type alts) = runMaybeT $ do
                   where
                      bad_bndr = mkDefltMsg bndr tc
 
-lintStgExpr e = pprPanic "lintStgExpr" (ppr e)
-
 lintStgAlts :: [StgAlt]
             -> Type               -- Type of scrutinee
             -> LintM (Maybe Type) -- Just ty => type is accurage

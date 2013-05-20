@@ -84,9 +84,7 @@ import TyCon
 import ForeignCall
 import Demand
 import Outputable
-import Module
 import FastString
-import Demand
 
 -- infixl so you can say (id `set` a `set` b)
 infixl 	1 `setSpecInfo`,
