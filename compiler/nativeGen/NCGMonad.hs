@@ -17,6 +17,7 @@ module NCGMonad (
         getModLoc,
         setDeltaNat,
         getDeltaNat,
+        getThisModuleNat,
         getBlockIdNat,
         getNewLabelNat,
         getNewRegNat,
@@ -43,17 +44,18 @@ import UniqFM
 import UniqSupply
 import Unique           ( Unique )
 import DynFlags
-import Module           ( ModLocation )
+import Module
 
 data NatM_State
         = NatM_State {
-                natm_us      :: UniqSupply,
-                natm_delta   :: Int,
-                natm_imports :: [(CLabel)],
-                natm_pic     :: Maybe Reg,
-                natm_fileid  :: DwarfFiles,
-                natm_dflags  :: DynFlags,
-                natm_modloc  :: ModLocation
+                natm_us          :: UniqSupply,
+                natm_delta       :: Int,
+                natm_imports     :: [(CLabel)],
+                natm_pic         :: Maybe Reg,
+                natm_fileid      :: DwarfFiles,
+                natm_dflags      :: DynFlags,
+                natm_this_module :: Module,
+                natm_modloc      :: ModLocation
         }
 
 newtype NatM result = NatM (NatM_State -> (result, NatM_State))
@@ -61,9 +63,9 @@ newtype NatM result = NatM (NatM_State -> (result, NatM_State))
 unNat :: NatM a -> NatM_State -> (a, NatM_State)
 unNat (NatM a) = a
 
-mkNatM_State :: UniqSupply -> Int -> DwarfFiles -> DynFlags -> ModLocation -> NatM_State
-mkNatM_State us delta fileIds dflags modloc
-        = NatM_State us delta [] Nothing fileIds dflags modloc
+mkNatM_State :: UniqSupply -> Int -> DwarfFiles -> DynFlags -> Module -> ModLocation -> NatM_State
+mkNatM_State us delta fileIds dflags this_mod modloc
+        = NatM_State us delta [] Nothing fileIds dflags this_mod modloc
 
 initNat :: NatM_State -> NatM a -> (a, NatM_State)
 initNat init_st m
@@ -114,6 +116,10 @@ getDeltaNat = NatM $ \ st -> (natm_delta st, st)
 
 setDeltaNat :: Int -> NatM ()
 setDeltaNat delta = NatM $ \ st -> ((), st {natm_delta = delta})
+
+
+getThisModuleNat :: NatM Module
+getThisModuleNat = NatM $ \ st -> (natm_this_module st, st)
 
 
 addImportNat :: CLabel -> NatM ()
