@@ -958,6 +958,8 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(UPD_PAP_IN_PLACE_ctr)               \
       SymI_HasProto(ALLOC_HEAP_ctr)                     \
       SymI_HasProto(ALLOC_HEAP_tot)                     \
+      SymI_HasProto(HEAP_CHK_ctr)			\
+      SymI_HasProto(STK_CHK_ctr)                        \
       SymI_HasProto(ALLOC_RTS_ctr)                      \
       SymI_HasProto(ALLOC_RTS_tot)                      \
       SymI_HasProto(ALLOC_FUN_ctr)                      \
@@ -1279,12 +1281,6 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(stg_ap_7_upd_info)                                  \
       SymI_HasProto(stg_exit)                                           \
       SymI_HasProto(stg_sel_0_upd_info)                                 \
-      SymI_HasProto(stg_sel_10_upd_info)                                \
-      SymI_HasProto(stg_sel_11_upd_info)                                \
-      SymI_HasProto(stg_sel_12_upd_info)                                \
-      SymI_HasProto(stg_sel_13_upd_info)                                \
-      SymI_HasProto(stg_sel_14_upd_info)                                \
-      SymI_HasProto(stg_sel_15_upd_info)                                \
       SymI_HasProto(stg_sel_1_upd_info)                                 \
       SymI_HasProto(stg_sel_2_upd_info)                                 \
       SymI_HasProto(stg_sel_3_upd_info)                                 \
@@ -1294,6 +1290,28 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(stg_sel_7_upd_info)                                 \
       SymI_HasProto(stg_sel_8_upd_info)                                 \
       SymI_HasProto(stg_sel_9_upd_info)                                 \
+      SymI_HasProto(stg_sel_10_upd_info)                                \
+      SymI_HasProto(stg_sel_11_upd_info)                                \
+      SymI_HasProto(stg_sel_12_upd_info)                                \
+      SymI_HasProto(stg_sel_13_upd_info)                                \
+      SymI_HasProto(stg_sel_14_upd_info)                                \
+      SymI_HasProto(stg_sel_15_upd_info)                                \
+      SymI_HasProto(stg_sel_0_noupd_info)                                 \
+      SymI_HasProto(stg_sel_1_noupd_info)                                 \
+      SymI_HasProto(stg_sel_2_noupd_info)                                 \
+      SymI_HasProto(stg_sel_3_noupd_info)                                 \
+      SymI_HasProto(stg_sel_4_noupd_info)                                 \
+      SymI_HasProto(stg_sel_5_noupd_info)                                 \
+      SymI_HasProto(stg_sel_6_noupd_info)                                 \
+      SymI_HasProto(stg_sel_7_noupd_info)                                 \
+      SymI_HasProto(stg_sel_8_noupd_info)                                 \
+      SymI_HasProto(stg_sel_9_noupd_info)                                 \
+      SymI_HasProto(stg_sel_10_noupd_info)                                \
+      SymI_HasProto(stg_sel_11_noupd_info)                                \
+      SymI_HasProto(stg_sel_12_noupd_info)                                \
+      SymI_HasProto(stg_sel_13_noupd_info)                                \
+      SymI_HasProto(stg_sel_14_noupd_info)                                \
+      SymI_HasProto(stg_sel_15_noupd_info)                                \
       SymI_HasProto(stg_upd_frame_info)                                 \
       SymI_HasProto(stg_bh_upd_frame_info)                              \
       SymI_HasProto(suspendThread)                                      \
@@ -4939,6 +4957,7 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
                // Generate veneer
                SymbolExtra *extra = makeArmSymbolExtra(oc, ELF_R_SYM(info), S+imm+4, 1, is_target_thm);
                offset = (StgWord32) &extra->jumpIsland - P - 4;
+               sign = offset >> 31;
                to_thm = 1;
             } else if (!is_target_thm && ELF_R_TYPE(info) == R_ARM_THM_CALL) {
                offset &= ~0x3;

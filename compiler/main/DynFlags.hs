@@ -299,6 +299,7 @@ data GeneralFlag
    | Opt_CmmElimCommonBlocks
    | Opt_OmitYields
    | Opt_SimpleListLiterals
+   | Opt_FunToThunk               -- allow WwLib.mkWorkerArgs to remove all value lambdas
 
    -- Interface files
    | Opt_IgnoreInterfacePragmas
@@ -559,8 +560,6 @@ data DynFlags = DynFlags {
   ghcLink               :: GhcLink,
   hscTarget             :: HscTarget,
   settings              :: Settings,
-  hscOutName            :: String,      -- ^ Name of the output file
-  extCoreName           :: String,      -- ^ Name of the .hcr output file
   verbosity             :: Int,         -- ^ Verbosity level: see Note [Verbosity levels]
   optLevel              :: Int,         -- ^ Optimisation level
   simplPhases           :: Int,         -- ^ Number of simplifier phases
@@ -1172,7 +1171,8 @@ doDynamicToo dflags0 = let dflags1 = addWay' WayDyn dflags0
                                          objectSuf = dynObjectSuf dflags1
                                      }
                            dflags3 = updateWays dflags2
-                       in dflags3
+                           dflags4 = gopt_unset dflags3 Opt_BuildDynamicToo
+                       in dflags4
 
 -----------------------------------------------------------------------------
 
@@ -1211,8 +1211,6 @@ defaultDynFlags mySettings =
         ghcMode                 = CompManager,
         ghcLink                 = LinkBinary,
         hscTarget               = defaultHscTarget (sTargetPlatform mySettings),
-        hscOutName              = "",
-        extCoreName             = "",
         verbosity               = 0,
         optLevel                = 0,
         simplPhases             = 2,
@@ -2487,6 +2485,7 @@ fFlags = [
   ( "cmm-elim-common-blocks",           Opt_CmmElimCommonBlocks, nop ),
   ( "omit-yields",                      Opt_OmitYields, nop ),
   ( "simple-list-literals",             Opt_SimpleListLiterals, nop ),
+  ( "fun-to-thunk",                     Opt_FunToThunk, nop ),
   ( "gen-manifest",                     Opt_GenManifest, nop ),
   ( "embed-manifest",                   Opt_EmbedManifest, nop ),
   ( "ext-core",                         Opt_EmitExternalCore, nop ),
@@ -3351,6 +3350,7 @@ compilerInfo dflags
        ("Support SMP",                 cGhcWithSMP),
        ("Tables next to code",         cGhcEnableTablesNextToCode),
        ("RTS ways",                    cGhcRTSWays),
+       ("Support dynamic-too",         "YES"),
        ("Dynamic by default",          if dYNAMIC_BY_DEFAULT dflags
                                        then "YES" else "NO"),
        ("GHC Dynamic",                 if cDYNAMIC_GHC_PROGRAMS
@@ -3407,7 +3407,7 @@ makeDynFlagsConsistent dflags
       else let dflags' = dflags { hscTarget = HscLlvm }
                warn = "Compiler not unregisterised, so using LLVM rather than compiling via C"
            in loop dflags' warn
- | hscTarget dflags /= HscC && hscTarget dflags /= HscLlvm &&
+ | hscTarget dflags == HscAsm &&
    platformUnregisterised (targetPlatform dflags)
     = loop (dflags { hscTarget = HscC })
            "Compiler unregisterised, so compiling via C"
