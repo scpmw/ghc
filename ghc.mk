@@ -167,7 +167,7 @@ include rules/clean-target.mk
 # -----------------------------------------------------------------------------
 # The inplace tree
 
-$(eval $(call clean-target,inplace,,inplace/bin inplace/lib))
+$(eval $(call clean-target,root,inplace,inplace/bin inplace/lib))
 
 # -----------------------------------------------------------------------------
 # Whether to build dependencies or not
@@ -203,6 +203,15 @@ else
 GHCI_WAY = v
 HADDOCK_WAY = v
 endif
+
+WINDOWS_DYN_PROG_RTS := rts
+ifeq "$(GhcThreaded)" "YES"
+WINDOWS_DYN_PROG_RTS := $(WINDOWS_DYN_PROG_RTS)_thr
+endif
+ifeq "$(GhcDebugged)" "YES"
+WINDOWS_DYN_PROG_RTS := $(WINDOWS_DYN_PROG_RTS)_debug
+endif
+WINDOWS_DYN_PROG_RTS := $(WINDOWS_DYN_PROG_RTS)_dyn_LIB_NAME
 
 # -----------------------------------------------------------------------------
 # Compilation Flags
@@ -689,7 +698,7 @@ $(shell echo "[]" >$(BOOTSTRAPPING_CONF))
 endif
 endif
 
-$(eval $(call clean-target,$(BOOTSTRAPPING_CONF),,$(BOOTSTRAPPING_CONF)))
+$(eval $(call clean-target,root,bootstrapping_conf,$(BOOTSTRAPPING_CONF)))
 
 # register the boot packages in strict sequence, because running
 # multiple ghc-pkgs in parallel doesn't work (registrations may get

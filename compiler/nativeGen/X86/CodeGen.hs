@@ -1183,7 +1183,6 @@ memConstant align lit = do
   (addr, addr_code) <- if target32Bit (targetPlatform dflags)
                        then do dynRef <- cmmMakeDynamicReference
                                              dflags
-                                             addImportNat
                                              DataReference
                                              lbl
                                Amode addr addr_code <- getAmode dynRef
@@ -1690,7 +1689,7 @@ genCCall is32Bit (PrimTarget (MO_PopCnt width)) dest_regs@[dst]
                          unitOL (POPCNT size (OpReg src_r)
                                  (getRegisterReg platform False (CmmLocal dst))))
         else do
-            targetExpr <- cmmMakeDynamicReference dflags addImportNat
+            targetExpr <- cmmMakeDynamicReference dflags
                           CallReference lbl
             let target = ForeignTarget targetExpr (ForeignConvention CCallConv
                                                            [NoHint] [NoHint]
@@ -1702,7 +1701,7 @@ genCCall is32Bit (PrimTarget (MO_PopCnt width)) dest_regs@[dst]
 
 genCCall is32Bit (PrimTarget (MO_UF_Conv width)) dest_regs args = do
     dflags <- getDynFlags
-    targetExpr <- cmmMakeDynamicReference dflags addImportNat
+    targetExpr <- cmmMakeDynamicReference dflags
                   CallReference lbl
     let target = ForeignTarget targetExpr (ForeignConvention CCallConv
                                            [NoHint] [NoHint]
@@ -2284,7 +2283,7 @@ outOfLineCmmOp :: CallishMachOp -> Maybe CmmFormal -> [CmmActual] -> NatM InstrB
 outOfLineCmmOp mop res args
   = do
       dflags <- getDynFlags
-      targetExpr <- cmmMakeDynamicReference dflags addImportNat CallReference lbl
+      targetExpr <- cmmMakeDynamicReference dflags CallReference lbl
       let target = ForeignTarget targetExpr
                            (ForeignConvention CCallConv [] [] CmmMayReturn)
 
@@ -2364,7 +2363,7 @@ genSwitch dflags expr ids
         (reg,e_code) <- getSomeReg expr
         lbl <- getNewLabelNat
         dflags <- getDynFlags
-        dynRef <- cmmMakeDynamicReference dflags addImportNat DataReference lbl
+        dynRef <- cmmMakeDynamicReference dflags DataReference lbl
         (tableReg,t_code) <- getSomeReg $ dynRef
         let op = OpAddr (AddrBaseIndex (EABaseReg tableReg)
                                        (EAIndex reg (wORD_SIZE dflags)) (ImmInt 0))

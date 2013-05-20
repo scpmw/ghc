@@ -98,8 +98,8 @@ mapAccumLNat f b (x:xs)
 
 getUniqueNat :: NatM Unique
 getUniqueNat = NatM $ \ st ->
-    case takeUniqFromSupply (natm_us st) of
-         (uniq, us') -> (uniq, st { natm_us = us'} )
+    case takeUniqFromSupply $ natm_us st of
+    (uniq, us') -> (uniq, st {natm_us = us'})
 
 instance HasDynFlags NatM where
     getDynFlags = NatM $ \ st -> (natm_dflags st, st)
@@ -109,18 +109,16 @@ getModLoc
         = NatM $ \ st -> (natm_modloc st, st)
 
 getDeltaNat :: NatM Int
-getDeltaNat
-        = NatM $ \ st -> (natm_delta st, st)
+getDeltaNat = NatM $ \ st -> (natm_delta st, st)
 
 
 setDeltaNat :: Int -> NatM ()
-setDeltaNat delta
-        = NatM $ \ st -> ((), st { natm_delta = delta } )
+setDeltaNat delta = NatM $ \ st -> ((), st {natm_delta = delta})
 
 
 addImportNat :: CLabel -> NatM ()
 addImportNat imp
-        = NatM $ \ st -> ((), st { natm_imports = imp : natm_imports st } )
+        = NatM $ \ st -> ((), st {natm_imports = imp : natm_imports st})
 
 
 getBlockIdNat :: NatM BlockId
