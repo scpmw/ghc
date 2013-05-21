@@ -374,7 +374,7 @@ Finally for @hpc@ expressions we introduce a new STG construct.
 \begin{code}
   | StgTick
     (Tickish bndr)
-    (GenStgExpr bndr occ)	-- sub expression
+    (GenStgExpr bndr occ)       -- sub expression
 
 -- END of GenStgExpr
 \end{code}
