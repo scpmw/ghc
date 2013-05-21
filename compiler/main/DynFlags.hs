@@ -359,6 +359,7 @@ data GeneralFlag
    | Opt_ErrorSpans -- Include full span info in error messages,
                     -- instead of just the start position.
    | Opt_PprCaseAsLet
+   | Opt_PprShowTicks
 
    -- Suppress all coercions, them replacing with '...'
    | Opt_SuppressCoercions
@@ -2464,7 +2465,8 @@ dFlags = [
   ( "suppress-idinfo",                  Opt_SuppressIdInfo,             nop),
   ( "suppress-type-signatures",         Opt_SuppressTypeSignatures,     nop),
   ( "suppress-uniques",                 Opt_SuppressUniques,            nop),
-  ( "ppr-case-as-let",                  Opt_PprCaseAsLet,               nop)]
+  ( "ppr-case-as-let",                  Opt_PprCaseAsLet,               nop),
+  ( "ppr-ticks",                        Opt_PprShowTicks,               nop)]
 
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
 fFlags :: [FlagSpec GeneralFlag]
