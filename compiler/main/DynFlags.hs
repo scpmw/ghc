@@ -632,7 +632,7 @@ data DynFlags = DynFlags {
   --    Set by @-ddump-file-prefix@
   dumpPrefixForce       :: Maybe FilePath,
 
-  ldInputs              :: [String],
+  ldInputs              :: [Option],
 
   includePaths          :: [String],
   libraryPaths          :: [String],
@@ -2060,7 +2060,7 @@ dynamic_flags = [
 
         ------- Libraries ---------------------------------------------------
   , Flag "L"   (Prefix addLibraryPath)
-  , Flag "l"   (hasArg (addOptl . ("-l" ++)))
+  , Flag "l"   (hasArg (addLdInputs . Option . ("-l" ++)))
 
         ------- Frameworks --------------------------------------------------
         -- -framework-path should really be -F ...
@@ -3207,6 +3207,9 @@ setMainIs arg
   = upd $ \d -> d{ mainFunIs = Just arg }
   where
     (main_mod, main_fn) = splitLongestPrefix arg (== '.')
+
+addLdInputs :: Option -> DynFlags -> DynFlags
+addLdInputs p dflags = dflags{ldInputs = ldInputs dflags ++ [p]}
 
 -----------------------------------------------------------------------------
 -- Paths & Libraries

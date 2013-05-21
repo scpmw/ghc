@@ -36,7 +36,6 @@ import Name hiding (varName)
 import NameSet
 import NameEnv
 import Avail
-import PrelNames
 import IfaceEnv
 import TcEnv
 import TcRnMonad
@@ -999,8 +998,7 @@ tidyTopBinds :: HscEnv
              -> IO (TidyEnv, CoreProgram)
 
 tidyTopBinds hsc_env this_mod unfold_env init_occ_env binds
-  = do mkIntegerId <- liftM tyThingId
-                    $ initTcForLookup hsc_env (tcLookupGlobal mkIntegerName)
+  = do mkIntegerId <- lookupMkIntegerName dflags hsc_env
        return $ tidy mkIntegerId init_env binds
   where
     dflags = hsc_dflags hsc_env
@@ -1195,7 +1193,20 @@ hasCafRefs dflags this_pkg this_mod p arity expr
   | otherwise               = NoCafRefs
  where
   mentions_cafs = isFastTrue (cafRefsE dflags p expr)
-  is_dynamic_name = isDllName dflags this_pkg this_mod
+  is_dynamic_name n = if gopt Opt_BuildDynamicToo dflags
+                      then -- If we're building the dynamic way too,
+                           -- then we need to check whether it's a
+                           -- dynamic name there too. Note that this
+                           -- means that the vanila code is more
+                           -- pessimistic on Windows when -dynamic-too
+                           -- is used, but the alternative is that
+                           -- -dynamic-too is unusable on Windows
+                           -- as even the interfaces in the integer
+                           -- package don't match.
+                           is_dynamic_name' dflags n ||
+                           is_dynamic_name' (doDynamicToo dflags) n
+                      else is_dynamic_name' dflags n
+  is_dynamic_name' dflags' = isDllName dflags' this_pkg this_mod
   is_caf = not (arity > 0 || rhsIsStatic (targetPlatform dflags) is_dynamic_name expr)
 
   -- NB. we pass in the arity of the expression, which is expected

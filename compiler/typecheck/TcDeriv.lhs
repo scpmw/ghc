@@ -475,7 +475,7 @@ makeDerivSpecs :: Bool
                -> [LDerivDecl Name]
                -> TcM [EarlyDerivSpec]
 makeDerivSpecs is_boot tycl_decls inst_decls deriv_decls
-  = do  { eqns1 <- concatMapM (recoverM (return []) . deriveTyDecl) tycl_decls
+  = do  { eqns1 <- concatMapM (recoverM (return []) . deriveTyDecl)   tycl_decls
         ; eqns2 <- concatMapM (recoverM (return []) . deriveInstDecl) inst_decls
         ; eqns3 <- mapAndRecoverM deriveStandalone deriv_decls
         ; let eqns = eqns1 ++ eqns2 ++ eqns3
@@ -514,13 +514,27 @@ makeDerivSpecs is_boot tycl_decls inst_decls deriv_decls
 
 ------------------------------------------------------------------
 deriveTyDecl :: LTyClDecl Name -> TcM [EarlyDerivSpec]
-deriveTyDecl (L _ decl@(DataDecl { tcdLName = L _ tc_name
-                                 , tcdDataDefn = HsDataDefn { dd_derivs = Just preds } }))
+deriveTyDecl (L _ decl@(DataDecl { tcdLName = L loc tc_name
+                                 , tcdDataDefn = HsDataDefn { dd_derivs = preds } }))
   = tcAddDeclCtxt decl $
     do { tc <- tcLookupTyCon tc_name
-       ; let tvs = tyConTyVars tc
-             tys = mkTyVarTys tvs
-       ; mapM (deriveTyData tvs tc tys) preds }
+       ; let tvs  = tyConTyVars tc
+             tys  = mkTyVarTys tvs
+             pdcs :: [LDerivDecl Name]
+             pdcs = [ L loc (DerivDecl (L loc (HsAppTy (noLoc (HsTyVar typeableClassName))
+                                       (L loc (HsTyVar (tyConName pdc))))))
+                    | Just pdc <- map promoteDataCon_maybe (tyConDataCons tc) ]
+        -- If AutoDeriveTypeable and DataKinds is set, we add Typeable instances
+        -- for every promoted data constructor of datatypes in this module
+       ; isAutoTypeable <- xoptM Opt_AutoDeriveTypeable
+       ; isDataKinds    <- xoptM Opt_DataKinds
+       ; prom_dcs_Typeable_instances <- if isAutoTypeable && isDataKinds
+                                        then mapM deriveStandalone pdcs
+                                        else return []
+       ; other_instances <- case preds of
+                              Just preds' -> mapM (deriveTyData tvs tc tys) preds'
+                              Nothing     -> return []
+       ; return (prom_dcs_Typeable_instances ++ other_instances) }
 
 deriveTyDecl _ = return []
 
@@ -592,9 +606,13 @@ deriveTyData tvs tc tc_args (L loc deriv_pred)
 
                 -- Typeable is special
         ; if className cls == typeableClassName
-          then mkEqnHelp DerivOrigin
-                  tvs cls cls_tys
-                  (mkTyConApp tc (kindVarsOnly tc_args)) Nothing
+          then do {
+        ; dflags <- getDynFlags
+        ; case checkTypeableConditions (dflags, tc, tc_args) of
+               Just err -> failWithTc (derivingThingErr False cls cls_tys
+                                         (mkTyConApp tc tc_args) err)
+               Nothing  -> mkEqnHelp DerivOrigin tvs cls cls_tys
+                             (mkTyConApp tc (kindVarsOnly tc_args)) Nothing }
           else do {
 
         -- Given data T a b c = ... deriving( C d ),
@@ -701,10 +719,8 @@ mkEqnHelp orig tvs cls cls_tys tc_app mtheta
                Nothing  -> mkOldTypeableEqn orig tvs cls tycon tc_args mtheta }
 
       | className cls == typeableClassName
-      = do { dflags <- getDynFlags
-           ; case checkTypeableConditions (dflags, tycon, tc_args) of
-               Just err -> bale_out err
-               Nothing  -> mkPolyKindedTypeableEqn orig tvs cls cls_tys tycon tc_args mtheta }
+      -- We checked for errors before, so we don't need to do that again
+      = mkPolyKindedTypeableEqn orig tvs cls cls_tys tycon tc_args mtheta
 
       | isDataFamilyTyCon tycon
       , length tc_args /= tyConArity tycon
@@ -971,7 +987,7 @@ checkSideConditions dflags mtheta cls cls_tys rep_tc rep_tc_args
     ty_args_why = quotes (ppr (mkClassPred cls cls_tys)) <+> ptext (sLit "is not a class")
 
 checkTypeableConditions, checkOldTypeableConditions :: Condition
-checkTypeableConditions    = checkFlag Opt_DeriveDataTypeable
+checkTypeableConditions    = checkFlag Opt_DeriveDataTypeable `andCond` cond_TypeableOK
 checkOldTypeableConditions = checkFlag Opt_DeriveDataTypeable `andCond` cond_oldTypeableOK
 
 nonStdErr :: Class -> SDoc
@@ -1115,6 +1131,20 @@ cond_oldTypeableOK (_, tc, _)
                ptext (sLit "must have 7 or fewer arguments")
     bad_kind = quotes (pprSourceTyCon tc) <+>
                ptext (sLit "must only have arguments of kind `*'")
+
+cond_TypeableOK :: Condition
+-- Only not ok if it's a data instance
+cond_TypeableOK (_, tc, tc_args)
+  | isDataFamilyTyCon tc && not (null tc_args)
+  = Just no_families
+
+  | otherwise
+  = Nothing
+  where
+    no_families = sep [ ptext (sLit "Deriving Typeable is not allowed for family instances;")
+                      , ptext (sLit "derive Typeable for")
+                          <+> quotes (pprSourceTyCon tc)
+                          <+> ptext (sLit "alone") ]
 
 functorLikeClassKeys :: [Unique]
 functorLikeClassKeys = [functorClassKey, foldableClassKey, traversableClassKey]
