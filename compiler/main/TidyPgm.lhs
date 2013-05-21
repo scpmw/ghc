@@ -1244,7 +1244,6 @@ extractDumpMarkers dflags binds = do
   dumps <- readIORef $ generatedDumps dflags
   let extract binds file = do
         marks <- extractDumpMarkersFile file
-        print marks
         return $ map (annotateMarkers dflags marks file) binds
   foldlM extract binds (elems dumps)
 
