@@ -166,7 +166,7 @@ data LlvmStatement
 
   deriving (Eq)
 
-type MetaData = (LMString, LMMetaInt)
+type MetaData = (LMString, LlvmMetaUnamed)
 
 
 -- | Llvm Expressions

@@ -62,7 +62,7 @@ mkDwarfMeta tag vars =
   let tagVar = LMLitVar $ mkI32 $ fromIntegral lLVMDebugVersion + fromIntegral tag
   in LMMeta (tagVar : vars)
 
-renderMeta :: LMMetaInt -> LlvmLit -> LlvmM ()
+renderMeta :: LlvmMetaUnamed -> LlvmLit -> LlvmM ()
 renderMeta n val = renderLlvm $ pprLlvmData ([global], [])
   where global = LMGlobal (LMMetaUnnamed n) (Just (LMStaticLit val))
 
@@ -182,7 +182,7 @@ cmmMetaLlvmUnit = do
 
   return ()
 
-emitFileMeta :: FastString -> LlvmM LMMetaInt
+emitFileMeta :: FastString -> LlvmM LlvmMetaUnamed
 emitFileMeta filePath = do
 
   -- Already have the file?
@@ -204,7 +204,7 @@ emitFileMeta filePath = do
       return fileId
 
 -- | Generates meta data for a procedure, returning its meta data ID
-cmmMetaLlvmProc :: RawCmmDecl -> LlvmM (LMMetaInt, BlockEnv RawTickish)
+cmmMetaLlvmProc :: RawCmmDecl -> LlvmM (LlvmMetaUnamed, BlockEnv RawTickish)
 cmmMetaLlvmProc proc@(CmmProc infos cmmLabel _ graph) = do
 
   -- Get entry label name
@@ -268,7 +268,7 @@ tickToLoc _ = do mod_loc <- getModLoc
 
 -- | Generates meta data for a block and returns a meta data ID to use
 -- for annnotating statements
-cmmMetaLlvmBlock :: (LMMetaInt, BlockEnv RawTickish) -> CmmBlock -> LlvmM (LMMetaInt, LMMetaInt, LMMetaInt)
+cmmMetaLlvmBlock :: (LlvmMetaUnamed, BlockEnv RawTickish) -> CmmBlock -> LlvmM (LlvmMetaUnamed, LlvmMetaUnamed, LlvmMetaUnamed)
 cmmMetaLlvmBlock (procId, blockTicks) block = do
 
   -- Figure out line information for this tick
@@ -322,7 +322,7 @@ cmmMetaLlvmBlock (procId, blockTicks) block = do
   return (bid, id, vid)
 
 -- | Put debug annotations on a list of statements
-annotateDebug :: LMMetaInt -> [LlvmStatement] -> [LlvmStatement]
+annotateDebug :: LlvmMetaUnamed -> [LlvmStatement] -> [LlvmStatement]
 annotateDebug annotId = map (MetaStmt [(fsLit "dbg", annotId)])
 
 -- | Gives type description as meta data or a reference to an existing
@@ -389,7 +389,7 @@ typeToMeta' ty = case ty of
     , mkI64 (fromIntegral $ n-1)                      -- High value
     ]
 
-genVariableMeta :: LMString -> Maybe Int -> LlvmType -> LMMetaInt -> LlvmM LlvmLit
+genVariableMeta :: LMString -> Maybe Int -> LlvmType -> LlvmMetaUnamed -> LlvmM LlvmLit
 genVariableMeta vname par vty scopeId = do
   tyDesc <- typeToMeta vty
   Just fileId <- getUniqMeta fileN

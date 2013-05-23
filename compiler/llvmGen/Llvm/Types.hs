@@ -11,10 +11,10 @@ module Llvm.Types where
 import Data.Char
 import Data.Int
 import Numeric
-import Outputable
 
 import DynFlags
 import FastString
+import Outputable
 import Unique
 
 -- from NCG
@@ -59,23 +59,23 @@ data LlvmType
   deriving (Eq)
 
 instance Outputable LlvmType where
-  ppr (LMInt size     ) = text "i" <> ppr size
-  ppr (LMFloat        ) = text "float"
-  ppr (LMDouble       ) = text "double"
-  ppr (LMFloat80      ) = text "x86_fp80"
-  ppr (LMFloat128     ) = text "fp128"
-  ppr (LMPointer x    ) = ppr x <> text "*"
-  ppr (LMArray nr tp  ) = text "[" <> ppr nr <> text " x " <> ppr tp <> text "]"
-  ppr (LMVector nr tp ) = char '<' <> ppr nr <> text " x " <> ppr tp <> char '>'
-  ppr (LMLabel        ) = text "label"
-  ppr (LMVoid         ) = text "void"
-  ppr (LMStruct tys   ) = text "<{" <> ppCommaJoin tys <> text "}>"
-  ppr (LMMetaType     ) = text "metadata"
+  ppr (LMInt size     ) = ptext (sLit "i") <> ppr size
+  ppr (LMFloat        ) = ptext (sLit "float")
+  ppr (LMDouble       ) = ptext (sLit "double")
+  ppr (LMFloat80      ) = ptext (sLit "x86_fp80")
+  ppr (LMFloat128     ) = ptext (sLit "fp128")
+  ppr (LMPointer x    ) = ppr x <> ptext (sLit "*")
+  ppr (LMArray nr tp  ) = ptext (sLit "[") <> ppr nr <> ptext (sLit " x ") <> ppr tp <> char ']'
+  ppr (LMVector nr tp ) = char '<' <> ppr nr <> ptext (sLit " x ") <> ppr tp <> char '>'
+  ppr (LMLabel        ) = ptext (sLit "label")
+  ppr (LMVoid         ) = ptext (sLit "void")
+  ppr (LMStruct tys   ) = ptext (sLit "<{") <> ppCommaJoin tys <> ptext (sLit "}>")
+  ppr (LMMetaType     ) = ptext (sLit "metadata")
 
   ppr (LMFunction (LlvmFunctionDecl _ _ _ r varg p _))
     = ppr r <+> lparen <> ppParams varg p <> rparen
 
-  ppr (LMAlias (s,_)) = text "%" <> ftext s
+  ppr (LMAlias (s,_)) = char '%' <> ftext s
 
 ppParams :: LlvmParameterListType -> [LlvmParameter] -> SDoc
 ppParams varg p
@@ -96,7 +96,7 @@ data LMConst = Global      -- ^ Mutable global variable
              | Alias       -- ^ Alias of another variable
              deriving (Eq)
 
-newtype LMMetaInt = LMMetaInt {unLMMetaVar :: Int}
+newtype LlvmMetaUnamed = LMMetaUnamed {unLMMetaVar :: Int}
   deriving (Eq, Num, Outputable, Show)
 
 -- | A value identifying a unique / global meta data node.
@@ -118,7 +118,7 @@ data LlvmVar
   -- | A constant variable
   | LMLitVar LlvmLit
   -- | Metadata
-  | LMMetaUnnamed {-# UNPACK #-} !LMMetaInt
+  | LMMetaUnnamed !LlvmMetaUnamed
   | LMMetaNamed LMString
   deriving (Eq)
 
@@ -149,9 +149,9 @@ data LlvmLit
   -- | Literal metadata string
   | LMMetaString LMString
   -- | Reference to a global metadata node
-  | LMMetaRef {-# UNPACK #-} !LMMetaInt
+  | LMMetaRef !LlvmMetaUnamed
   -- | Collection of metadata references (for named metadata)
-  | LMMetaRefs [LMMetaInt]
+  | LMMetaRefs [LlvmMetaUnamed]
   deriving (Eq)
 
 instance Outputable LlvmLit where
@@ -180,17 +180,17 @@ data LlvmStatic
   | LMSub LlvmStatic LlvmStatic        -- ^ Constant subtraction operation
 
 instance Outputable LlvmStatic where
-  ppr (LMComment       s) = text "; " <> ftext s
+  ppr (LMComment       s) = ptext (sLit "; ") <> ftext s
   ppr (LMStaticLit   l  ) = ppr l
-  ppr (LMUninitType    t) = ppr t <> text " undef"
-  ppr (LMStaticStr   s t) = ppr t <> text " c\"" <> ftext s <> text "\\00\""
-  ppr (LMStaticArray d t) = ppr t <> text " [" <> ppCommaJoin d <> text "]"
-  ppr (LMStaticStruc d t) = ppr t <> text "<{" <> ppCommaJoin d <> text "}>"
+  ppr (LMUninitType    t) = ppr t <> ptext (sLit " undef")
+  ppr (LMStaticStr   s t) = ppr t <> ptext (sLit " c\"") <> ftext s <> ptext (sLit "\\00\"")
+  ppr (LMStaticArray d t) = ppr t <> ptext (sLit " [") <> ppCommaJoin d <> ptext (sLit "]")
+  ppr (LMStaticStruc d t) = ppr t <> ptext (sLit "<{") <> ppCommaJoin d <> ptext (sLit "}>")
   ppr (LMStaticPointer v) = ppr v
   ppr (LMBitc v t)
-      = ppr t <> text " bitcast (" <> ppr v <> text " to " <> ppr t <> text ")"
+      = ppr t <> ptext (sLit " bitcast (") <> ppr v <> ptext (sLit " to ") <> ppr t <> char ')'
   ppr (LMPtoI v t)
-      = ppr t <> text " ptrtoint (" <> ppr v <> text " to " <> ppr t <> text ")"
+      = ppr t <> ptext (sLit " ptrtoint (") <> ppr v <> ptext (sLit " to ") <> ppr t <> char ')'
 
   ppr (LMAdd s1 s2)
       = pprStaticArith s1 s2 (sLit "add") (sLit "fadd") "LMAdd"
@@ -242,12 +242,12 @@ ppLit (LMFloatLit r LMDouble)  = ppDouble r
 ppLit f@(LMFloatLit _ _)       = sdocWithDynFlags (\dflags ->
                                    error $ "Can't print this float literal!" ++ showSDoc dflags (ppr f))
 ppLit (LMVectorLit ls  )       = char '<' <+> ppCommaJoin ls <+> char '>'
-ppLit (LMNullLit _     )       = text "null"
-ppLit (LMUndefLit _    )       = text "undef"
-ppLit (LMMeta ls)              = text "!{" <> ppCommaJoin ls <> text "}"
-ppLit (LMMetaString str)       = text "!\"" <> ftext str <> text "\""
-ppLit (LMMetaRef n)            = text "!" <> ppr n
-ppLit (LMMetaRefs ns)          = text "!{" <> hsep (punctuate comma (map (\n -> char '!' <> ppr n) ns)) <> char '}'
+ppLit (LMNullLit _     )       = ptext (sLit "null")
+ppLit (LMUndefLit _    )       = ptext (sLit "undef")
+ppLit (LMMeta ls)              = ptext (sLit "!{") <> ppCommaJoin ls <> ptext (sLit "}")
+ppLit (LMMetaString str)       = ptext (sLit "!\"") <> ftext str <> ptext (sLit "\"")
+ppLit (LMMetaRef n)            = ptext (sLit "!") <> ppr n
+ppLit (LMMetaRefs ns)          = ptext (sLit "!{") <> hsep (punctuate comma (map (\n -> char '!' <> ppr n) ns)) <> char '}'
 
 -- | Return the 'LlvmType' of the 'LlvmVar'
 getVarType :: LlvmVar -> LlvmType
@@ -415,7 +415,7 @@ data LlvmFunctionDecl = LlvmFunctionDecl {
 instance Outputable LlvmFunctionDecl where
   ppr (LlvmFunctionDecl n l c r varg p a)
     = let align = case a of
-                       Just a' -> text " align " <> ppr a'
+                       Just a' -> ptext (sLit " align ") <> ppr a'
                        Nothing -> empty
       in ppr l <+> ppr c <+> ppr r <+> char '@' <> ftext n <>
              lparen <> ppParams varg p <> rparen <> align
@@ -460,14 +460,14 @@ data LlvmParamAttr
   deriving (Eq)
 
 instance Outputable LlvmParamAttr where
-  ppr ZeroExt   = text "zeroext"
-  ppr SignExt   = text "signext"
-  ppr InReg     = text "inreg"
-  ppr ByVal     = text "byval"
-  ppr SRet      = text "sret"
-  ppr NoAlias   = text "noalias"
-  ppr NoCapture = text "nocapture"
-  ppr Nest      = text "nest"
+  ppr ZeroExt   = ptext (sLit "zeroext")
+  ppr SignExt   = ptext (sLit "signext")
+  ppr InReg     = ptext (sLit "inreg")
+  ppr ByVal     = ptext (sLit "byval")
+  ppr SRet      = ptext (sLit "sret")
+  ppr NoAlias   = ptext (sLit "noalias")
+  ppr NoCapture = ptext (sLit "nocapture")
+  ppr Nest      = ptext (sLit "nest")
 
 -- | Llvm Function Attributes.
 --
@@ -548,19 +548,19 @@ data LlvmFuncAttr
   deriving (Eq)
 
 instance Outputable LlvmFuncAttr where
-  ppr AlwaysInline       = text "alwaysinline"
-  ppr InlineHint         = text "inlinehint"
-  ppr NoInline           = text "noinline"
-  ppr OptSize            = text "optsize"
-  ppr NoReturn           = text "noreturn"
-  ppr NoUnwind           = text "nounwind"
-  ppr ReadNone           = text "readnon"
-  ppr ReadOnly           = text "readonly"
-  ppr Ssp                = text "ssp"
-  ppr SspReq             = text "ssqreq"
-  ppr NoRedZone          = text "noredzone"
-  ppr NoImplicitFloat    = text "noimplicitfloat"
-  ppr Naked              = text "naked"
+  ppr AlwaysInline       = ptext (sLit "alwaysinline")
+  ppr InlineHint         = ptext (sLit "inlinehint")
+  ppr NoInline           = ptext (sLit "noinline")
+  ppr OptSize            = ptext (sLit "optsize")
+  ppr NoReturn           = ptext (sLit "noreturn")
+  ppr NoUnwind           = ptext (sLit "nounwind")
+  ppr ReadNone           = ptext (sLit "readnon")
+  ppr ReadOnly           = ptext (sLit "readonly")
+  ppr Ssp                = ptext (sLit "ssp")
+  ppr SspReq             = ptext (sLit "ssqreq")
+  ppr NoRedZone          = ptext (sLit "noredzone")
+  ppr NoImplicitFloat    = ptext (sLit "noimplicitfloat")
+  ppr Naked              = ptext (sLit "naked")
 
 
 -- | Different types to call a function.
@@ -606,11 +606,11 @@ data LlvmCallConvention
   deriving (Eq)
 
 instance Outputable LlvmCallConvention where
-  ppr CC_Ccc       = text "ccc"
-  ppr CC_Fastcc    = text "fastcc"
-  ppr CC_Coldcc    = text "coldcc"
-  ppr (CC_Ncc i)   = text "cc " <> ppr i
-  ppr CC_X86_Stdcc = text "x86_stdcallcc"
+  ppr CC_Ccc       = ptext (sLit "ccc")
+  ppr CC_Fastcc    = ptext (sLit "fastcc")
+  ppr CC_Coldcc    = ptext (sLit "coldcc")
+  ppr (CC_Ncc i)   = ptext (sLit "cc ") <> ppr i
+  ppr CC_X86_Stdcc = ptext (sLit "x86_stdcallcc")
 
 
 -- | Functions can have a fixed amount of parameters, or a variable amount.
@@ -667,16 +667,16 @@ data LlvmLinkageType
   deriving (Eq)
 
 instance Outputable LlvmLinkageType where
-  ppr Internal          = text "internal"
-  ppr LinkOnce          = text "linkonce"
-  ppr Weak              = text "weak"
-  ppr Appending         = text "appending"
-  ppr ExternWeak        = text "extern_weak"
+  ppr Internal          = ptext (sLit "internal")
+  ppr LinkOnce          = ptext (sLit "linkonce")
+  ppr Weak              = ptext (sLit "weak")
+  ppr Appending         = ptext (sLit "appending")
+  ppr ExternWeak        = ptext (sLit "extern_weak")
   -- ExternallyVisible does not have a textual representation, it is
   -- the linkage type a function resolves to if no other is specified
   -- in Llvm.
-  ppr ExternallyVisible = text ""
-  ppr External          = text "external"
+  ppr ExternallyVisible = empty
+  ppr External          = ptext (sLit "external")
 
 
 -- -----------------------------------------------------------------------------
@@ -715,24 +715,24 @@ data LlvmMachOp
   deriving (Eq)
 
 instance Outputable LlvmMachOp where
-  ppr LM_MO_Add  = text "add"
-  ppr LM_MO_Sub  = text "sub"
-  ppr LM_MO_Mul  = text "mul"
-  ppr LM_MO_UDiv = text "udiv"
-  ppr LM_MO_SDiv = text "sdiv"
-  ppr LM_MO_URem = text "urem"
-  ppr LM_MO_SRem = text "srem"
-  ppr LM_MO_FAdd = text "fadd"
-  ppr LM_MO_FSub = text "fsub"
-  ppr LM_MO_FMul = text "fmul"
-  ppr LM_MO_FDiv = text "fdiv"
-  ppr LM_MO_FRem = text "frem"
-  ppr LM_MO_Shl  = text "shl"
-  ppr LM_MO_LShr = text "lshr"
-  ppr LM_MO_AShr = text "ashr"
-  ppr LM_MO_And  = text "and"
-  ppr LM_MO_Or   = text "or"
-  ppr LM_MO_Xor  = text "xor"
+  ppr LM_MO_Add  = ptext (sLit "add")
+  ppr LM_MO_Sub  = ptext (sLit "sub")
+  ppr LM_MO_Mul  = ptext (sLit "mul")
+  ppr LM_MO_UDiv = ptext (sLit "udiv")
+  ppr LM_MO_SDiv = ptext (sLit "sdiv")
+  ppr LM_MO_URem = ptext (sLit "urem")
+  ppr LM_MO_SRem = ptext (sLit "srem")
+  ppr LM_MO_FAdd = ptext (sLit "fadd")
+  ppr LM_MO_FSub = ptext (sLit "fsub")
+  ppr LM_MO_FMul = ptext (sLit "fmul")
+  ppr LM_MO_FDiv = ptext (sLit "fdiv")
+  ppr LM_MO_FRem = ptext (sLit "frem")
+  ppr LM_MO_Shl  = ptext (sLit "shl")
+  ppr LM_MO_LShr = ptext (sLit "lshr")
+  ppr LM_MO_AShr = ptext (sLit "ashr")
+  ppr LM_MO_And  = ptext (sLit "and")
+  ppr LM_MO_Or   = ptext (sLit "or")
+  ppr LM_MO_Xor  = ptext (sLit "xor")
 
 
 -- | Llvm compare operations.
@@ -759,22 +759,22 @@ data LlvmCmpOp
   deriving (Eq)
 
 instance Outputable LlvmCmpOp where
-  ppr LM_CMP_Eq  = text "eq"
-  ppr LM_CMP_Ne  = text "ne"
-  ppr LM_CMP_Ugt = text "ugt"
-  ppr LM_CMP_Uge = text "uge"
-  ppr LM_CMP_Ult = text "ult"
-  ppr LM_CMP_Ule = text "ule"
-  ppr LM_CMP_Sgt = text "sgt"
-  ppr LM_CMP_Sge = text "sge"
-  ppr LM_CMP_Slt = text "slt"
-  ppr LM_CMP_Sle = text "sle"
-  ppr LM_CMP_Feq = text "oeq"
-  ppr LM_CMP_Fne = text "une"
-  ppr LM_CMP_Fgt = text "ogt"
-  ppr LM_CMP_Fge = text "oge"
-  ppr LM_CMP_Flt = text "olt"
-  ppr LM_CMP_Fle = text "ole"
+  ppr LM_CMP_Eq  = ptext (sLit "eq")
+  ppr LM_CMP_Ne  = ptext (sLit "ne")
+  ppr LM_CMP_Ugt = ptext (sLit "ugt")
+  ppr LM_CMP_Uge = ptext (sLit "uge")
+  ppr LM_CMP_Ult = ptext (sLit "ult")
+  ppr LM_CMP_Ule = ptext (sLit "ule")
+  ppr LM_CMP_Sgt = ptext (sLit "sgt")
+  ppr LM_CMP_Sge = ptext (sLit "sge")
+  ppr LM_CMP_Slt = ptext (sLit "slt")
+  ppr LM_CMP_Sle = ptext (sLit "sle")
+  ppr LM_CMP_Feq = ptext (sLit "oeq")
+  ppr LM_CMP_Fne = ptext (sLit "une")
+  ppr LM_CMP_Fgt = ptext (sLit "ogt")
+  ppr LM_CMP_Fge = ptext (sLit "oge")
+  ppr LM_CMP_Flt = ptext (sLit "olt")
+  ppr LM_CMP_Fle = ptext (sLit "ole")
 
 
 -- | Llvm cast operations.
@@ -794,18 +794,18 @@ data LlvmCastOp
   deriving (Eq)
 
 instance Outputable LlvmCastOp where
-  ppr LM_Trunc    = text "trunc"
-  ppr LM_Zext     = text "zext"
-  ppr LM_Sext     = text "sext"
-  ppr LM_Fptrunc  = text "fptrunc"
-  ppr LM_Fpext    = text "fpext"
-  ppr LM_Fptoui   = text "fptoui"
-  ppr LM_Fptosi   = text "fptosi"
-  ppr LM_Uitofp   = text "uitofp"
-  ppr LM_Sitofp   = text "sitofp"
-  ppr LM_Ptrtoint = text "ptrtoint"
-  ppr LM_Inttoptr = text "inttoptr"
-  ppr LM_Bitcast  = text "bitcast"
+  ppr LM_Trunc    = ptext (sLit "trunc")
+  ppr LM_Zext     = ptext (sLit "zext")
+  ppr LM_Sext     = ptext (sLit "sext")
+  ppr LM_Fptrunc  = ptext (sLit "fptrunc")
+  ppr LM_Fpext    = ptext (sLit "fpext")
+  ppr LM_Fptoui   = ptext (sLit "fptoui")
+  ppr LM_Fptosi   = ptext (sLit "fptosi")
+  ppr LM_Uitofp   = ptext (sLit "uitofp")
+  ppr LM_Sitofp   = ptext (sLit "sitofp")
+  ppr LM_Ptrtoint = ptext (sLit "ptrtoint")
+  ppr LM_Inttoptr = ptext (sLit "inttoptr")
+  ppr LM_Bitcast  = ptext (sLit "bitcast")
 
 
 -- -----------------------------------------------------------------------------
@@ -827,7 +827,7 @@ ppDouble d
                      _     -> error "dToStr: too many hex digits for float"
 
         str  = map toUpper $ concat $ fixEndian $ map hex bs
-    in  text "0x" <> hcat (map char str)
+    in  ptext (sLit "0x") <> text str
 
 -- Note [LLVM Float Types]
 -- ~~~~~~~~~~~~~~~~~~~~~~~

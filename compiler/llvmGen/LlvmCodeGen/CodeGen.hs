@@ -60,7 +60,7 @@ genLlvmProc _ = panic "genLlvmProc: case that shouldn't reach here!"
 -- | Generate code for a list of blocks that make up a complete
 -- procedure. The first block in the list is exepected to be the entry
 -- point and will get the prologue.
-basicBlocksCodeGen :: LiveGlobalRegs -> (LMMetaInt, BlockEnv RawTickish) -> [CmmBlock]
+basicBlocksCodeGen :: LiveGlobalRegs -> (LlvmMetaUnamed, BlockEnv RawTickish) -> [CmmBlock]
                       -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
 basicBlocksCodeGen _    _    []                     = panic "no entry block!"
 basicBlocksCodeGen live meta (entryBlock:cmmBlocks)
@@ -81,7 +81,7 @@ basicBlocksCodeGen live meta (entryBlock:cmmBlocks)
 
 
 -- | Generate code for one block
-basicBlockCodeGen :: (LMMetaInt, LMMetaInt, LMMetaInt)
+basicBlockCodeGen :: (LlvmMetaUnamed, LlvmMetaUnamed, LlvmMetaUnamed)
                   -> CmmBlock
                   -> LlvmM ( LlvmBasicBlock, [LlvmCmmDecl] )
 basicBlockCodeGen (_,annotId,varId) block
@@ -1487,7 +1487,7 @@ genLit _ CmmHighStackMark
 -- question is never written. Therefore we skip it where we can to
 -- save a few lines in the output and hopefully speed compilation up a
 -- bit.
-funPrologue :: LiveGlobalRegs -> [CmmBlock] -> LMMetaInt -> LlvmM StmtData
+funPrologue :: LiveGlobalRegs -> [CmmBlock] -> LlvmMetaUnamed -> LlvmM StmtData
 funPrologue live cmmBlocks scopeId = do
 
   trash <- trashRegs
@@ -1528,7 +1528,7 @@ funPrologue live cmmBlocks scopeId = do
 
 
 -- | Declares the value of a register as a variable in debugging data
-debugDeclareRegister :: CmmReg -> LMString -> LMMetaInt -> LlvmM StmtData
+debugDeclareRegister :: CmmReg -> LMString -> LlvmMetaUnamed -> LlvmM StmtData
 debugDeclareRegister reg rname scopeId = do
 
   -- Check whether register is on stack or as value. Declare
@@ -1596,7 +1596,7 @@ funEpilogue live = do
     return (catMaybes vars, concatOL stmts)
 
 -- | Block prologue.
-blockPrologue :: LMMetaInt -> LlvmM StmtData
+blockPrologue :: LlvmMetaUnamed -> LlvmM StmtData
 blockPrologue varId = do
   -- Declare block marker variable
   debugDeclareValue (LMMetaRef varId) (LMLitVar (LMIntLit 0 i8))

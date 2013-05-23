@@ -212,10 +212,10 @@ data LlvmEnv = LlvmEnv
   , envModLoc :: ModLocation
   , envOutput :: BufHandle
   , envUniq :: UniqSupply
-  , envFreshMeta :: LMMetaInt
-  , envUniqMeta :: UniqFM LMMetaInt
-  , envFileMeta :: UniqFM LMMetaInt
-  , envProcMeta :: [LMMetaInt]
+  , envFreshMeta :: LlvmMetaUnamed
+  , envUniqMeta :: UniqFM LlvmMetaUnamed
+  , envFileMeta :: UniqFM LlvmMetaUnamed
+  , envProcMeta :: [LlvmMetaUnamed]
   , envNextSection :: Int
   , envDebug :: [DebugBlock]
   }
@@ -303,7 +303,7 @@ checkStackReg :: GlobalReg -> LlvmM Bool
 checkStackReg r = getEnv ((elem r) . envStackRegs)
 
 -- | Allocate a new global unnamed metadata identifier
-getMetaUniqueId :: LlvmM LMMetaInt
+getMetaUniqueId :: LlvmM LlvmMetaUnamed
 getMetaUniqueId = LlvmM $ \env -> return (envFreshMeta env, env { envFreshMeta = envFreshMeta env + 1})
 
 -- | Get the LLVM version we are generating code for
@@ -350,24 +350,24 @@ delayType :: LMString -> LlvmM ()
 delayType lbl = modifyEnv $ \env -> env { envDelayedTypes = addOneToUniqSet (envDelayedTypes env) lbl }
 
 -- | Sets metadata node for a given unique string
-setUniqMeta :: LMMetaUnique -> LMMetaInt -> LlvmM ()
+setUniqMeta :: LMMetaUnique -> LlvmMetaUnamed -> LlvmM ()
 setUniqMeta f m = modifyEnv $ \env -> env { envUniqMeta = addToUFM (envUniqMeta env) f m }
 -- | Gets metadata node for given unique string
-getUniqMeta :: LMMetaUnique -> LlvmM (Maybe LMMetaInt)
+getUniqMeta :: LMMetaUnique -> LlvmM (Maybe LlvmMetaUnamed)
 getUniqMeta s = getEnv (flip lookupUFM s . envUniqMeta)
 
 -- | Allocates a metadata node for given file
-setFileMeta :: LMString -> LMMetaInt -> LlvmM ()
+setFileMeta :: LMString -> LlvmMetaUnamed -> LlvmM ()
 setFileMeta f m = modifyEnv $ \env -> env { envFileMeta = addToUFM (envFileMeta env) f m }
 -- | Gets metadata node for given file (if any)
-getFileMeta :: LMString -> LlvmM (Maybe LMMetaInt)
+getFileMeta :: LMString -> LlvmM (Maybe LlvmMetaUnamed)
 getFileMeta s = getEnv (flip lookupUFM s . envFileMeta)
 
 -- | Sets metadata node for given procedure
-addProcMeta :: LMMetaInt -> LlvmM ()
+addProcMeta :: LlvmMetaUnamed -> LlvmM ()
 addProcMeta m = modifyEnv $ \env -> env { envProcMeta = m:envProcMeta env }
 -- | Returns all procedure meta data IDs
-getProcMetaIds :: LlvmM [LMMetaInt]
+getProcMetaIds :: LlvmM [LlvmMetaUnamed]
 getProcMetaIds = getEnv (reverse . envProcMeta)
 
 -- | Returns a fresh section ID
