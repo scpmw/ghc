@@ -824,6 +824,7 @@ error = rtsTrue;
                 default:
                     RtsFlags.PerfEventFlags.sampleType = PERF_EVENT_SAMPLE_BY_CYCLE;
                 }
+                break;
 #endif
 #endif
 

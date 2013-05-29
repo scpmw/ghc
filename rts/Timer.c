@@ -95,7 +95,7 @@ handle_tick(int unused STG_UNUSED)
 #endif
 #ifdef USE_PERF_EVENTS
   if(RtsFlags.PerfEventFlags.sampleType) {
-	  papi_timer();
+	  perf_event_timer();
   }
 #endif
 #endif
