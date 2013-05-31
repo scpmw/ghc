@@ -4,7 +4,7 @@
 --
 
 {-# LANGUAGE GADTs #-}
-module LlvmCodeGen.CodeGen ( genLlvmProc, trashRegs ) where
+module LlvmCodeGen.CodeGen ( genLlvmProc, getTrashRegs ) where
 
 #include "HsVersions.h"
 
@@ -220,7 +220,9 @@ genCall (PrimTarget (MO_UF_Conv _)) [_] args =
 
 -- Handle prefetching data
 genCall t@(PrimTarget MO_Prefetch_Data) [] args = do
-    let argTy = [i8Ptr, i32, i32, i32]
+    ver <- getLlvmVer
+    let argTy | ver <= 29  = [i8Ptr, i32, i32]
+              | otherwise  = [i8Ptr, i32, i32, i32]
         funTy = \name -> LMFunction $ LlvmFunctionDecl name ExternallyVisible
                              CC_Ccc LMVoid FixedArgs (tysToParams argTy) Nothing
 
@@ -230,9 +232,10 @@ genCall t@(PrimTarget MO_Prefetch_Data) [] args = do
     (fptr, stmts2, top2)    <- getFunPtr funTy t
     (argVars', stmts3)      <- castVars $ zip argVars argTy
 
-    trash <- trashStmts
-    let arguments = argVars' ++ [mkIntLit i32 0, mkIntLit i32 3, mkIntLit i32 1]
-        call = Expr $ Call StdCall fptr arguments []
+    trash <- getTrashStmts
+    let argSuffix | ver <= 29  = [mkIntLit i32 0, mkIntLit i32 3]
+                  | otherwise  = [mkIntLit i32 0, mkIntLit i32 3, mkIntLit i32 1]
+        call = Expr $ Call StdCall fptr (argVars' ++ argSuffix) []
         stmts = stmts1 `appOL` stmts2 `appOL` stmts3
                 `appOL` trash `snocOL` call
     return (stmts, top1 ++ top2)
@@ -285,7 +288,7 @@ genCall t@(PrimTarget op) [] args'
     (fptr, stmts2, top2)          <- getFunPtr funTy t
     (argVars', stmts3)            <- castVars $ zip argVars argTy
 
-    stmts4 <- trashStmts
+    stmts4 <- getTrashStmts
     let arguments = argVars' ++ (alignVal:isVolVal)
         call = Expr $ Call StdCall fptr arguments []
         stmts = stmts1 `appOL` stmts2 `appOL` stmts3
@@ -368,7 +371,7 @@ genCall target res args = do
                 | never_returns     = unitOL $ Unreachable
                 | otherwise         = nilOL
 
-    stmts3 <- trashStmts
+    stmts3 <- getTrashStmts
     let stmts = stmts1 `appOL` stmts2 `appOL` stmts3
 
     -- make the actual call
@@ -1490,7 +1493,7 @@ genLit _ CmmHighStackMark
 funPrologue :: LiveGlobalRegs -> [CmmBlock] -> LlvmMetaUnamed -> LlvmM StmtData
 funPrologue live cmmBlocks scopeId = do
 
-  trash <- trashRegs
+  trash <- getTrashRegs
   let getAssignedRegs :: CmmNode O O -> [CmmReg]
       getAssignedRegs (CmmAssign reg _)  = [reg]
       -- Calls will trash all registers. Unfortunately, this needs them to
@@ -1612,18 +1615,18 @@ blockPrologue varId = do
 -- before the call by assigning the 'undef' value to them. The ones we
 -- need are restored from the Cmm local var and the ones we don't need
 -- are fine to be trashed.
-trashStmts :: LlvmM LlvmStatements
-trashStmts = do
-  regs <- trashRegs
+getTrashStmts :: LlvmM LlvmStatements
+getTrashStmts = do
+  regs <- getTrashRegs
   stmts <- flip mapM regs $ \ r -> do
     reg <- getCmmReg (CmmGlobal r)
     let ty = (pLower . getVarType) reg
     return $ Store (LMLitVar $ LMUndefLit ty) reg
   return $ toOL stmts
 
-trashRegs :: LlvmM [GlobalReg]
-trashRegs = do plat <- getLlvmPlatform
-               return $ filter (callerSaves plat) (activeStgRegs plat)
+getTrashRegs :: LlvmM [GlobalReg]
+getTrashRegs = do plat <- getLlvmPlatform
+                  return $ filter (callerSaves plat) (activeStgRegs plat)
 
 -- | Get a function pointer to the CLabel specified.
 --

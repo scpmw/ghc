@@ -167,7 +167,7 @@ ppLlvmBlock :: LlvmBlock -> SDoc
 ppLlvmBlock (LlvmBlock blockId stmts) =
   let isLabel (MkLabel _) = True
       isLabel _           = False
-      (block, rest)        = break isLabel stmts
+      (block, rest)       = break isLabel stmts
       ppRest = case rest of
         MkLabel id:xs -> ppLlvmBlock (LlvmBlock id xs)
         _             -> empty

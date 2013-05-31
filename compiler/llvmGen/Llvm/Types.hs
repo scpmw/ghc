@@ -664,6 +664,8 @@ data LlvmLinkageType
   -- | Alias for 'ExternallyVisible' but with explicit textual form in LLVM
   --  assembly.
   | External
+  -- | Symbol is private to the module and should not appear in the symbol table
+  | Private
   deriving (Eq)
 
 instance Outputable LlvmLinkageType where
@@ -677,7 +679,7 @@ instance Outputable LlvmLinkageType where
   -- in Llvm.
   ppr ExternallyVisible = empty
   ppr External          = ptext (sLit "external")
-
+  ppr Private           = ptext (sLit "private")
 
 -- -----------------------------------------------------------------------------
 -- * LLVM Operations

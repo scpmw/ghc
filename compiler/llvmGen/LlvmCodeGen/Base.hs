@@ -205,7 +205,7 @@ data LlvmEnv = LlvmEnv
   , envVarMap :: LlvmEnvMap
   , envStackRegs :: [GlobalReg]
   , envUsedVars :: [LlvmVar]
-  , envDelayedTypes :: UniqSet LMString
+  , envAliases :: UniqSet LMString
   , envLabelMap :: [(CLabel, CLabel)]
   , envVersion :: LlvmVersion
   , envDynFlags :: DynFlags
@@ -247,7 +247,7 @@ runLlvm dflags mod_loc ver out us m = do
                       , envVarMap = emptyUFM
                       , envStackRegs = []
                       , envUsedVars = []
-                      , envDelayedTypes = emptyUniqSet
+                      , envAliases = emptyUniqSet
                       , envLabelMap = []
                       , envVersion = ver
                       , envDynFlags = dflags
@@ -346,8 +346,8 @@ getUsedVars = getEnv envUsedVars
 
 -- | Saves that at some point we didn't know the type of the label and
 -- generated a reference to a type variable instead
-delayType :: LMString -> LlvmM ()
-delayType lbl = modifyEnv $ \env -> env { envDelayedTypes = addOneToUniqSet (envDelayedTypes env) lbl }
+saveAlias :: LMString -> LlvmM ()
+saveAlias lbl = modifyEnv $ \env -> env { envAliases = addOneToUniqSet (envAliases env) lbl }
 
 -- | Sets metadata node for a given unique string
 setUniqMeta :: LMMetaUnique -> LlvmMetaUnamed -> LlvmM ()
@@ -455,56 +455,50 @@ strProcedureName_llvm lbl = do
 -- * Global variables / forward references
 --
 
--- | Create/get a pointer to a static value. The value type might be
--- an undefined forward type alias if the value in question hasn't
--- been defined yet.
+-- | Create/get a pointer to a global value. Might return an alias if
+-- the value in question hasn't been defined yet. We especially make
+-- no guarantees on the type of the returned pointer.
 getGlobalPtr :: LMString -> LlvmM LlvmVar
 getGlobalPtr llvmLbl = do
   m_ty <- funLookup llvmLbl
-  let mkGlbVar lbl ty = LMGlobalVar lbl (LMPointer ty) ExternallyVisible Nothing Nothing
+  let mkGlbVar lbl ty = LMGlobalVar lbl (LMPointer ty) Private Nothing Nothing
   case m_ty of
     -- Directly reference if we have seen it already
     Just ty -> return $ mkGlbVar llvmLbl ty Global
-    -- Otherwise reference a forward alias of it
+    -- Otherwise use a forward alias of it
     Nothing -> do
-      delayType llvmLbl
-      return $ mkGlbVar
-        (llvmLbl `appendFS` fsLit "$alias")
-        (LMAlias (llvmLbl `appendFS` fsLit "$type", undefined))
-        Alias
+      saveAlias llvmLbl
+      return $ mkGlbVar (llvmLbl `appendFS` fsLit "$alias") i8 Alias
 
--- | Generate aliases for references that were created while compiling.
+-- | Generate definitions for aliases forward-referenced by @getGlobalPtr@.
+--
+-- Must be called at a point where we are sure that no new global definitions
+-- will be generated anymore!
 generateAliases :: LlvmM ([LMGlobal], [LlvmType])
 generateAliases = do
-  delayed <- getEnv (uniqSetToList . envDelayedTypes)
-  dflags <- getDynFlags
+  delayed <- fmap uniqSetToList $ getEnv envAliases
   defss <- flip mapM delayed $ \lbl -> do
-    -- Defined by now?
+    let var      ty = LMGlobalVar lbl (LMPointer ty) External Nothing Nothing Global
+        aliasLbl    = lbl `appendFS` fsLit "$alias"
+        aliasVar    = LMGlobalVar aliasLbl i8Ptr Private Nothing Nothing Alias
+    -- If we have a definition, set the alias value using a
+    -- cost. Otherwise, declare it as an undefined external symbol.
     m_ty <- funLookup lbl
-    let mkVar ty link = LMGlobalVar lbl (LMPointer ty) link Nothing Nothing Global
-        (defs, ty, var, link) = case m_ty of
-          Just ty -> ([], ty, mkVar ty ExternallyVisible, Internal)
-          Nothing -> let ty = LMArray 0 (llvmWord dflags)
-                         var = mkVar ty External
-                     in ([LMGlobal var Nothing], ty, var, External)
-        aliasLbl = lbl `appendFS` fsLit "$alias"
-        tyLbl = lbl `appendFS` fsLit "$type"
-        -- See note [Alias Linkage]
-        aliasVar = LMGlobalVar aliasLbl (LMPointer ty) link Nothing Nothing Alias
-    return ((LMGlobal aliasVar $ Just $ LMStaticPointer var) : defs,
-            LMAlias (tyLbl, ty)
-            )
+    case m_ty of
+      Just ty -> return [LMGlobal aliasVar $ Just $ LMBitc (LMStaticPointer (var ty)) i8Ptr]
+      Nothing -> return [LMGlobal (var i8) Nothing,
+                         LMGlobal aliasVar $ Just $ LMStaticPointer (var i8) ]
   -- Reset forward list
-  modifyEnv $ \env -> env { envDelayedTypes = emptyUniqSet }
-  let (gss, ts) = unzip defss
-  return (concat gss, ts)
+  modifyEnv $ \env -> env { envAliases = emptyUniqSet }
+  return (concat defss, [])
 
 -- Note [Llvm Forward References]
 --
--- The big issue here is that we might want to refer to values that haven't
--- been defined by this point in the compilation process - and we can't
--- really wait or the whole streaming wouldn't make sense. And after all, LLVM
--- plays really well with forward references, so why not use that?
+-- The issue here is that LLVM insists on being strongly typed at
+-- every corner, so the first time we mention something, we have to
+-- settle what type we assign to it. That makes things awkward, as Cmm
+-- will often reference things before their definition, and we have no
+-- idea what (LLVM) type it is going to be before that point.
 --
 -- Well, the problem is that LLVM is strongly typed, so we positively can't
 -- refer to something of which we don't know the type. Sadly, CMM also doesn't
