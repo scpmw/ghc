@@ -835,7 +835,8 @@ dffvLetBndr vanilla_unfold id
             -- but I've seen cases where we had a wrapper id $w but a
             -- rhs where $w had been inlined; see Trac #3922
 
-    go_unf (DFunUnfolding _ _ args) = mapM_ dffvExpr (dfunArgExprs args)
+    go_unf (DFunUnfolding { df_bndrs = bndrs, df_args = args }) 
+             = extendScopeList bndrs $ mapM_ dffvExpr args
     go_unf _ = return ()
 
     go_rule (BuiltinRule {}) = return ()
@@ -1193,20 +1194,7 @@ hasCafRefs dflags this_pkg this_mod p arity expr
   | otherwise               = NoCafRefs
  where
   mentions_cafs = isFastTrue (cafRefsE dflags p expr)
-  is_dynamic_name n = if gopt Opt_BuildDynamicToo dflags
-                      then -- If we're building the dynamic way too,
-                           -- then we need to check whether it's a
-                           -- dynamic name there too. Note that this
-                           -- means that the vanila code is more
-                           -- pessimistic on Windows when -dynamic-too
-                           -- is used, but the alternative is that
-                           -- -dynamic-too is unusable on Windows
-                           -- as even the interfaces in the integer
-                           -- package don't match.
-                           is_dynamic_name' dflags n ||
-                           is_dynamic_name' (doDynamicToo dflags) n
-                      else is_dynamic_name' dflags n
-  is_dynamic_name' dflags' = isDllName dflags' this_pkg this_mod
+  is_dynamic_name = isDllName dflags this_pkg this_mod
   is_caf = not (arity > 0 || rhsIsStatic (targetPlatform dflags) is_dynamic_name expr)
 
   -- NB. we pass in the arity of the expression, which is expected
