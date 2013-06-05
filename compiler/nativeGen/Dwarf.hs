@@ -31,17 +31,20 @@ dwarfGen :: DynFlags -> ModLocation -> UniqSupply -> [DebugBlock]
             -> IO (SDoc, UniqSupply)
 dwarfGen df modLoc us blocks = do
 
-  -- Convert debug data structures to DWARF
-  let toDwarf DebugBlock { dblProcedure=pr, dblLabel=lbl, dblCLabel=clbl, dblBlocks=childs }
+  -- Convert debug data structures to DWARF info records
+  let toDwarf DebugBlock { dblProcedure=pr, dblLabel=lbl, dblCLabel=clbl, dblSourceTick=src,
+                           dblBlocks=childs }
         | pr
         = DwarfSubprogram { dwChildren = dwarfChilds
-                          , dwName = showSDocDump df (ppr lbl)
-                          , dwLabel = clbl
+                          , dwName     = case src of
+                               Just s@SourceNote{} -> sourceName s
+                               _otherwise          -> showSDocDump df (ppr lbl)
+                          , dwLabel    = clbl
                           }
         | otherwise
         =  DwarfBlock { dwChildren = dwarfChilds
-                      , dwLabel = blockLbl lbl
-                      , dwMarker = mkAsmTempLabel lbl
+                      , dwLabel    = blockLbl lbl
+                      , dwMarker   = mkAsmTempLabel lbl
                       }
         where dwarfChilds = map toDwarf $ filter (not . dblOptimizedOut) childs
   compPath <- getCurrentDirectory

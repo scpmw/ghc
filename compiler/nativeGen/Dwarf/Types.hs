@@ -106,7 +106,19 @@ pprString' :: SDoc -> SDoc
 pprString' str = ptext (sLit "\t.asciz \"") <> str <> char '"'
 
 pprString :: String -> SDoc
-pprString = pprString' . text
+pprString = pprString' . hcat . map escape
+  where escape '\\' = ptext (sLit "\\\\")
+        escape '\"' = ptext (sLit "\\\"")
+        escape '\n' = ptext (sLit "\\n")
+        escape '?'  = ptext (sLit "\\?") -- silence trigraph warnings
+        escape c    | isAscii c && isPrint c
+                    = char c
+                    | otherwise
+                    = let ch = ord c
+                      in char '\\' <>
+                         char (intToDigit (ch `div` 64)) <>
+                         char (intToDigit ((ch `div` 8) `mod` 8)) <>
+                         char (intToDigit (ch `mod` 8))
 
 pprData4' :: SDoc -> SDoc
 pprData4' x = ptext (sLit "\t.long ") <> x
