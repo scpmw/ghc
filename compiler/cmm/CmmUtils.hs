@@ -603,10 +603,8 @@ annotateBlock ts b = blockJoin hd (tstmts `blockAppend` mid) tl
 -- where we are restricted to simple 1-to-1 mapping to source code.
 --
 -- As this might often give us a whole list of ticks to choose from,
--- we arbitrarily select the biggest source span - preferably from the
--- source file we are currently compiling - and hope that it
--- corresponds to the most useful location in the code. All nothing
--- but guesswork, sadly.
+-- we arbitrarily select the first source span, while preferring
+-- source ticks from the same source file or relating to dumps.
 findGoodSourceTicks :: RawCmmDecl -> ModLocation
                     -> (Maybe RawTickish, BlockEnv RawTickish)
 findGoodSourceTicks (CmmProc _ _ _ g) mod_loc =
@@ -617,7 +615,7 @@ findGoodSourceTicks (CmmProc _ _ _ g) mod_loc =
               -- Choose ticks from own source notes, or take over tick
               -- annotation from parent otherwise (if any)
               myTick0 = case sticks of
-                sts@(_:_) -> Just $! maximumBy (comparing rangeRating) sts
+                sts@(_:_) -> Just $! minimumBy (comparing rangeRating) sts
                 []        -> ctx
               -- Recurse into sub-blocks
               (recTicks, recMaps) = unzip $ map (go myTick0) $ blockContexts block
@@ -626,7 +624,7 @@ findGoodSourceTicks (CmmProc _ _ _ g) mod_loc =
               !myTick1 = case myTick0 of
                 Just _     -> myTick0
                 Nothing    | not (null recTicks')
-                           -> Just $! maximumBy (comparing rangeRating) recTicks'
+                           -> Just $! minimumBy (comparing rangeRating) recTicks'
                 _otherwise -> Nothing
               -- New map
               !newMap = maybe id (mapInsert lbl) myTick1 $ mapUnions recMaps
@@ -634,12 +632,10 @@ findGoodSourceTicks (CmmProc _ _ _ g) mod_loc =
       go _ _ = (Nothing, mapEmpty)
       unitFS = maybe nilFS mkFastString $ ml_hs_file mod_loc
       rangeRating (SourceNote span _ _) =
-        (case () of
-          _ | isDumpSrcSpan span         -> 2
+        case () of
+          _ | isDumpSrcSpan span         -> 0
             | srcSpanFile span == unitFS -> 1
-            | otherwise                  -> 0 :: Int,
-         srcSpanEndLine span - srcSpanStartLine span,
-         srcSpanEndCol span - srcSpanStartCol span)
+            | otherwise                  -> 2 :: Int
       rangeRating _non_source_note = error "rangeRating"
       isSourceTick SourceNote {} = True
       isSourceTick _             = False
