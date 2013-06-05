@@ -588,7 +588,7 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds cmm count
         ---- of meta instructions, as those are prone to getting
         ---- ignored by the assembler.
         let debug = case cmm of
-              CmmProc{} -> Just $ cmmProcDebug opt_cmm isMetaInstr expanded
+              CmmProc{} -> Just $ cmmProcDebug modLoc opt_cmm isMetaInstr expanded
               _other    -> Nothing
 
         return  ( usAlloc
