@@ -44,6 +44,7 @@ module CLabel (
         mkStringLitLabel,
 
         mkAsmTempLabel,
+        mkAsmTempDerivedLabel,
         mkAsmTempEndLabel,
 
         mkPlainModuleInitLabel,
@@ -187,8 +188,9 @@ data CLabel
 
   | AsmTempLabel
         {-# UNPACK #-} !Unique
-  | AsmTempEndLabel
+  | AsmTempDerivedLabel
         CLabel
+        FastString              -- suffix
 
   | StringLitLabel
         {-# UNPACK #-} !Unique
@@ -544,8 +546,11 @@ mkStringLitLabel                = StringLitLabel
 mkAsmTempLabel :: Uniquable a => a -> CLabel
 mkAsmTempLabel a                = AsmTempLabel (getUnique a)
 
+mkAsmTempDerivedLabel :: CLabel -> FastString -> CLabel
+mkAsmTempDerivedLabel = AsmTempDerivedLabel
+
 mkAsmTempEndLabel :: CLabel -> CLabel
-mkAsmTempEndLabel = AsmTempEndLabel
+mkAsmTempEndLabel l = mkAsmTempDerivedLabel l (fsLit "_end")
 
 mkPlainModuleInitLabel :: Module -> CLabel
 mkPlainModuleInitLabel mod      = PlainModuleInitLabel mod
@@ -634,7 +639,7 @@ needsCDecl (PlainModuleInitLabel _)     = True
 
 needsCDecl (StringLitLabel _)           = False
 needsCDecl (AsmTempLabel _)             = False
-needsCDecl (AsmTempEndLabel _)          = False
+needsCDecl (AsmTempDerivedLabel _ _)    = False
 needsCDecl (RtsLabel _)                 = False
 
 needsCDecl (CmmLabel pkgId _ _)
@@ -759,7 +764,7 @@ externallyVisibleCLabel :: CLabel -> Bool -- not C "static"
 externallyVisibleCLabel (CaseLabel _ _)         = False
 externallyVisibleCLabel (StringLitLabel _)      = False
 externallyVisibleCLabel (AsmTempLabel _)        = False
-externallyVisibleCLabel (AsmTempEndLabel _)     = False
+externallyVisibleCLabel (AsmTempDerivedLabel _ _)= False
 externallyVisibleCLabel (PlainModuleInitLabel _)= True
 externallyVisibleCLabel (RtsLabel _)            = True
 externallyVisibleCLabel (CmmLabel _ _ _)        = True
@@ -976,12 +981,12 @@ pprCLabel platform (AsmTempLabel u)
      else
         char '_' <> pprUnique u
 
-pprCLabel platform (AsmTempEndLabel l)
+pprCLabel platform (AsmTempDerivedLabel l suf)
  | cGhcWithNativeCodeGen == "YES"
-   = ptext (asmTempLabelPrefix platform) <>
-     (case l of AsmTempLabel u -> pprUnique u
-                _other         -> pprCLabel platform l
-     ) <> ptext (sLit "_end")
+   = ptext (asmTempLabelPrefix platform)
+     <> case l of AsmTempLabel u -> pprUnique u
+                  _other         -> pprCLabel platform l
+     <> ftext suf
 
 pprCLabel platform (DynamicLinkerLabel info lbl)
  | cGhcWithNativeCodeGen == "YES"
@@ -1111,7 +1116,7 @@ pprCLbl (HpcDebugData mod)
   = ptext (sLit "_hpc_debug_data_")  <> ppr mod <> ptext (sLit "_hpc")
 
 pprCLbl (AsmTempLabel {})       = panic "pprCLbl AsmTempLabel"
-pprCLbl (AsmTempEndLabel {})    = panic "pprCLbl AsmTempEndLabel"
+pprCLbl (AsmTempDerivedLabel {})= panic "pprCLbl AsmTempDerivedLabel"
 pprCLbl (DynamicLinkerLabel {}) = panic "pprCLbl DynamicLinkerLabel"
 pprCLbl (PicBaseLabel {})       = panic "pprCLbl PicBaseLabel"
 pprCLbl (DeadStripPreventer {}) = panic "pprCLbl DeadStripPreventer"
