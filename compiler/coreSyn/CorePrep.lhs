@@ -55,7 +55,6 @@ import FastString
 import Config
 import Name             ( NamedThing(..), nameSrcSpan )
 import SrcLoc           ( SrcSpan(..), realSrcLocSpan, mkRealSrcLoc )
-import Module           ( ModLocation(..) )
 import Data.Bits
 import Data.List        ( mapAccumL )
 import Control.Monad
