@@ -98,6 +98,7 @@ data DebugModule = DebugModule { dmodPackage :: PackageId
 -- context.
 data DebugBlock = DebugBlock { dblProcedure :: Bool
                              , dblLabel :: Label
+                             , dblHasInfoTbl :: Bool
                              , dblCLabel :: CLabel
                              , dblTicks :: [RawTickish]
                              , dblOptimizedOut :: Bool
@@ -108,7 +109,7 @@ data DebugBlock = DebugBlock { dblProcedure :: Bool
 
 -- | Extract debug data from a procedure
 cmmProcDebug :: ModLocation -> RawCmmDecl -> (i -> Bool)
-                -> [GenCmmDecl d h (ListGraph i)]
+                -> [GenCmmDecl d g (ListGraph i)]
                 -> DebugBlock
 cmmProcDebug _   (CmmData {})                   _      _    = panic "cmmProcDebug: no proc!"
 cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
@@ -132,9 +133,11 @@ cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
       blockMid b = let (_, mid, _) = blockSplit b in blockToList mid
 
       (topSrc, blockSrc) = findGoodSourceTicks p loc
+      hasInfoTable l = l `mapMember` infos
 
       mkBlock l b = DebugBlock { dblProcedure    = False
                                , dblLabel        = l
+                               , dblHasInfoTbl   = hasInfoTable l
                                , dblCLabel       = blockLbl l
                                , dblTicks        = blockTicks b
                                , dblOptimizedOut = not $ l `setMember` natBlockSet
@@ -144,6 +147,7 @@ cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
       Just entryBlock = block (g_entry g)
   in DebugBlock { dblProcedure = True
                 , dblLabel = g_entry g
+                , dblHasInfoTbl = dblHasInfoTbl entryBlock
                 , dblCLabel = case mapLookup (g_entry g) infos of
                      Nothing                  -> entryLbl
                      Just (Statics infoLbl _) -> infoLbl
