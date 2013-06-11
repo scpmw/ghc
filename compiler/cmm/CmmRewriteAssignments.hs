@@ -385,7 +385,7 @@ middleAssignment _ (Plain (CmmTick {})) assign
     = assign
 middleAssignment _ (Plain (CmmContext {})) assign
     = assign
-middleAssignment _ (Plain (CmmFrameInfo {})) assign
+middleAssignment _ (Plain (CmmUnwind {})) assign
     = assign
 
 -- Assumptions:

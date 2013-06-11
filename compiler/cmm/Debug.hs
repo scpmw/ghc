@@ -24,12 +24,13 @@ import CLabel
 import Cmm
 import CmmUtils
 import DynFlags
+import FastString      ( unpackFS )
 import Module
 import CoreSyn
 import Outputable
-import UniqFM
+import PprCmmExpr      ( pprExpr )
 import SrcLoc
-import FastString    ( unpackFS )
+import UniqFM
 import Var
 
 import Compiler.Hoopl
@@ -128,7 +129,9 @@ cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
 
       stackOff :: [CmmNode O O] -> Maybe Int
       stackOff []                     = Nothing
-      stackOff (CmmFrameInfo so : _)  = Just so
+      stackOff (CmmUnwind Sp so : _)  = case evalCmmExpr so of
+                                          (Just Sp, o) -> Just o
+                                          (_      , _) -> Nothing
       stackOff (_               : xs) = stackOff xs
       blockMid b = let (_, mid, _) = blockSplit b in blockToList mid
 
@@ -156,6 +159,28 @@ cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
                 , dblStackOff     = dblStackOff entryBlock
                 , dblSourceTick   = topSrc
                 , dblBlocks       = [entryBlock] }
+
+-- | Very limited evaluation of constant Cmm expressions - we assume
+-- it must reduce to something like "reg + off".
+evalCmmExpr :: CmmExpr -> (Maybe GlobalReg, Int)
+evalCmmExpr (CmmLit (CmmInt i _))       = (Nothing, fromIntegral i)
+evalCmmExpr (CmmRegOff (CmmGlobal g) i) = (Just g,  i)
+evalCmmExpr (CmmReg (CmmGlobal g))      = (Just g,  0)
+evalCmmExpr e@(CmmMachOp op [e1, e2])
+  = let (r1, o1) = evalCmmExpr e1
+        (r2, o2) = evalCmmExpr e2
+    in ( case (r1, r2) of
+            (Just _, Just _) -> pprPanic "Unwind expressions can only use one register!" (pprExpr e)
+            (Nothing, x    ) -> x
+            (x     , _     ) -> x
+       , case op of
+            MO_Add{} -> o1 + o2
+            MO_Sub{} -> o1 - o2
+            MO_Mul{} -> o1 * o2
+            _other   -> pprPanic "Unsupported operator in unwind expression!" (pprExpr e)
+       )
+evalCmmExpr e
+  = pprPanic "Unsupported unwind expression!" (ppr e)
 
 -- | Put a string C-style - null-terminated. We assume that the string
 -- is ASCII.

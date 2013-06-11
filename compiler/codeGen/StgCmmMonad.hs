@@ -19,7 +19,7 @@ module StgCmmMonad (
         emit, emitDecl, emitProc,
         emitProcWithConvention, emitProcWithStackFrame,
         emitOutOfLine, emitAssign, emitStore, emitComment,
-        emitTick, emitContext,
+        emitTick, emitContext, emitUnwind,
 
         getCmm, aGraphToGraph,
         getCodeR, getCode, getHeapUsage,
@@ -676,6 +676,9 @@ emitTick = emitCgStmt . CgStmt . CmmTick
 
 emitContext :: Label -> FCode ()
 emitContext = emitCgStmt . CgStmt . CmmContext
+
+emitUnwind :: GlobalReg -> CmmExpr -> FCode ()
+emitUnwind g = emitCgStmt . CgStmt . CmmUnwind g
 
 emitAssign :: CmmReg  -> CmmExpr -> FCode ()
 emitAssign l r = emitCgStmt (CgStmt (CmmAssign l r))

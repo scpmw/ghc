@@ -185,7 +185,7 @@ pprNode node = pp_node <+> pp_debug
       -- // tick
       CmmTick t -> ptext (sLit "//tick") <+> ppr t
       CmmContext l -> ptext (sLit "//ctx") <+> ppr l
-      CmmFrameInfo i -> ptext (sLit "//sp_off = ") <+> ppr i
+      CmmUnwind r e -> ptext (sLit "unwind ") <> ppr r <+> char '=' <+> ppr e
 
       -- reg = expr;
       CmmAssign reg expr -> ppr reg <+> equals <+> ppr expr <> semi
@@ -270,7 +270,7 @@ pprNode node = pp_node <+> pp_debug
              CmmComment {}           -> empty -- Looks also terrible with text "  // CmmComment"
              CmmTick {}              -> empty -- Looks even more terrible with text "  // CmmTick"
              CmmContext {}           -> empty -- Looks simply unacceptable with text "  // CmmContext"
-             CmmFrameInfo {}         -> empty -- Looks completely atrocious with text "  // CmmFrameInfo"
+             CmmUnwind {}            -> empty -- Looks completely atrocious with text "  // CmmUnwind"
              CmmAssign {}            -> text "  // CmmAssign"
              CmmStore {}             -> text "  // CmmStore"
              CmmUnsafeForeignCall {} -> text "  // CmmUnsafeForeignCall"
