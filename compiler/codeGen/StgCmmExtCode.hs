@@ -143,9 +143,9 @@ newLocal ty name = do
 -- | Allocate a fresh label.
 newLabel :: FastString -> CmmParse BlockId
 newLabel name = do
-   u <- code newUnique
-   addLabel name (mkBlockId u)
-   return (mkBlockId u)
+   bid <- newBlockId
+   addLabel name bid
+   return bid
 
 newBlockId :: CmmParse BlockId
 newBlockId = code F.newLabelC
