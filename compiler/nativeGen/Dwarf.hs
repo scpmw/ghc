@@ -25,6 +25,8 @@ import Dwarf.Constants
 import Dwarf.Types
 
 import Data.Maybe
+import Data.List        ( sortBy )
+import Data.Ord         ( comparing )
 import System.FilePath
 import System.Directory ( getCurrentDirectory )
 
@@ -50,7 +52,7 @@ dwarfGen df modLoc us blocks = do
                       , dwLabel    = blockLbl lbl
                       , dwMarker   = mkAsmTempLabel lbl
                       }
-        where dwarfChilds = map toDwarf $ filter (not . dblOptimizedOut) childs
+        where dwarfChilds = map toDwarf $ filter (isJust . dblPosition) childs
   compPath <- getCurrentDirectory
   let dwarfUnit = DwarfCompileUnit
         { dwChildren = map toDwarf blocks
@@ -185,7 +187,32 @@ debugFrame u DebugBlock{ dblCLabel=procLbl, dblBlocks=blocks, dblHasInfoTbl=hasI
         procEnd     = mkAsmTempEndLabel procLbl
 
         wordSize = platformWordSize plat
-        (_, instrs) = foldl (blockFrame wordSize) (0, empty) blocks
+
+        -- | Recurses through all blocks, producing a list of labels
+        -- with their respective stack offsets, sorted by the position
+        -- they appear in the assembly.
+        offsets oldOff DebugBlock{ dblPosition=pos, dblLabel=blockLbl, dblHasInfoTbl=hasInfo,
+                                   dblStackOff=m_stackOff, dblBlocks=bs }
+          | Just p <- pos  = (p, (addr, fromIntegral off)):nested
+          | otherwise      = nested -- block was optimized out
+          where addr   = ppr (mkAsmTempLabel blockLbl) <>
+                         if hasInfo then ptext (sLit "-1") else empty -- see [Note: Info Offset]
+                off    = fromMaybe oldOff m_stackOff
+                nested = concatMap (offsets off) bs
+        sortedOffsets = map snd $ sortBy (comparing fst) $ concatMap (offsets 0) blocks
+
+        -- | Takes the list of offsets and generates a minimal frame program
+        -- (= only generates an instruction where the offset actually changes)
+        offsetInstrs oldOff ((lbl, off) : xs)
+          | off /= oldOff
+          = pprByte dW_CFA_set_loc        $$ pprWord lbl $$    -- update code address
+            pprByte dW_CFA_def_cfa_offset $$ pprLEBWord off $$ -- then set stack offset
+            offsetInstrs off xs
+          | otherwise
+          = offsetInstrs off xs
+        offsetInstrs _      []
+          = empty
+
         info_offs = if hasInfo then char '1' else char '0' -- see [Note: Info Offset]
 
     in vcat [ pprData4' length
@@ -194,29 +221,10 @@ debugFrame u DebugBlock{ dblCLabel=procLbl, dblBlocks=blocks, dblHasInfoTbl=hasI
             , pprWord (ppr procLbl <> char '-' <> info_offs)   -- Code pointer
             , pprWord (ppr procEnd <> char '-' <> ppr procLbl
                                    <> char '+' <> info_offs)   -- Block byte length
-            , instrs
+            , offsetInstrs 0 sortedOffsets
             , ptext (sLit "\t.align ") <> ppr wordSize
             , ppr fdeEndLabel <> colon
             ]
-
--- | Write debug block
-blockFrame :: Int -> (Int, SDoc) -> DebugBlock -> (Int, SDoc)
-blockFrame wordSize (oldOff, doc)
-           DebugBlock{ dblOptimizedOut=isMissing, dblLabel=blockLbl, dblHasInfoTbl=hasInfo,
-                       dblStackOff=m_stackOff, dblBlocks=blocks }
-  = let off | isMissing             = oldOff
-            | Just s <- m_stackOff  = s - wordSize          -- remove return ptr
-            | otherwise             = 0
-        info_offs = if hasInfo then ptext (sLit "-1") else empty  -- see [Note: Info Offset]
-        instrs   = vcat [ pprByte dW_CFA_set_loc            -- set code address
-                        , pprWord $ ppr (mkAsmTempLabel blockLbl) <> info_offs
-                        , pprByte dW_CFA_def_cfa_offset     -- set new stack offset
-                        , pprLEBWord $ fromIntegral off     -- new offset
-                        ]
-        doc'     | off == oldOff || isMissing  = doc
-                 | otherwise                   = doc $$ instrs
-    in foldl (blockFrame wordSize) (off, doc') blocks
-
 
 -- [Note: Info Offset]
 --

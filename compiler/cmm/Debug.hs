@@ -97,16 +97,19 @@ data DebugModule = DebugModule { dmodPackage :: PackageId
 
 -- | Debug information about a block of code. Can be nested to show
 -- context.
-data DebugBlock = DebugBlock { dblProcedure :: Bool
-                             , dblLabel :: Label
-                             , dblHasInfoTbl :: Bool
-                             , dblCLabel :: CLabel
-                             , dblTicks :: [RawTickish]
-                             , dblOptimizedOut :: Bool
-                             , dblStackOff :: Maybe Int
-                             , dblSourceTick :: Maybe RawTickish
-                             , dblBlocks :: [DebugBlock]
-                             }
+data DebugBlock =
+  DebugBlock
+  { dblProcedure :: Bool              -- ^ Top-level procedure?
+  , dblLabel :: Label                 -- ^ Hoopl label
+  , dblCLabel :: CLabel               -- ^ Output label
+  , dblHasInfoTbl :: Bool             -- ^ Has an info table?
+  , dblTicks :: [RawTickish]          -- ^ Ticks defined in this block
+  , dblSourceTick :: Maybe RawTickish -- ^ Best source tick covering this block
+  , dblPosition :: Maybe Int          -- ^ Output position relative to other blocks in proc.
+                                      --   @Nothing@ means the block has been optimized out.
+  , dblStackOff :: Maybe Int          -- ^ Unwind information
+  , dblBlocks :: [DebugBlock]         -- ^ Nested blocks
+  }
 
 -- | Extract debug data from a procedure
 cmmProcDebug :: ModLocation -> RawCmmDecl -> (i -> Bool)
@@ -120,8 +123,8 @@ cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
       getBlocks (CmmProc _ _ _ (ListGraph bs)) = bs
       getBlocks _other                         = []
       allMeta (BasicBlock _ instrs) = all isMeta instrs
-      natBlockSet :: LabelSet
-      natBlockSet = setFromList $ map blockId $ filter (not . allMeta) $
+      natBlockMap :: LabelMap Int
+      natBlockMap = mapFromList $ flip zip [0..] $ map blockId $ filter (not . allMeta) $
                     concatMap getBlocks nats
 
       blockMap = toBlockMap g
@@ -143,7 +146,7 @@ cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
                                , dblHasInfoTbl   = hasInfoTable l
                                , dblCLabel       = blockLbl l
                                , dblTicks        = blockTicks b
-                               , dblOptimizedOut = not $ l `setMember` natBlockSet
+                               , dblPosition     = mapLookup l natBlockMap
                                , dblStackOff     = stackOff $ blockMid b
                                , dblSourceTick   = mapLookup l blockSrc
                                , dblBlocks       = mapMaybe block $ blockContexts b }
@@ -154,7 +157,7 @@ cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
                 , dblCLabel = case mapLookup (g_entry g) infos of
                      Nothing                  -> entryLbl
                      Just (Statics infoLbl _) -> infoLbl
-                , dblOptimizedOut = False
+                , dblPosition     = Nothing
                 , dblTicks        = dblTicks entryBlock
                 , dblStackOff     = dblStackOff entryBlock
                 , dblSourceTick   = topSrc
