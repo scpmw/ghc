@@ -93,6 +93,16 @@ stg_gc_noregs
                 ret = ThreadYielding;
                 goto sched;
         }
+
+#ifdef TRACING
+        CInt n;
+        n = Capability_heap_ip_sample_count(MyCapability());
+        if (n < 4096::CInt) {
+             W_[MyCapability()+OFFSET_Capability_heap_ip_samples+WDS(TO_W_(n))] = R9;
+             Capability_heap_ip_sample_count(MyCapability()) = n+(1::CInt);
+        }
+#endif
+
         if (HpAlloc <= BLOCK_SIZE
             && bdescr_link(CurrentNursery) != NULL) {
             HpAlloc = 0;
@@ -161,6 +171,9 @@ INFO_TABLE_RET ( stg_enter, RET_SMALL, W_ info_ptr, P_ closure )
 
 __stg_gc_enter_1 (P_ node)
 {
+#ifdef TRACING
+    R9 = node;
+#endif
     jump stg_gc_noregs (stg_enter_info, node) ();
 }
 
@@ -283,6 +296,9 @@ INFO_TABLE_RET ( stg_ret_l, RET_SMALL, W_ info_ptr, L_ l )
 
 stg_gc_unpt_r1 return (P_ ptr) /* NB. return convention */
 {
+#ifdef TRACING
+    R9 = %ENTRY_CODE(Sp(0));
+#endif
     jump stg_gc_noregs (stg_ret_p_info, ptr) ();
 }
 
@@ -290,6 +306,9 @@ stg_gc_unpt_r1 return (P_ ptr) /* NB. return convention */
 
 stg_gc_unbx_r1 return (W_ nptr) /* NB. return convention */
 {
+#ifdef TRACING
+    R9 = %ENTRY_CODE(Sp(0));
+#endif
     jump stg_gc_noregs (stg_ret_n_info, nptr) ();
 }
 
@@ -297,6 +316,9 @@ stg_gc_unbx_r1 return (W_ nptr) /* NB. return convention */
 
 stg_gc_f1 return (F_ f)
 {
+#ifdef TRACING
+    R9 = %ENTRY_CODE(Sp(0));
+#endif
     jump stg_gc_noregs (stg_ret_f_info, f) ();
 }
 
@@ -304,6 +326,9 @@ stg_gc_f1 return (F_ f)
 
 stg_gc_d1 return (D_ d)
 {
+#ifdef TRACING
+    R9 = %ENTRY_CODE(Sp(0));
+#endif
     jump stg_gc_noregs (stg_ret_d_info, d) ();
 }
 
@@ -319,18 +344,27 @@ stg_gc_l1 return (L_ l)
 
 stg_gc_pp return (P_ arg1, P_ arg2)
 {
+#ifdef TRACING
+    R9 = %ENTRY_CODE(Sp(0));
+#endif
     call stg_gc_noregs();
     return (arg1,arg2);
 }
 
 stg_gc_ppp return (P_ arg1, P_ arg2, P_ arg3)
 {
+#ifdef TRACING
+    R9 = %ENTRY_CODE(Sp(0));
+#endif
     call stg_gc_noregs();
     return (arg1,arg2,arg3);
 }
 
 stg_gc_pppp return (P_ arg1, P_ arg2, P_ arg3, P_ arg4)
 {
+#ifdef TRACING
+    R9 = %ENTRY_CODE(Sp(0));
+#endif
     call stg_gc_noregs();
     return (arg1,arg2,arg3,arg4);
 }
@@ -397,6 +431,9 @@ __stg_gc_fun /* explicit stack */
     Sp(2) = R1;
     Sp(1) = size;
     Sp(0) = stg_gc_fun_info;
+#ifdef TRACING
+    R9 = R1;
+#endif
     jump stg_gc_noregs [];
 #else
     W_ type;
@@ -409,6 +446,9 @@ __stg_gc_fun /* explicit stack */
         Sp(1) = size;
         Sp(0) = stg_gc_fun_info;
         // DEBUG_ONLY(foreign "C" debugBelch("stg_fun_gc_gen(ARG_GEN)"););
+#ifdef TRACING
+        R9 = %GET_ENTRY(UNTAG(R1));
+#endif
         jump stg_gc_noregs [];
     } else { 
         jump W_[stg_stack_save_entries + WDS(type)] [*]; // all regs live
