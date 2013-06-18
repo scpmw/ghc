@@ -189,7 +189,6 @@ void perf_event_stream(Task *task, StgBool own_task) {
 		StgWord64 bytes_before_wrap = buf_size - (last_head & buf_mask);
 		StgWord64 bytes_after_wrap  = new_head & buf_mask;
 
-		//printf("last:%ld new:%ld mask:%ld before:%ld after:%ld\n", last_head, new_head, buf_mask, bytes_before_wrap, bytes_after_wrap);
 		StgWord8 *new_data = stgMallocBytes(new_head - last_head, "perf_event_stream wrap buffer");
 		memcpy(new_data, data, bytes_before_wrap);
 		memcpy(new_data + bytes_before_wrap, data_base, bytes_after_wrap);
@@ -212,8 +211,6 @@ void perf_event_stream(Task *task, StgBool own_task) {
 		pos += hdr->size;
 	}
 	StgWord8 *end_pos = pos;
-
-	//printf("reading %d samples (%ld bytes)...\n", n_samples, end_pos - data);
 
 	// Read samples
 	pos = data;
@@ -238,8 +235,6 @@ void perf_event_stream(Task *task, StgBool own_task) {
 	// Free buffer
 	if (free_data)
 		stgFree(data);
-
-	//printf("new %ld final %ld\n", new_head, final_head);
 
 	// Advance head pointer
 	task->perf_event_last_head = final_head;
