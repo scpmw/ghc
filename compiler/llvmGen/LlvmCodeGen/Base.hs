@@ -17,7 +17,7 @@ module LlvmCodeGen.Base (
         runLlvm, liftStream, withClearVars, varLookup, varInsert,
         markStackReg, checkStackReg,
         funLookup, funInsert, getLlvmVer, getDynFlags, getDynFlag, getLlvmPlatform,
-        renderLlvm, runUs, markUsedVar, getUsedVars,
+        dumpIfSetLlvm, renderLlvm, runUs, markUsedVar, getUsedVars,
         ghcInternalFunctions,
 
         getMetaUniqueId,
@@ -52,8 +52,8 @@ import qualified Pretty as Prt
 import Platform
 import UniqFM
 import Unique
-import Module ( ModLocation )
-import MonadUtils ( MonadIO(..) )
+import Module     ( ModLocation )
+import MonadUtils
 import BufWrite   ( BufHandle )
 import UniqSet
 import UniqSupply
@@ -201,23 +201,24 @@ maxSupportLlvmVersion = 33
 --
 
 data LlvmEnv = LlvmEnv
-  { envFunMap :: LlvmEnvMap
-  , envVarMap :: LlvmEnvMap
-  , envStackRegs :: [GlobalReg]
-  , envUsedVars :: [LlvmVar]
-  , envAliases :: UniqSet LMString
-  , envLabelMap :: [(CLabel, CLabel)]
-  , envVersion :: LlvmVersion
-  , envDynFlags :: DynFlags
-  , envModLoc :: ModLocation
-  , envOutput :: BufHandle
-  , envUniq :: UniqSupply
-  , envFreshMeta :: LlvmMetaUnamed
-  , envUniqMeta :: UniqFM LlvmMetaUnamed
-  , envFileMeta :: UniqFM LlvmMetaUnamed
-  , envProcMeta :: [LlvmMetaUnamed]
-  , envNextSection :: Int
-  , envDebug :: [DebugBlock]
+  { envVersion :: LlvmVersion      -- ^ LLVM version
+  , envDynFlags :: DynFlags        -- ^ Dynamic flags
+  , envModLoc :: ModLocation       -- ^ Location of current module
+  , envOutput :: BufHandle         -- ^ Output buffer
+  , envUniq :: UniqSupply          -- ^ Supply of unique values
+  , envNextSection :: Int          -- ^ Supply of fresh section IDs
+  , envFreshMeta :: Int            -- ^ Supply of fresh metadata IDs
+  , envUniqMeta :: UniqFM Int      -- ^ Global metadata nodes
+  , envFileMeta :: UniqFM Int      -- ^ Source file metadata nodes
+  , envProcMeta :: [Int]           -- ^ Collected procedure metadata nodes
+  , envFunMap :: LlvmEnvMap        -- ^ Global functions so far, with type
+  , envAliases :: UniqSet LMString -- ^ Globals that we had to alias, see [Llvm Forward References]
+  , envUsedVars :: [LlvmVar]       -- ^ Pointers to be added to llvm.used (see @cmmUsedLlvmGens@)
+  , envDebug :: [DebugBlock]       -- ^ Collected debug data for all procedures
+
+    -- the following get cleared for every function (see @withClearVars@)
+  , envVarMap :: LlvmEnvMap        -- ^ Local variables so far, with type
+  , envStackRegs :: [GlobalReg]    -- ^ Non-constant registers (alloca'd in the function prelude)
   }
 
 type LlvmEnvMap = UniqFM LlvmType
@@ -231,12 +232,13 @@ instance Monad LlvmM where
 instance Functor LlvmM where
     fmap f m = LlvmM $ \env -> do (x, env') <- runLlvmM m env
                                   return (f x, env')
-instance MonadIO LlvmM where
-    liftIO m = LlvmM $ \env -> do x <- m
-                                  return (x, env)
 
 instance HasDynFlags LlvmM where
     getDynFlags = LlvmM $ \env -> return (envDynFlags env, env)
+
+instance MonadIO LlvmM where
+    liftIO m = LlvmM $ \env -> do x <- m
+                                  return (x, env)
 
 -- | Get initial Llvm environment.
 runLlvm :: DynFlags -> ModLocation -> LlvmVersion -> BufHandle -> UniqSupply -> LlvmM () -> IO ()
@@ -248,7 +250,6 @@ runLlvm dflags mod_loc ver out us m = do
                       , envStackRegs = []
                       , envUsedVars = []
                       , envAliases = emptyUniqSet
-                      , envLabelMap = []
                       , envVersion = ver
                       , envDynFlags = dflags
                       , envModLoc = mod_loc
@@ -303,7 +304,7 @@ checkStackReg :: GlobalReg -> LlvmM Bool
 checkStackReg r = getEnv ((elem r) . envStackRegs)
 
 -- | Allocate a new global unnamed metadata identifier
-getMetaUniqueId :: LlvmM LlvmMetaUnamed
+getMetaUniqueId :: LlvmM Int
 getMetaUniqueId = LlvmM $ \env -> return (envFreshMeta env, env { envFreshMeta = envFreshMeta env + 1})
 
 -- | Get the LLVM version we are generating code for
@@ -318,17 +319,25 @@ getDynFlag f = getEnv (f . envDynFlags)
 getLlvmPlatform :: LlvmM Platform
 getLlvmPlatform = getDynFlag targetPlatform
 
+-- | Dumps the document if the corresponding flag has been set by the user
+dumpIfSetLlvm :: DumpFlag -> String -> Outp.SDoc -> LlvmM ()
+dumpIfSetLlvm flag hdr doc = do
+  dflags <- getDynFlags
+  liftIO $ dumpIfSet_dyn dflags flag hdr doc
+
 -- | Prints the given contents to the output handle
 renderLlvm :: Outp.SDoc -> LlvmM ()
-renderLlvm sdoc = LlvmM $ \env -> do
+renderLlvm sdoc = do
 
     -- Write to output
-    let doc = Outp.withPprStyleDoc (envDynFlags env) (Outp.mkCodeStyle Outp.CStyle) sdoc
-    Prt.bufLeftRender (envOutput env) doc
+    dflags <- getDynFlags
+    out <- getEnv envOutput
+    let doc = Outp.withPprStyleDoc dflags (Outp.mkCodeStyle Outp.CStyle) sdoc
+    liftIO $ Prt.bufLeftRender out doc
 
     -- Dump, if requested
-    dumpIfSet_dyn (envDynFlags env) Opt_D_dump_llvm "LLVM Code" sdoc
-    return ((), env)
+    dumpIfSetLlvm Opt_D_dump_llvm "LLVM Code" sdoc
+    return ()
 
 -- | Run a @UniqSM@ action with our unique supply
 runUs :: UniqSM a -> LlvmM a
@@ -349,25 +358,25 @@ getUsedVars = getEnv envUsedVars
 saveAlias :: LMString -> LlvmM ()
 saveAlias lbl = modifyEnv $ \env -> env { envAliases = addOneToUniqSet (envAliases env) lbl }
 
--- | Sets metadata node for a given unique string
-setUniqMeta :: LMMetaUnique -> LlvmMetaUnamed -> LlvmM ()
+-- | Sets metadata node for a given unique
+setUniqMeta :: Unique -> Int -> LlvmM ()
 setUniqMeta f m = modifyEnv $ \env -> env { envUniqMeta = addToUFM (envUniqMeta env) f m }
--- | Gets metadata node for given unique string
-getUniqMeta :: LMMetaUnique -> LlvmM (Maybe LlvmMetaUnamed)
+-- | Gets metadata node for given unique
+getUniqMeta :: Unique -> LlvmM (Maybe Int)
 getUniqMeta s = getEnv (flip lookupUFM s . envUniqMeta)
 
 -- | Allocates a metadata node for given file
-setFileMeta :: LMString -> LlvmMetaUnamed -> LlvmM ()
+setFileMeta :: LMString -> Int -> LlvmM ()
 setFileMeta f m = modifyEnv $ \env -> env { envFileMeta = addToUFM (envFileMeta env) f m }
 -- | Gets metadata node for given file (if any)
-getFileMeta :: LMString -> LlvmM (Maybe LlvmMetaUnamed)
+getFileMeta :: LMString -> LlvmM (Maybe Int)
 getFileMeta s = getEnv (flip lookupUFM s . envFileMeta)
 
--- | Sets metadata node for given procedure
-addProcMeta :: LlvmMetaUnamed -> LlvmM ()
+-- | Saves back metadata node of a procedure
+addProcMeta :: Int -> LlvmM ()
 addProcMeta m = modifyEnv $ \env -> env { envProcMeta = m:envProcMeta env }
 -- | Returns all procedure meta data IDs
-getProcMetaIds :: LlvmM [LlvmMetaUnamed]
+getProcMetaIds :: LlvmM [Int]
 getProcMetaIds = getEnv (reverse . envProcMeta)
 
 -- | Returns a fresh section ID
@@ -500,28 +509,10 @@ generateAliases = do
 -- will often reference things before their definition, and we have no
 -- idea what (LLVM) type it is going to be before that point.
 --
--- Well, the problem is that LLVM is strongly typed, so we positively can't
--- refer to something of which we don't know the type. Sadly, CMM also doesn't
--- carry that kind of information (unless I'm mistaken, of course). So what
--- we do is to define type aliases into the code so we can fill in later what
--- the type in question is expected to be.
---
--- So why do we have to alias the value *itself*? This is actually mainly a
--- workaround, as it turns out that LLVM chokes on this code:
---
---  @ptr = constant %typ* @fun;
---  %typ = type i32 ();
---  define i32 @fun() { ret i32 0; }
---
--- No matter what we do, opt will crash, because it doesn't expect "fun" to have
--- been mentioned with an aliased type. So what we do here is to actually never
--- refer to "fun" itself, but instead refer to a *value* alias of it instead,
--- which we can later set to the proper value without any further hassle:
---
---  @ptr = constant %typ* @fun$alias;
---  define i32 @fun() { ret i32 0; }
---  %typ = type i32 ();
---  @fun$alias = alias %typ* @fun;
+-- Our work-around is to define "aliases" of a standard type (i8 *) in
+-- these kind of situations, which we later tell LLVM to be either
+-- references to their actual local definitions (involving a cast) or
+-- an external reference. This obviously only works for pointers.
 
 -- ----------------------------------------------------------------------------
 -- * Misc

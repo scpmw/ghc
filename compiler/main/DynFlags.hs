@@ -79,6 +79,7 @@ module DynFlags (
         defaultFatalMessager,
         defaultLogAction,
         defaultLogActionHPrintDoc,
+        defaultLogActionHPutStrDoc,
         defaultFlushOut,
         defaultFlushErr,
 
@@ -129,6 +130,9 @@ module DynFlags (
         -- * SSE
         isSse2Enabled,
         isSse4_2Enabled,
+
+        -- * Linker information
+        LinkerInfo(..),
   ) where
 
 #include "HsVersions.h"
@@ -273,6 +277,8 @@ data GeneralFlag
 
    -- optimisation opts
    | Opt_Strictness
+   | Opt_KillAbsence
+   | Opt_KillOneShot
    | Opt_FullLaziness
    | Opt_FloatIn
    | Opt_Specialise
@@ -741,7 +747,10 @@ data DynFlags = DynFlags {
   nextWrapperNum        :: IORef Int,
 
   -- | Machine dependant flags (-m<blah> stuff)
-  sseVersion            :: Maybe (Int, Int)  -- (major, minor)
+  sseVersion            :: Maybe (Int, Int),  -- (major, minor)
+
+  -- | Run-time linker information (what options we need, etc.)
+  rtldFlags             :: IORef (Maybe LinkerInfo)
  }
 
 class HasDynFlags m where
@@ -1200,6 +1209,7 @@ initDynFlags dflags = do
  refFilesToNotIntermediateClean <- newIORef []
  refGeneratedDumps <- newIORef Set.empty
  refLlvmVersion <- newIORef 28
+ refRtldFlags <- newIORef Nothing
  wrapperNum <- newIORef 0
  canUseUnicodeQuotes <- do let enc = localeEncoding
                                str = "‛’"
@@ -1215,7 +1225,8 @@ initDynFlags dflags = do
         generatedDumps = refGeneratedDumps,
         llvmVersion    = refLlvmVersion,
         nextWrapperNum = wrapperNum,
-        useUnicodeQuotes = canUseUnicodeQuotes
+        useUnicodeQuotes = canUseUnicodeQuotes,
+        rtldFlags      = refRtldFlags
         }
 
 -- | The normal 'DynFlags'. Note that they is not suitable for use in this form
@@ -1348,7 +1359,8 @@ defaultDynFlags mySettings =
         llvmVersion = panic "defaultDynFlags: No llvmVersion",
         interactivePrint = Nothing,
         nextWrapperNum = panic "defaultDynFlags: No nextWrapperNum",
-        sseVersion = Nothing
+        sseVersion = Nothing,
+        rtldFlags = panic "defaultDynFlags: no rtldFlags"
       }
 
 defaultWays :: Settings -> [Way]
@@ -1372,22 +1384,31 @@ defaultFatalMessager = hPutStrLn stderr
 defaultLogAction :: LogAction
 defaultLogAction dflags severity srcSpan style msg
     = case severity of
-      SevOutput -> printSDoc msg style
-      SevDump   -> printSDoc (msg $$ blankLine) style
-      SevInfo   -> printErrs msg style
-      SevFatal  -> printErrs msg style
-      _         -> do hPutChar stderr '\n'
-                      printErrs (mkLocMessage severity srcSpan msg) style
-                      -- careful (#2302): printErrs prints in UTF-8, whereas
-                      -- converting to string first and using hPutStr would
-                      -- just emit the low 8 bits of each unicode char.
-    where printSDoc = defaultLogActionHPrintDoc dflags stdout
-          printErrs = defaultLogActionHPrintDoc dflags stderr
+      SevOutput      -> printSDoc msg style
+      SevDump        -> printSDoc (msg $$ blankLine) style
+      SevInteractive -> putStrSDoc msg style
+      SevInfo        -> printErrs msg style
+      SevFatal       -> printErrs msg style
+      _              -> do hPutChar stderr '\n'
+                           printErrs (mkLocMessage severity srcSpan msg) style
+                           -- careful (#2302): printErrs prints in UTF-8,
+                           -- whereas converting to string first and using
+                           -- hPutStr would just emit the low 8 bits of
+                           -- each unicode char.
+    where printSDoc  = defaultLogActionHPrintDoc  dflags stdout
+          printErrs  = defaultLogActionHPrintDoc  dflags stderr
+          putStrSDoc = defaultLogActionHPutStrDoc dflags stdout
 
 defaultLogActionHPrintDoc :: DynFlags -> Handle -> SDoc -> PprStyle -> IO ()
 defaultLogActionHPrintDoc dflags h d sty
     = do let doc = runSDoc d (initSDocContext dflags sty)
          Pretty.printDoc Pretty.PageMode (pprCols dflags) h doc
+         hFlush h
+
+defaultLogActionHPutStrDoc :: DynFlags -> Handle -> SDoc -> PprStyle -> IO ()
+defaultLogActionHPutStrDoc dflags h d sty
+    = do let doc = runSDoc d (initSDocContext dflags sty)
+         hPutStr h (Pretty.render doc)
          hFlush h
 
 newtype FlushOut = FlushOut (IO ())
@@ -2536,7 +2557,9 @@ fFlags = [
   ( "hpc",                              Opt_Hpc, nop ),
   ( "pre-inlining",                     Opt_SimplPreInlining, nop ),
   ( "flat-cache",                       Opt_FlatCache, nop ),
-  ( "use-rpaths",                       Opt_RPath, nop )
+  ( "use-rpaths",                       Opt_RPath, nop ),
+  ( "kill-absence",                     Opt_KillAbsence, nop),
+  ( "kill-one-shot",                    Opt_KillOneShot, nop)
   ]
 
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
@@ -3517,3 +3540,14 @@ isSse2Enabled dflags = case platformArch (targetPlatform dflags) of
 
 isSse4_2Enabled :: DynFlags -> Bool
 isSse4_2Enabled dflags = sseVersion dflags >= Just (4,2)
+
+-- -----------------------------------------------------------------------------
+-- Linker information
+
+-- LinkerInfo contains any extra options needed by the system linker.
+data LinkerInfo
+  = GnuLD    [Option]
+  | GnuGold  [Option]
+  | DarwinLD [Option]
+  | UnknownLD
+  deriving Eq

@@ -58,7 +58,8 @@ module OccName (
 
 	-- ** Derived 'OccName's
         isDerivedOccName,
-	mkDataConWrapperOcc, mkWorkerOcc, mkDefaultMethodOcc, mkGenDefMethodOcc,
+	mkDataConWrapperOcc, mkWorkerOcc, mkDefaultMethodOcc, 
+        mkGenDefMethodOcc, 
 	mkDerivedTyConOcc, mkNewTyCoOcc, mkClassOpAuxOcc,
         mkCon2TagOcc, mkTag2ConOcc, mkMaxTagOcc,
   	mkClassDataConOcc, mkDictOcc, mkIPOcc, 
@@ -486,18 +487,12 @@ isValOcc (OccName DataName _ _) = True
 isValOcc _                      = False
 
 isDataOcc (OccName DataName _ _) = True
-isDataOcc (OccName VarName s _)
-  | isLexCon s = pprPanic "isDataOcc: check me" (ppr s)
-		-- Jan06: I don't think this should happen
 isDataOcc _                    = False
 
 -- | Test if the 'OccName' is a data constructor that starts with
 -- a symbol (e.g. @:@, or @[]@)
 isDataSymOcc :: OccName -> Bool
 isDataSymOcc (OccName DataName s _) = isLexConSym s
-isDataSymOcc (OccName VarName s _)
-  | isLexConSym s = pprPanic "isDataSymOcc: check me" (ppr s)
-		-- Jan06: I don't think this should happen
 isDataSymOcc _                    = False
 -- Pretty inefficient!
 
@@ -579,8 +574,8 @@ isDerivedOccName occ =
 \end{code}
 
 \begin{code}
-mkDataConWrapperOcc, mkWorkerOcc, mkDefaultMethodOcc, mkGenDefMethodOcc,
-  	mkDerivedTyConOcc, mkClassDataConOcc, mkDictOcc,
+mkDataConWrapperOcc, mkWorkerOcc, mkDefaultMethodOcc, 
+        mkGenDefMethodOcc, mkDerivedTyConOcc, mkClassDataConOcc, mkDictOcc,
  	mkIPOcc, mkSpecOcc, mkForeignExportOcc, mkGenOcc1, mkGenOcc2,
  	mkGenD, mkGenR, mkGen1R, mkGenRCo,
 	mkDataTOcc, mkDataCOcc, mkDataConWorkerOcc, mkNewTyCoOcc,

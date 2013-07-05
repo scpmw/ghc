@@ -15,9 +15,6 @@
 -- more on System FC and how coercions fit into it.
 --
 module Coercion (
-        -- * CoAxioms
-        mkCoAxBranch, mkBranchedCoAxiom, mkSingleCoAxiom,
-
         -- * Main data type
         Coercion(..), Var, CoVar,
         LeftOrRight(..), pickLR,
@@ -96,7 +93,6 @@ import VarEnv
 import VarSet
 import Maybes   ( orElse )
 import Name	( Name, NamedThing(..), nameUnique, nameModule, getSrcSpan )
-import NameSet
 import OccName 	( parenSymOcc )
 import Util
 import BasicTypes
@@ -112,58 +108,6 @@ import FastString
 
 import qualified Data.Data as Data hiding ( TyCon )
 \end{code}
-
-
-%************************************************************************
-%*                                                                      *
-           Constructing axioms
-    These functions are here because tidyType etc 
-    are not available in CoAxiom
-%*                                                                      *
-%************************************************************************
-
-Note [Tidy axioms when we build them]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We print out axioms and don't want to print stuff like
-    F k k a b = ...
-Instead we must tidy those kind variables.  See Trac #7524.
-
-
-\begin{code}
-mkCoAxBranch :: [TyVar] -- original, possibly stale, tyvars
-             -> [Type]  -- LHS patterns
-             -> Type    -- RHS
-             -> SrcSpan
-             -> CoAxBranch
-mkCoAxBranch tvs lhs rhs loc
-  = CoAxBranch { cab_tvs = tvs1
-               , cab_lhs = tidyTypes env lhs
-               , cab_rhs = tidyType  env rhs
-               , cab_loc = loc }
-  where
-    (env, tvs1) = tidyTyVarBndrs emptyTidyEnv tvs
-    -- See Note [Tidy axioms when we build them]
-  
-
-mkBranchedCoAxiom :: Name -> TyCon -> [CoAxBranch] -> CoAxiom Branched
-mkBranchedCoAxiom ax_name fam_tc branches
-  = CoAxiom { co_ax_unique   = nameUnique ax_name
-            , co_ax_name     = ax_name
-            , co_ax_tc       = fam_tc
-            , co_ax_implicit = False
-            , co_ax_branches = toBranchList branches }
-
-mkSingleCoAxiom :: Name -> [TyVar] -> TyCon -> [Type] -> Type -> CoAxiom Unbranched
-mkSingleCoAxiom ax_name tvs fam_tc lhs_tys rhs_ty
-  = CoAxiom { co_ax_unique   = nameUnique ax_name
-            , co_ax_name     = ax_name
-            , co_ax_tc       = fam_tc
-            , co_ax_implicit = False
-            , co_ax_branches = FirstBranch branch }
-  where
-    branch = mkCoAxBranch tvs lhs_tys rhs_ty (getSrcSpan ax_name)
-\end{code}
-
 
 %************************************************************************
 %*									*
@@ -638,7 +582,7 @@ splitForAllCo_maybe _                = Nothing
 coVarKind :: CoVar -> (Type,Type) 
 coVarKind cv
  | Just (tc, [_kind,ty1,ty2]) <- splitTyConApp_maybe (varType cv)
- = ASSERT (tc `hasKey` eqPrimTyConKey)
+ = ASSERT(tc `hasKey` eqPrimTyConKey)
    (ty1,ty2)
  | otherwise = panic "coVarKind, non coercion variable"
 
@@ -674,7 +618,7 @@ mkCoVarCo cv
 mkReflCo :: Type -> Coercion
 mkReflCo = Refl
 
-mkAxInstCo :: CoAxiom br -> Int -> [Type] -> Coercion
+mkAxInstCo :: CoAxiom br -> BranchIndex -> [Type] -> Coercion
 -- mkAxInstCo can legitimately be called over-staturated; 
 -- i.e. with more type arguments than the coercion requires
 mkAxInstCo ax index tys
@@ -748,7 +692,7 @@ mkFunCo co1 co2 = mkTyConAppCo funTyCon [co1, co2]
 mkForAllCo :: Var -> Coercion -> Coercion
 -- note that a TyVar should be used here, not a CoVar (nor a TcTyVar)
 mkForAllCo tv (Refl ty) = ASSERT( isTyVar tv ) Refl (mkForAllTy tv ty)
-mkForAllCo tv  co       = ASSERT ( isTyVar tv ) ForAllCo tv co
+mkForAllCo tv  co       = ASSERT( isTyVar tv ) ForAllCo tv co
 
 -------------------------------
 
@@ -824,7 +768,8 @@ mkNewTypeCo name tycon tvs rhs_ty
   where branch = CoAxBranch { cab_loc = getSrcSpan name
                             , cab_tvs = tvs
                             , cab_lhs = mkTyVarTys tvs
-                            , cab_rhs = rhs_ty }
+                            , cab_rhs = rhs_ty
+                            , cab_incomps = [] }
 
 mkPiCos :: [Var] -> Coercion -> Coercion
 mkPiCos vs co = foldr mkPiCo co vs
@@ -884,25 +829,21 @@ splitNewTypeRepCo_maybe _
 
 topNormaliseNewType :: Type -> Maybe (Type, Coercion)
 topNormaliseNewType ty
-  = case topNormaliseNewTypeX emptyNameSet ty of
+  = case topNormaliseNewTypeX initRecTc ty of
       Just (_, co, ty) -> Just (ty, co)
       Nothing          -> Nothing
 
-topNormaliseNewTypeX :: NameSet -> Type -> Maybe (NameSet, Coercion, Type)
+topNormaliseNewTypeX :: RecTcChecker -> Type -> Maybe (RecTcChecker, Coercion, Type)
 topNormaliseNewTypeX rec_nts ty
   | Just ty' <- coreView ty         -- Expand predicates and synonyms
   = topNormaliseNewTypeX rec_nts ty'
 
 topNormaliseNewTypeX rec_nts (TyConApp tc tys)
-  | Just (rep_ty, co) <- instNewTyCon_maybe tc tys
-  , not (tc_name `elemNameSet` rec_nts)  -- See Note [Expanding newtypes] in Type
+  | Just rec_nts'     <- checkRecTc rec_nts tc  -- See Note [Expanding newtypes] in TyCon
+  , Just (rep_ty, co) <- instNewTyCon_maybe tc tys
   = case topNormaliseNewTypeX rec_nts' rep_ty of
        Nothing                       -> Just (rec_nts', co,                 rep_ty)
        Just (rec_nts', co', rep_ty') -> Just (rec_nts', co `mkTransCo` co', rep_ty')
-  where
-    tc_name = tyConName tc
-    rec_nts' | isRecursiveTyCon tc = addOneToNameSet rec_nts tc_name
-             | otherwise	   = rec_nts
 
 topNormaliseNewTypeX _ _ = Nothing
 \end{code}
@@ -1120,7 +1061,53 @@ lookupCoVar (CvSubst _ _ cenv) v = lookupVarEnv cenv v
 %*                                                                      *
 %************************************************************************
 
+Note [Lifting coercions over types: liftCoSubst]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The KPUSH rule deals with this situation
+   data T a = MkK (a -> Maybe a)
+   g :: T t1 ~ K t2
+   x :: t1 -> Maybe t1
+
+   case (K @t1 x) |> g of
+     K (y:t2 -> Maybe t2) -> rhs
+
+We want to push the coercion inside the constructor application.  
+So we do this
+
+   g' :: t1~t2  =  Nth 0 g
+
+   case K @t2 (x |> g' -> Maybe g') of
+     K (y:t2 -> Maybe t2) -> rhs
+
+The crucial operation is that we 
+  * take the type of K's argument: a -> Maybe a
+  * and substitute g' for a
+thus giving *coercion*.  This is what liftCoSubst does.
+
+Note [Substituting kinds in liftCoSubst]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We need to take care with kind polymorphism.  Suppose
+  K :: forall k (a:k). (forall b:k. a -> b) -> T k a
+
+Now given  (K @kk1 @ty1 v) |> g) where
+  g :: T kk1 ty1 ~ T kk2 ty2
+we want to compute
+   (forall b:k a->b) [ Nth 0 g/k, Nth 1 g/a ]
+Notice that we MUST substitute for 'k'; this happens in
+liftCoSubstTyVarBndr.  But what should we substitute?
+We need to take b's kind 'k' and return a Kind, not a Coercion!
+
+Happily we can do this because we know that all kind coercions
+((Nth 0 g) in this case) are Refl.  So we need a special purpose
+   subst_kind: LiftCoSubst -> Kind -> Kind
+that expects a Refl coercion (or something equivalent to Refl)
+when it looks up a kind variable.
+
 \begin{code}
+-- ----------------------------------------------------
+-- See Note [Lifting coercions over types: liftCoSubst]
+-- ----------------------------------------------------
+
 data LiftCoSubst = LCS InScopeSet LiftCoEnv
 
 type LiftCoEnv = VarEnv Coercion
@@ -1163,14 +1150,44 @@ liftCoSubstTyVar :: LiftCoSubst -> TyVar -> Maybe Coercion
 liftCoSubstTyVar (LCS _ cenv) tv = lookupVarEnv cenv tv 
 
 liftCoSubstTyVarBndr :: LiftCoSubst -> TyVar -> (LiftCoSubst, TyVar)
-liftCoSubstTyVarBndr (LCS in_scope cenv) old_var
+liftCoSubstTyVarBndr subst@(LCS in_scope cenv) old_var
   = (LCS (in_scope `extendInScopeSet` new_var) new_cenv, new_var)		
   where
     new_cenv | no_change = delVarEnv cenv old_var
 	     | otherwise = extendVarEnv cenv old_var (Refl (TyVarTy new_var))
 
-    no_change = new_var == old_var
-    new_var = uniqAway in_scope old_var
+    no_change = no_kind_change && (new_var == old_var)
+
+    new_var1 = uniqAway in_scope old_var
+
+    old_ki = tyVarKind old_var
+    no_kind_change = isEmptyVarSet (tyVarsOfType old_ki)
+    new_var | no_kind_change = new_var1
+            | otherwise      = setTyVarKind new_var1 (subst_kind subst old_ki)
+
+subst_kind :: LiftCoSubst -> Kind -> Kind
+-- See Note [Substituting kinds in liftCoSubst]
+subst_kind subst@(LCS _ cenv) kind
+  = go kind
+  where
+    go (LitTy n)         = n `seq` LitTy n
+    go (TyVarTy kv)      = subst_kv kv
+    go (TyConApp tc tys) = let args = map go tys
+                           in  args `seqList` TyConApp tc args
+
+    go (FunTy arg res)   = (FunTy $! (go arg)) $! (go res)
+    go (AppTy fun arg)   = mkAppTy (go fun) $! (go arg)
+    go (ForAllTy tv ty)  = case liftCoSubstTyVarBndr subst tv of
+                              (subst', tv') ->
+                                 ForAllTy tv' $! (subst_kind subst' ty)
+
+    subst_kv kv
+      | Just co <- lookupVarEnv cenv kv
+      , let co_kind = coercionKind co
+      = ASSERT2( pFst co_kind `eqKind` pSnd co_kind, ppr kv $$ ppr co )
+        pFst co_kind
+      | otherwise
+      = TyVarTy kv
 \end{code}
 
 \begin{code}

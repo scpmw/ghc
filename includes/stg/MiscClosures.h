@@ -98,6 +98,7 @@ RTS_FUN(stg_BCO);
 RTS_ENTRY(stg_EVACUATED);
 RTS_ENTRY(stg_WEAK);
 RTS_ENTRY(stg_DEAD_WEAK);
+RTS_ENTRY(stg_C_FINALIZER_LIST);
 RTS_ENTRY(stg_STABLE_NAME);
 RTS_ENTRY(stg_MVAR_CLEAN);
 RTS_ENTRY(stg_MVAR_DIRTY);
@@ -412,7 +413,7 @@ RTS_FUN_DECL(stg_threadStatuszh);
 RTS_FUN_DECL(stg_mkWeakzh);
 RTS_FUN_DECL(stg_mkWeakNoFinalizzerzh);
 RTS_FUN_DECL(stg_mkWeakForeignzh);
-RTS_FUN_DECL(stg_mkWeakForeignEnvzh);
+RTS_FUN_DECL(stg_addCFinalizzerToWeakzh);
 RTS_FUN_DECL(stg_finalizzeWeakzh);
 RTS_FUN_DECL(stg_deRefWeakzh);
 
@@ -465,7 +466,6 @@ extern StgWord stg_stack_save_entries[];
 // Storage.c
 extern unsigned int RTS_VAR(g0);
 extern unsigned int RTS_VAR(large_alloc_lim);
-extern StgWord RTS_VAR(weak_ptr_list);
 extern StgWord RTS_VAR(atomic_modify_mutvar_mutex);
 
 // RtsFlags
@@ -483,6 +483,9 @@ extern StgWord      RTS_VAR(CCS_LIST);         /* registered CCS list */
 extern StgWord      CCS_SYSTEM[];
 extern unsigned int RTS_VAR(CC_ID);            /* global ids */
 extern unsigned int RTS_VAR(CCS_ID);
+
+// Capability.c
+extern unsigned int n_capabilities;
 
 #endif
 

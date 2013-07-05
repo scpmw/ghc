@@ -46,7 +46,6 @@ import RdrName
 import Name
 import NameSet
 import TyCon
-import CoAxiom
 import TcType
 import Var
 import VarSet
@@ -355,7 +354,7 @@ tcDeriving tycl_decls inst_decls deriv_decls
   where
     ddump_deriving :: Bag (InstInfo Name) -> HsValBinds Name
                    -> Bag TyCon                 -- ^ Empty data constructors
-                   -> Bag (FamInst Unbranched)  -- ^ Rep type family instances
+                   -> Bag (FamInst)             -- ^ Rep type family instances
                    -> SDoc
     ddump_deriving inst_infos extra_binds repMetaTys repFamInsts
       =    hang (ptext (sLit "Derived instances:"))
@@ -370,12 +369,11 @@ tcDeriving tycl_decls inst_decls deriv_decls
     hangP s x = text "" $$ hang (ptext (sLit s)) 2 x
 
 -- Prints the representable type family instance
-pprRepTy :: FamInst Unbranched -> SDoc
-pprRepTy fi@(FamInst { fi_branches = FirstBranch (FamInstBranch { fib_lhs = lhs
-                                                                , fib_rhs = rhs }) })
+pprRepTy :: FamInst -> SDoc
+pprRepTy fi@(FamInst { fi_tys = lhs })
   = ptext (sLit "type") <+> ppr (mkTyConApp (famInstTyCon fi) lhs) <+>
-      equals <+> ppr rhs 
-
+      equals <+> ppr rhs
+  where rhs = famInstRHS fi
 
 -- As of 24 April 2012, this only shares MetaTyCons between derivations of
 -- Generic and Generic1; thus the types and logic are quite simple.
@@ -552,8 +550,9 @@ deriveFamInst decl@(DataFamInstDecl { dfid_tycon = L _ tc_name, dfid_pats = pats
                                     , dfid_defn = HsDataDefn { dd_derivs = Just preds } })
   = tcAddDataFamInstCtxt decl $
     do { fam_tc <- tcLookupTyCon tc_name
-       ; tcFamTyPats fam_tc pats (\_ -> return ()) $ \ tvs' pats' _ ->
-         mapM (deriveTyData tvs' fam_tc pats') preds }
+       ; tcFamTyPats tc_name (tyConKind fam_tc) pats (\_ -> return ()) $
+         \ tvs' pats' _ ->
+           mapM (deriveTyData tvs' fam_tc pats') preds }
         -- Tiresomely we must figure out the "lhs", which is awkward for type families
         -- E.g.   data T a b = .. deriving( Eq )
         --          Here, the lhs is (T a b)
@@ -580,6 +579,7 @@ deriveStandalone (L loc (DerivDecl deriv_ty))
               , text "cls:" <+> ppr cls
               , text "tys:" <+> ppr inst_tys ]
                 -- C.f. TcInstDcls.tcLocalInstDecl1
+       ; checkTc (not (null inst_tys)) derivingNullaryErr
 
        ; let cls_tys = take (length inst_tys - 1) inst_tys
              inst_ty = last inst_tys
@@ -618,7 +618,9 @@ deriveTyData tvs tc tc_args (L loc deriv_pred)
         -- Given data T a b c = ... deriving( C d ),
         -- we want to drop type variables from T so that (C d (T a)) is well-kinded
         ; let cls_tyvars     = classTyVars cls
-              kind           = tyVarKind (last cls_tyvars)
+        ; checkTc (not (null cls_tyvars)) derivingNullaryErr
+
+        ; let kind           = tyVarKind (last cls_tyvars)
               (arg_kinds, _) = splitKindFunTys kind
               n_args_to_drop = length arg_kinds
               n_args_to_keep = tyConArity tc - n_args_to_drop
@@ -701,10 +703,22 @@ mkEqnHelp orig tvs cls cls_tys tc_app mtheta
            -- For standalone deriving (mtheta /= Nothing),
            -- check that all the data constructors are in scope.
            ; rdr_env <- getGlobalRdrEnv
-           ; let hidden_data_cons = not (isWiredInName (tyConName rep_tc)) &&
+           ; let data_con_names = map dataConName (tyConDataCons rep_tc)
+                 hidden_data_cons = not (isWiredInName (tyConName rep_tc)) &&
                                     (isAbstractTyCon rep_tc ||
-                                     any not_in_scope (tyConDataCons rep_tc))
-                 not_in_scope dc  = null (lookupGRE_Name rdr_env (dataConName dc))
+                                     any not_in_scope data_con_names)
+                 not_in_scope dc  = null (lookupGRE_Name rdr_env dc)
+
+                 -- Make a Qual RdrName that will do for each DataCon
+                 -- so we can report it as used (Trac #7969)
+                 data_con_rdrs = [ mkRdrQual (is_as (is_decl imp_spec)) occ
+                                 | dc_name <- data_con_names
+                                 , let occ  = nameOccName dc_name
+                                       gres = lookupGRE_Name rdr_env dc_name
+                                 , not (null gres)
+                                 , Imported (imp_spec:_) <- [gre_prov (head gres)] ]
+
+           ; addUsedRdrNames data_con_rdrs
            ; unless (isNothing mtheta || not hidden_data_cons)
                     (bale_out (derivingHiddenErr tycon))
 
@@ -729,10 +743,8 @@ mkEqnHelp orig tvs cls cls_tys tc_app mtheta
                 Nothing -> bale_out (ptext (sLit "No family instance for")
                                      <+> quotes (pprTypeApp tycon tys))
                 Just (FamInstMatch { fim_instance = famInst
-                                   , fim_index    = index
                                    , fim_tys      = tys })
-                  -> ASSERT( index == 0 )
-                     let tycon' = dataFamInstRepTyCon famInst
+                  -> let tycon' = dataFamInstRepTyCon famInst
                      in return (tycon', tys) }
 \end{code}
 
@@ -917,7 +929,7 @@ inferConstraints cls inst_tys rep_tc rep_tc_args
   = return []
 
   | cls `hasKey` gen1ClassKey   -- Gen1 needs Functor
-  = ASSERT (length rep_tc_tvs > 0)   -- See Note [Getting base classes]
+  = ASSERT(length rep_tc_tvs > 0)   -- See Note [Getting base classes]
     do { functorClass <- tcLookupClass functorClassName
        ; return (con_arg_constraints functorClass (get_gen1_constrained_tys last_tv)) }
 
@@ -1874,6 +1886,9 @@ genDerivStuff loc fix_env clas name tycon comaux_maybe
 %************************************************************************
 
 \begin{code}
+derivingNullaryErr :: MsgDoc
+derivingNullaryErr = ptext (sLit "Cannot derive instances for nullary classes")
+
 derivingKindErr :: TyCon -> Class -> [Type] -> Kind -> MsgDoc
 derivingKindErr tc cls cls_tys cls_kind
   = hang (ptext (sLit "Cannot derive well-kinded instance of form")

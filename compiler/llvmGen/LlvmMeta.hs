@@ -42,7 +42,7 @@ import MonadUtils      ( MonadIO(..) )
 import Outputable      ( showSDoc, ppr, renderWithStyle, mkCodeStyle,  CodeStyle(..) )
 import Panic           ( panic )
 import Platform        ( platformOS, OS(..) )
-import Unique          ( getKey, getUnique )
+import Unique          ( Unique, getKey, getUnique )
 
 import System.Directory( getCurrentDirectory)
 import Data.Maybe      ( fromMaybe, fromJust )
@@ -57,22 +57,21 @@ import Foreign.Storable
 lLVMDebugVersion :: Word
 lLVMDebugVersion = 0x90000
 
-mkDwarfMeta :: Word -> [LlvmVar] -> LlvmLit
+mkDwarfMeta :: Word -> [MetaExpr] -> MetaExpr
 mkDwarfMeta tag vars =
-  let tagVar = LMLitVar $ mkI32 $ fromIntegral lLVMDebugVersion + fromIntegral tag
-  in LMMeta (tagVar : vars)
+  let tagMeta = mkI32 (fromIntegral lLVMDebugVersion + fromIntegral tag)
+  in MetaStruct (tagMeta : vars)
 
-renderMeta :: LlvmMetaUnamed -> LlvmLit -> LlvmM ()
-renderMeta n val = renderLlvm $ pprLlvmData ([global], [])
-  where global = LMGlobal (LMMetaUnnamed n) (Just (LMStaticLit val))
+renderMeta :: Int -> MetaExpr -> LlvmM ()
+renderMeta n expr = renderLlvm $ ppLlvmMeta (MetaUnamed n expr)
 
 -- | Ids for unique global meta data nodes
-unitN, fileN :: LMMetaUnique
-unitN = mkMetaUnique (fsLit "LlvmMeta.unitN")
-fileN = mkMetaUnique (fsLit "LlvmMeta.fileN")
+unitN, fileN :: Unique
+unitN = getUnique (fsLit "LlvmMeta.unitN")
+fileN = getUnique (fsLit "LlvmMeta.fileN")
 
 -- | Often-used types to cache meta data for
-cachedTypeMeta :: LlvmM [(LlvmType, LMMetaUnique)]
+cachedTypeMeta :: LlvmM [(LlvmType, Unique)]
 cachedTypeMeta = llvmFunTy [] >>= \funTy -> return
   [ mk funTy       "llvmFunTy"
   , mk i8          "i8"
@@ -84,13 +83,13 @@ cachedTypeMeta = llvmFunTy [] >>= \funTy -> return
   , mk LMFloat     "float"
   , mk LMDouble    "double"
   ]
- where mk ty n = (ty, mkMetaUnique (fsLit $ "LlvmMeta.cachedMeta." ++ n))
+ where mk ty n = (ty, getUnique (fsLit $ "LlvmMeta.cachedMeta." ++ n))
 
 -- | Allocates global meta data nodes
 cmmMetaLlvmPrelude :: LlvmM ()
 cmmMetaLlvmPrelude = do
   mod_loc <- getModLoc
-  
+
   -- Allocate compilation unit meta. It gets emitted later in
   -- cmmMetaLlvmUnit, after all procedures have been written out.
   unitId <- getMetaUniqueId
@@ -117,11 +116,11 @@ cmmMetaLlvmPrelude = do
   flip mapM_ stgTBAA $ \(uniq, name, parent) -> do
     tbaaId <- getMetaUniqueId
     parentId <- maybe (return Nothing) getUniqMeta parent
-    renderMeta tbaaId $ LMMeta $ map LMLitVar
-      [ LMMetaString name
+    renderMeta tbaaId $ MetaStruct
+      [ MetaStr name
       , case parentId of
-        Just p  -> LMMetaRef p
-        Nothing -> nullLit
+        Just p  -> MetaNode p
+        Nothing -> mkNull
       ]
     setUniqMeta uniq tbaaId
 
@@ -136,7 +135,7 @@ cmmMetaLlvmUnit = do
   cached <- cachedTypeMeta
   typeIds <- mapM (fmap fromJust . getUniqMeta . snd) cached
   procIds <- getProcMetaIds
-  let toMetaList      = LMMeta . map (LMLitVar . LMMetaRef)
+  let toMetaList      = MetaStruct . map MetaNode
       enumTypeMetas   = []
       retainTypeMetas = typeIds
       subprogramMetas = procIds
@@ -149,16 +148,16 @@ cmmMetaLlvmUnit = do
 
   -- Emit compile unit information.
   opt <- getDynFlag optLevel
-  renderMeta unitId $ mkDwarfMeta dW_TAG_compile_unit $ map LMLitVar
-    [ nullLit                  -- "unused"
+  renderMeta unitId $ mkDwarfMeta dW_TAG_compile_unit
+    [ mkNull                           -- "unused"
     , mkI32 (fromIntegral dW_LANG_Haskell) -- DWARF language identifier
-    , LMMetaString (fsLit srcFile)     -- Source code name
-    , LMMetaString (fsLit srcPath)     -- Compilation base directory
-    , LMMetaString (fsLit producerName)-- Producer
+    , MetaStr (fsLit srcFile)          -- Source code name
+    , MetaStr (fsLit srcPath)          -- Compilation base directory
+    , MetaStr (fsLit producerName)     -- Producer
     , mkI1 True                        -- Main compilation unit?
                                        -- Not setting this causes LLVM to not generate anything at all!
     , mkI1 $ opt > 0                   -- Optimized?
-    , LMMetaString (fsLit "")          -- Flags (?)
+    , MetaStr (fsLit "")          -- Flags (?)
     , mkI32 0                          -- Runtime version (?)
     , toMetaList enumTypeMetas         -- List of enums types
     , toMetaList retainTypeMetas       -- List of retained types
@@ -166,10 +165,7 @@ cmmMetaLlvmUnit = do
     , toMetaList globalMetas           -- List of global variables
     ]
 
-  let mkNamedMeta name xs =
-        renderLlvm $ pprLlvmData
-          ([LMGlobal (LMMetaNamed (fsLit name))
-                     (Just $ LMStaticLit $ LMMetaRefs xs)], [])
+  let mkNamedMeta name xs = renderLlvm $ ppLlvmMeta $ MetaNamed (fsLit name) xs
 
   -- This is probably redundant. But judging by what clang produces,
   -- just emitting "llvm.dbg.cu" isn't the only option. So let's be
@@ -182,7 +178,7 @@ cmmMetaLlvmUnit = do
 
   return ()
 
-emitFileMeta :: FastString -> LlvmM LlvmMetaUnamed
+emitFileMeta :: FastString -> LlvmM Int
 emitFileMeta filePath = do
 
   -- Already have the file?
@@ -194,17 +190,17 @@ emitFileMeta filePath = do
       fileId <- getMetaUniqueId
       Just unitId <- getUniqMeta unitN
       srcPath <- liftIO $ getCurrentDirectory
-      renderMeta fileId $ mkDwarfMeta dW_TAG_file_type $ map LMLitVar
-        [ LMMetaString (filePath)                    -- Source file name
-        , LMMetaString (mkFastString srcPath)        -- Source file directory
-        , LMMetaRef unitId                           -- Reference to compile unit
+      renderMeta fileId $ mkDwarfMeta dW_TAG_file_type
+        [ MetaStr (filePath)                    -- Source file name
+        , MetaStr (mkFastString srcPath)        -- Source file directory
+        , MetaNode unitId                           -- Reference to compile unit
         ]
       setFileMeta filePath fileId
 
       return fileId
 
 -- | Generates meta data for a procedure, returning its meta data ID
-cmmMetaLlvmProc :: RawCmmDecl -> LlvmM (LlvmMetaUnamed, BlockEnv RawTickish)
+cmmMetaLlvmProc :: RawCmmDecl -> LlvmM (Int, BlockEnv RawTickish)
 cmmMetaLlvmProc proc@(CmmProc infos cmmLabel _ graph) = do
 
   -- Get entry label name
@@ -235,23 +231,24 @@ cmmMetaLlvmProc proc@(CmmProc infos cmmLabel _ graph) = do
   procTypeMeta <- typeToMeta funTy
 
   procId <- getMetaUniqueId
-  renderMeta procId $ mkDwarfMeta dW_TAG_subprogram $ map LMLitVar
-    [ mkI32 0                                    -- "Unused"
-    , LMMetaRef unitId                           -- Reference to file
-    , LMMetaString procedureName                 -- Procedure name
-    , LMMetaString displayName                   -- Display name
-    , LMMetaString linkageName                   -- MIPS name
-    , LMMetaRef fileId                           -- Reference to file
+  renderMeta procId $ mkDwarfMeta dW_TAG_subprogram
+    [ mkI32 0                                   -- "Unused"
+    , MetaNode unitId                           -- Reference to file
+    , MetaStr procedureName                 -- Procedure name
+    , MetaStr displayName                   -- Display name
+    , MetaStr linkageName                   -- MIPS name
+    , MetaNode fileId                           -- Reference to file
     , mkI32 $ fromIntegral line                  -- Line number
     , procTypeMeta                               -- Type descriptor
     , mkI1 local                                 -- Local to compile unit
     , mkI1 True                                  -- Defined here (not "extern")
     , mkI32 0                                    -- Virtuality (none)
     , mkI32 0                                    --
-    , nullLit                       --
+    , mkNull                       --
     , mkI1 False                                 -- Artificial (?!)
     , mkI1 $ opt > 0                             -- Optimized
-    ] ++ [ funRef ]                              -- Function pointer
+    , MetaVar funRef                             -- Function pointer
+    ]
   addProcMeta procId
   return (procId, blockTicks)
 
@@ -268,7 +265,7 @@ tickToLoc _ = do mod_loc <- getModLoc
 
 -- | Generates meta data for a block and returns a meta data ID to use
 -- for annnotating statements
-cmmMetaLlvmBlock :: (LlvmMetaUnamed, BlockEnv RawTickish) -> CmmBlock -> LlvmM (LlvmMetaUnamed, LlvmMetaUnamed, LlvmMetaUnamed)
+cmmMetaLlvmBlock :: (Int, BlockEnv RawTickish) -> CmmBlock -> LlvmM (Int, Int, Int)
 cmmMetaLlvmBlock (procId, blockTicks) block = do
 
   -- Figure out line information for this tick
@@ -291,20 +288,20 @@ cmmMetaLlvmBlock (procId, blockTicks) block = do
   let uniqCol = getKey $ getUnique lbl
 
   bid <- getMetaUniqueId
-  renderMeta bid $ mkDwarfMeta dW_TAG_lexical_block $ map LMLitVar
-    [ LMMetaRef procId
+  renderMeta bid $ mkDwarfMeta dW_TAG_lexical_block
+    [ MetaNode procId
     , mkI32 $ fromIntegral line               -- Source line
     , mkI32 $ fromIntegral uniqCol            -- Source column
-    , LMMetaRef fileId                        -- File context
+    , MetaNode fileId                        -- File context
     , mkI32 0                                 -- Template parameter index
     ]
 
   id <- getMetaUniqueId
-  renderMeta id $ LMMeta $ map LMLitVar
+  renderMeta id $ MetaStruct
     [ mkI32 $ fromIntegral line               -- Source line
     , mkI32 $ fromIntegral col                -- Source column
-    , LMMetaRef bid                           -- Block context
-    , nullLit                                 -- Inlined from location
+    , MetaNode bid                           -- Block context
+    , mkNull                                 -- Inlined from location
     ]
 
   -- Unfortunately, we actually *want* to be able to identify
@@ -322,21 +319,21 @@ cmmMetaLlvmBlock (procId, blockTicks) block = do
   return (bid, id, vid)
 
 -- | Put debug annotations on a list of statements
-annotateDebug :: LlvmMetaUnamed -> [LlvmStatement] -> [LlvmStatement]
-annotateDebug annotId = map (MetaStmt [(fsLit "dbg", annotId)])
+annotateDebug :: Int -> [LlvmStatement] -> [LlvmStatement]
+annotateDebug annotId = map (MetaStmt [MetaAnnot (fsLit "dbg") (MetaNode annotId)])
 
 -- | Gives type description as meta data or a reference to an existing
 -- metadata node that contains it.
-typeToMeta :: LlvmType -> LlvmM LlvmLit
+typeToMeta :: LlvmType -> LlvmM MetaExpr
 typeToMeta ty = do
   cached <- cachedTypeMeta
   case Prelude.lookup ty cached of
     Just uniq -> do Just i <- getUniqMeta uniq
-                    return (LMMetaRef i)
+                    return (MetaNode i)
     Nothing   -> typeToMeta' ty
 
 -- | Gives type description as meta data
-typeToMeta' :: LlvmType -> LlvmM LlvmLit
+typeToMeta' :: LlvmType -> LlvmM MetaExpr
 typeToMeta' ty = case ty of
   LMInt{}       -> baseType dW_ATE_signed
   LMFloat{}     -> baseType dW_ATE_float
@@ -347,23 +344,23 @@ typeToMeta' ty = case ty of
   (LMArray n t) -> compositeType dW_TAG_array_type [subrangeDesc n] =<< typeToMeta t
   (LMVector n t)-> compositeType dW_TAG_array_type [subrangeDesc n] =<< typeToMeta t
   LMLabel       -> derivedType dW_TAG_pointer_type =<< typeToMeta LMVoid
-  LMVoid        -> return nullLit
+  LMVoid        -> return mkNull
   (LMStruct ts) -> do members <- mapM typeToMeta ts
-                      compositeType dW_TAG_structure_type members nullLit
+                      compositeType dW_TAG_structure_type members mkNull
   (LMAlias(_,t))-> derivedType dW_TAG_typedef =<< typeToMeta t
-  LMMetaType    -> error "typeToMeta: Meta data has no type representation in DWARF!"
+  LMMetadata    -> error "typeToMeta: Meta data has no type representation in DWARF!"
   (LMFunction (LlvmFunctionDecl{ decReturnType=retT, decParams=parTs }))
                 -> do ret <- typeToMeta retT
                       pars <- mapM (typeToMeta . fst) parTs
-                      compositeType dW_TAG_subroutine_type (ret:pars) nullLit
+                      compositeType dW_TAG_subroutine_type (ret:pars) mkNull
  where
   mkType tag fields = do
    Just unitMeta <- getUniqMeta unitN
    df <- getDynFlags
-   return $ mkDwarfMeta tag $ map LMLitVar $
-    [ LMMetaRef unitMeta                              -- Context
-    , LMMetaString $ mkFastString $ showSDoc df $ ppr ty -- Name
-    , nullLit                                         -- File reference
+   return $ mkDwarfMeta tag $
+    [ MetaNode unitMeta                              -- Context
+    , MetaStr $ mkFastString $ showSDoc df $ ppr ty -- Name
+    , mkNull                                         -- File reference
     , mkI32 0                                         -- Line number
     , mkI64 $ fromIntegral $ llvmWidthInBits df ty    -- Width in bits
     , mkI64 $ fromIntegral $ llvmWidthInBits df (llvmWord df) -- Alignment in bits
@@ -381,25 +378,25 @@ typeToMeta' ty = case ty of
     [ mkI64 0                                         -- Offset in bits
     , mkI32 0                                         -- Flags
     , subty                                           -- Referenced type
-    , LMMeta (map LMLitVar members)                   -- Member descriptors
+    , MetaStruct members                              -- Member descriptors
     , mkI32 0                                         -- Runtime languages
     ]
-  subrangeDesc n = mkDwarfMeta dW_TAG_subrange_type $ map LMLitVar $
+  subrangeDesc n = mkDwarfMeta dW_TAG_subrange_type
     [ mkI64 0                                         -- Low value
     , mkI64 (fromIntegral $ n-1)                      -- High value
     ]
 
-genVariableMeta :: LMString -> Maybe Int -> LlvmType -> LlvmMetaUnamed -> LlvmM LlvmLit
+genVariableMeta :: LMString -> Maybe Int -> LlvmType -> Int -> LlvmM MetaExpr
 genVariableMeta vname par vty scopeId = do
   tyDesc <- typeToMeta vty
   Just fileId <- getUniqMeta fileN
-  return $ LMMeta $ map LMLitVar
+  return $ MetaStruct
     [ mkI32 $ fromIntegral $ case par of
          Nothing -> dW_TAG_auto_variable
          Just _  -> dW_TAG_arg_variable
-    , LMMetaRef scopeId                               -- Context
-    , LMMetaString vname                              -- Name
-    , LMMetaRef fileId                                -- File reference
+    , MetaNode scopeId                               -- Context
+    , MetaStr vname                              -- Name
+    , MetaNode fileId                                -- File reference
     , mkI32 (fromIntegral (maybe 0 (+1) par `shiftL` 24))
                                                       -- Line / argument number
     , tyDesc                                          -- Type description
@@ -477,11 +474,13 @@ cmmDebugLlvmGens = do
   renderLlvm $ pprLlvmData ([lmDebug], [])
   markUsedVar lmDebugVar
 
-mkI32, mkI64 :: Integer -> LlvmLit
-mkI32 n = LMIntLit n i32
-mkI64 n = LMIntLit n i64
-mkI1 :: Bool -> LlvmLit
-mkI1 f = LMIntLit (if f then 1 else 0) i1
+-- Convenience functions for constructing certain metadata values
 
-nullLit :: LlvmLit
-nullLit = LMNullLit i8Ptr
+mkI32, mkI64 :: Integer -> MetaExpr
+mkI32 n = MetaVar $ LMLitVar $ LMIntLit n i32
+mkI64 n = MetaVar $ LMLitVar $ LMIntLit n i64
+mkI1 :: Bool -> MetaExpr
+mkI1 f = MetaVar $ LMLitVar $ LMIntLit (if f then 1 else 0) i1
+
+mkNull :: MetaExpr
+mkNull = MetaVar $ LMLitVar $ LMNullLit i8Ptr

@@ -140,6 +140,7 @@ Library
         Literal
         Llvm
         Llvm.AbsSyn
+        Llvm.MetaData
         Llvm.PpLlvm
         Llvm.Types
         LlvmCodeGen

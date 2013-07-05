@@ -29,12 +29,11 @@ import FastString
 import Outputable
 import UniqSupply
 import SysTools ( figureLlvmVersion )
-import MonadUtils
 import qualified Stream
 
-import Data.Maybe ( fromMaybe, catMaybes )
 import Control.Monad ( when )
 import Data.IORef ( writeIORef )
+import Data.Maybe ( fromMaybe, catMaybes )
 import System.IO
 
 -- -----------------------------------------------------------------------------
@@ -45,6 +44,9 @@ llvmCodeGen :: DynFlags -> ModLocation -> Handle -> UniqSupply
                -> IO ()
 llvmCodeGen dflags location h us cmm_stream
   = do bufh <- newBufHandle h
+
+       -- Pass header
+       showPass dflags "LLVM CodeGen"
 
        -- get llvm version, cache for later use
        ver <- (fromMaybe defaultLlvmVersion) `fmap` figureLlvmVersion dflags
@@ -134,8 +136,7 @@ cmmLlvmGen cmm@CmmProc{} = do
     let fixed_cmm = {-# SCC "llvm_fix_regs" #-}
                     fixStgRegisters dflags cmm
 
-    liftIO $ dumpIfSet_dyn dflags Opt_D_dump_opt_cmm "Optimised Cmm"
-        (pprCmmGroup [fixed_cmm])
+    dumpIfSetLlvm Opt_D_dump_opt_cmm "Optimised Cmm" (pprCmmGroup [fixed_cmm])
 
     -- generate llvm code from cmm
     llvmBC <- withClearVars $ genLlvmProc fixed_cmm

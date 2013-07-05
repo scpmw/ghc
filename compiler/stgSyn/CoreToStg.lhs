@@ -38,6 +38,7 @@ import FastString
 import Util
 import DynFlags
 import ForeignCall
+import Demand           ( isSingleUsed )  
 import PrimOp           ( PrimCall(..) )
 \end{code}
 
@@ -245,7 +246,7 @@ coreToTopStgRhs dflags this_mod scope_fv_info (bndr, rhs)
   = do { (new_rhs, rhs_fvs, _) <- coreToStgExpr rhs
        ; lv_info <- freeVarsToLiveVars rhs_fvs
 
-       ; let stg_rhs   = mkTopStgRhs dflags this_mod rhs_fvs (mkSRT lv_info) bndr_info (annotateCore (bndr, rhs)) new_rhs
+       ; let stg_rhs   = mkTopStgRhs dflags this_mod rhs_fvs (mkSRT lv_info) bndr bndr_info (annotateCore (bndr, rhs)) new_rhs
              stg_arity = stgRhsArity stg_rhs
        ; return (ASSERT2( arity_ok stg_arity, mk_arity_msg stg_arity) stg_rhs,
                  rhs_fvs) }
@@ -272,11 +273,11 @@ coreToTopStgRhs dflags this_mod scope_fv_info (bndr, rhs)
                 ptext (sLit "STG arity:") <+> ppr stg_arity]
 
 mkTopStgRhs :: DynFlags -> Module -> FreeVarsInfo
-            -> SRT -> StgBinderInfo -> (StgExpr -> StgExpr)
+            -> SRT -> Id -> StgBinderInfo -> (StgExpr -> StgExpr)
             -> StgExpr
             -> StgRhs
 
-mkTopStgRhs dflags this_mod rhs_fvs srt binder_info annot rhs = case stripTicks [] rhs of
+mkTopStgRhs dflags this_mod rhs_fvs srt bndr binder_info annot rhs = case stripTicks [] rhs of
   (ticks, StgLam bndrs body)
     -> StgRhsClosure noCCS binder_info
                      (getFVs rhs_fvs)
@@ -290,7 +291,7 @@ mkTopStgRhs dflags this_mod rhs_fvs srt binder_info annot rhs = case stripTicks 
 
   _ -> StgRhsClosure noCCS binder_info
                     (getFVs rhs_fvs)
-                    Updatable
+                    (getUpdateFlag bndr)
                     srt
                     [] (annot rhs)
 
@@ -298,6 +299,10 @@ mkTopStgRhs dflags this_mod rhs_fvs srt binder_info annot rhs = case stripTicks 
           | not (tickishIsCode t)    = stripTicks (t:ts) e
         stripTicks ts other          = (reverse ts, other)
 
+getUpdateFlag :: Id -> UpdateFlag
+getUpdateFlag bndr 
+  = if isSingleUsed (idDemandInfo bndr) 
+    then SingleEntry else Updatable                 
 \end{code}
 
 
@@ -794,27 +799,27 @@ coreToStgRhs :: FreeVarsInfo            -- Free var info for the scope of the bi
 coreToStgRhs scope_fv_info binders (bndr, rhs) = do
     (new_rhs, rhs_fvs, rhs_escs) <- coreToStgExpr rhs
     lv_info <- freeVarsToLiveVars (binders `minusFVBinders` rhs_fvs)
-    return (mkStgRhs rhs_fvs (mkSRT lv_info) bndr_info (annotateCore (bndr, rhs)) new_rhs,
+    return (mkStgRhs rhs_fvs (mkSRT lv_info) bndr bndr_info (annotateCore (bndr, rhs)) new_rhs,
             rhs_fvs, lv_info, rhs_escs)
   where
     bndr_info = lookupFVInfo scope_fv_info bndr
 
-mkStgRhs :: FreeVarsInfo -> SRT -> StgBinderInfo -> (StgExpr -> StgExpr) -> StgExpr -> StgRhs
+mkStgRhs :: FreeVarsInfo -> SRT -> Id -> StgBinderInfo -> (StgExpr -> StgExpr) -> StgExpr -> StgRhs
 
-mkStgRhs _ _ _ _ (StgConApp con args) = StgRhsCon noCCS con args
+mkStgRhs _ _ _ _ _ (StgConApp con args) = StgRhsCon noCCS con args
 
-mkStgRhs rhs_fvs srt binder_info annot (StgLam bndrs body)
+mkStgRhs rhs_fvs srt _ binder_info annot (StgLam bndrs body)
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   ReEntrant
                   srt bndrs (annot body)
 
-mkStgRhs rhs_fvs srt binder_info annot rhs
+mkStgRhs rhs_fvs srt bndr binder_info annot rhs
   = StgRhsClosure noCCS binder_info
                   (getFVs rhs_fvs)
                   upd_flag srt [] (annot rhs)
   where
-   upd_flag = Updatable
+   upd_flag = getUpdateFlag bndr
   {-
     SDM: disabled.  Eval/Apply can't handle functions with arity zero very
     well; and making these into simple non-updatable thunks breaks other
@@ -1136,7 +1141,7 @@ plusFVInfo :: (Var, HowBound, StgBinderInfo)
            -> (Var, HowBound, StgBinderInfo)
            -> (Var, HowBound, StgBinderInfo)
 plusFVInfo (id1,hb1,info1) (id2,hb2,info2)
-  = ASSERT (id1 == id2 && hb1 `check_eq_how_bound` hb2)
+  = ASSERT(id1 == id2 && hb1 `check_eq_how_bound` hb2)
     (id1, hb1, combineStgBinderInfo info1 info2)
 
 -- The HowBound info for a variable in the FVInfo should be consistent

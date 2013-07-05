@@ -4,7 +4,7 @@
 
 module LlvmCodeGen.Regs (
         lmGlobalRegArg, lmGlobalRegVar, alwaysLive,
-        stgTBAA, topN, baseN, stackN, heapN, rxN, otherN, tbaa, getTBAA
+        stgTBAA, baseN, stackN, heapN, rxN, otherN, tbaa, getTBAA
     ) where
 
 #include "HsVersions.h"
@@ -15,6 +15,7 @@ import CmmExpr
 import DynFlags
 import FastString
 import Outputable ( panic )
+import Unique
 
 -- | Get the LlvmVar function variable storing the real register
 lmGlobalRegVar :: DynFlags -> GlobalReg -> LlvmVar
@@ -77,7 +78,7 @@ alwaysLive :: [GlobalReg]
 alwaysLive = [BaseReg, Sp, Hp, SpLim, HpLim, node]
 
 -- | STG Type Based Alias Analysis hierarchy
-stgTBAA :: [(LMMetaUnique, LMString, Maybe LMMetaUnique)]
+stgTBAA :: [(Unique, LMString, Maybe Unique)]
 stgTBAA
   = [ (topN,   fsLit "top",   Nothing)
     , (stackN, fsLit "stack", Just topN)
@@ -92,20 +93,20 @@ stgTBAA
     ]
 
 -- | Id values
-topN, stackN, heapN, rxN, baseN, otherN :: LMMetaUnique
-topN   = mkMetaUnique (fsLit "LlvmCodeGen.Regs.topN")
-stackN = mkMetaUnique (fsLit "LlvmCodeGen.Regs.stackN")
-heapN  = mkMetaUnique (fsLit "LlvmCodeGen.Regs.heapN")
-rxN    = mkMetaUnique (fsLit "LlvmCodeGen.Regs.rxN")
-baseN  = mkMetaUnique (fsLit "LlvmCodeGen.Regs.baseN")
-otherN = mkMetaUnique (fsLit "LlvmCodeGen.Regs.otherN")
+topN, stackN, heapN, rxN, baseN, otherN :: Unique
+topN   = getUnique (fsLit "LlvmCodeGen.Regs.topN")
+stackN = getUnique (fsLit "LlvmCodeGen.Regs.stackN")
+heapN  = getUnique (fsLit "LlvmCodeGen.Regs.heapN")
+rxN    = getUnique (fsLit "LlvmCodeGen.Regs.rxN")
+baseN  = getUnique (fsLit "LlvmCodeGen.Regs.baseN")
+otherN = getUnique (fsLit "LlvmCodeGen.Regs.otherN")
 
 -- | The TBAA metadata identifier
 tbaa :: LMString
 tbaa = fsLit "tbaa"
 
 -- | Get the correct TBAA metadata information for this register type
-getTBAA :: GlobalReg -> LMMetaUnique
+getTBAA :: GlobalReg -> Unique
 getTBAA BaseReg          = baseN
 getTBAA Sp               = stackN
 getTBAA Hp               = heapN

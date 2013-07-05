@@ -61,8 +61,8 @@ genLlvmProc _ = panic "genLlvmProc: case that shouldn't reach here!"
 -- | Generate code for a list of blocks that make up a complete
 -- procedure. The first block in the list is exepected to be the entry
 -- point and will get the prologue.
-basicBlocksCodeGen :: LiveGlobalRegs -> (LlvmMetaUnamed, BlockEnv RawTickish) -> [CmmBlock]
-                      -> LlvmM ([LlvmBasicBlock] , [LlvmCmmDecl] )
+basicBlocksCodeGen :: LiveGlobalRegs -> (Int, BlockEnv RawTickish) -> [CmmBlock]
+                      -> LlvmM ([LlvmBasicBlock], [LlvmCmmDecl])
 basicBlocksCodeGen _    _    []                     = panic "no entry block!"
 basicBlocksCodeGen live meta (entryBlock:cmmBlocks)
   = do -- Generate entry meta data and prologue
@@ -82,7 +82,7 @@ basicBlocksCodeGen live meta (entryBlock:cmmBlocks)
 
 
 -- | Generate code for one block
-basicBlockCodeGen :: (LlvmMetaUnamed, LlvmMetaUnamed, LlvmMetaUnamed)
+basicBlockCodeGen :: (Int, Int, Int)
                   -> CmmBlock
                   -> LlvmM ( LlvmBasicBlock, [LlvmCmmDecl] )
 basicBlockCodeGen (_,annotId,varId) block
@@ -93,9 +93,6 @@ basicBlockCodeGen (_,annotId,varId) block
        let instrs = annotateDebug annotId $
                     fromOL (ps `appOL` mid_instrs `appOL` tail_instrs)
        return (BasicBlock id instrs, pt ++ top' ++ top)
-
-
-
 
 -- -----------------------------------------------------------------------------
 -- * CmmNode code generation
@@ -121,6 +118,7 @@ stmtToInstrs stmt = case stmt of
     CmmComment _         -> return (nilOL, []) -- nuke comments
     CmmTick    _         -> return (nilOL, [])
     CmmContext _         -> return (nilOL, [])
+    CmmUnwind  {}        -> return (nilOL, [])
 
     CmmAssign reg src    -> genAssign reg src
     CmmStore addr src    -> genStore addr src
@@ -276,7 +274,7 @@ genCall t@(PrimTarget op) [] args'
     dflags <- getDynFlags
     let (args, alignVal) = splitAlignVal args'
         (isVolTy, isVolVal)
-              | ver >= 28       = ([i1], [mkIntLit i1 0]) 
+              | ver >= 28       = ([i1], [mkIntLit i1 0])
               | otherwise       = ([], [])
         argTy | op == MO_Memset = [i8Ptr, i8,    llvmWord dflags, i32] ++ isVolTy
               | otherwise       = [i8Ptr, i8Ptr, llvmWord dflags, i32] ++ isVolTy
@@ -410,6 +408,9 @@ genCall target res args = do
                     return (allStmts `snocOL` s2 `snocOL` s3
                                 `appOL` retStmt, top1 ++ top2)
 
+
+-- genCallSimpleCast _ _ _ dsts _ =
+--    panic ("genCallSimpleCast: " ++ show (length dsts) ++ " dsts")
 
 -- | Create a function pointer from a target.
 getFunPtr :: (LMString -> LlvmType) -> ForeignTarget
@@ -692,7 +693,7 @@ genStore_fast addr r n val
 
 -- | CmmStore operation
 -- Generic case. Uses casts and pointer arithmetic if needed.
-genStore_slow :: CmmExpr -> CmmExpr -> [MetaData] -> LlvmM StmtData
+genStore_slow :: CmmExpr -> CmmExpr -> [MetaAnnot] -> LlvmM StmtData
 genStore_slow addr val meta = do
     (vaddr, stmts1, top1) <- exprToVar addr
     (vval,  stmts2, top2) <- exprToVar val
@@ -1314,7 +1315,7 @@ genLoad_fast e r n ty = do
                 case grt == ty' of
                      -- were fine
                      True -> do
-                         (var, s3) <- doExpr ty' (MetaExpr meta $ Load ptr)
+                         (var, s3) <- doExpr ty' (MExpr meta $ Load ptr)
                          return (var, s1 `snocOL` s2 `snocOL` s3,
                                      [])
 
@@ -1322,7 +1323,7 @@ genLoad_fast e r n ty = do
                      False -> do
                          let pty = pLift ty'
                          (ptr', s3) <- doExpr pty $ Cast LM_Bitcast ptr pty
-                         (var, s4) <- doExpr ty' (MetaExpr meta $ Load ptr')
+                         (var, s4) <- doExpr ty' (MExpr meta $ Load ptr')
                          return (var, s1 `snocOL` s2 `snocOL` s3
                                     `snocOL` s4, [])
 
@@ -1333,21 +1334,21 @@ genLoad_fast e r n ty = do
 
 -- | Handle Cmm load expression.
 -- Generic case. Uses casts and pointer arithmetic if needed.
-genLoad_slow :: CmmExpr -> CmmType -> [MetaData] -> LlvmM ExprData
+genLoad_slow :: CmmExpr -> CmmType -> [MetaAnnot] -> LlvmM ExprData
 genLoad_slow e ty meta = do
     (iptr, stmts, tops) <- exprToVar e
     dflags <- getDynFlags
     case getVarType iptr of
          LMPointer _ -> do
                     (dvar, load) <- doExpr (cmmToLlvmType ty)
-                                           (MetaExpr meta $ Load iptr)
+                                           (MExpr meta $ Load iptr)
                     return (dvar, stmts `snocOL` load, tops)
 
          i@(LMInt _) | i == llvmWord dflags -> do
                     let pty = LMPointer $ cmmToLlvmType ty
                     (ptr, cast)  <- doExpr pty $ Cast LM_Inttoptr iptr pty
                     (dvar, load) <- doExpr (cmmToLlvmType ty)
-                                           (MetaExpr meta $ Load ptr)
+                                           (MExpr meta $ Load ptr)
                     return (dvar, stmts `snocOL` cast `snocOL` load, tops)
 
          other -> do dflags <- getDynFlags
@@ -1491,7 +1492,7 @@ genLit _ CmmHighStackMark
 -- question is never written. Therefore we skip it where we can to
 -- save a few lines in the output and hopefully speed compilation up a
 -- bit.
-funPrologue :: LiveGlobalRegs -> [CmmBlock] -> LlvmMetaUnamed -> LlvmM StmtData
+funPrologue :: LiveGlobalRegs -> [CmmBlock] -> Int -> LlvmM StmtData
 funPrologue live cmmBlocks scopeId = do
 
   trash <- getTrashRegs
@@ -1532,7 +1533,7 @@ funPrologue live cmmBlocks scopeId = do
 
 
 -- | Declares the value of a register as a variable in debugging data
-debugDeclareRegister :: CmmReg -> LMString -> LlvmMetaUnamed -> LlvmM StmtData
+debugDeclareRegister :: CmmReg -> LMString -> Int -> LlvmM StmtData
 debugDeclareRegister reg rname scopeId = do
 
   -- Check whether register is on stack or as value. Declare
@@ -1556,18 +1557,18 @@ debugDeclareRegister reg rname scopeId = do
       return (ss `appOL` stmts, tops)
 
 -- | Declares a debug variable to correspond to the value at an address
-debugDeclareVariable :: LlvmLit -> LlvmVar -> LlvmM StmtData
+debugDeclareVariable :: MetaExpr -> LlvmVar -> LlvmM StmtData
 debugDeclareVariable varMeta addr = do
-  (declareFn, _, tops) <- getInstrinct (fsLit "llvm.dbg.declare") LMVoid [LMMetaType, LMMetaType]
-  let pars = map LMLitVar [ LMMeta [addr], varMeta ]
-  return (unitOL $ Expr $ Call StdCall declareFn pars [], tops)
+  (declareFn, _, tops) <- getInstrinct (fsLit "llvm.dbg.declare") LMVoid [LMMetadata, LMMetadata]
+  let pars = [ MetaStruct [MetaVar addr], varMeta ]
+  return (unitOL $ Expr $ CallM StdCall declareFn pars [], tops)
 
 -- | Declares a debug variable to be a constant value
-debugDeclareValue :: LlvmLit -> LlvmVar -> LlvmM StmtData
+debugDeclareValue :: MetaExpr -> LlvmVar -> LlvmM StmtData
 debugDeclareValue varMeta val = do
-  (valueFn, _, tops) <- getInstrinct (fsLit "llvm.dbg.value") LMVoid [LMMetaType, i64, LMMetaType]
-  let pars = map LMLitVar [ LMMeta [val], LMIntLit 0 i64, varMeta ]
-  return (unitOL $ Expr $ Call StdCall valueFn pars [], tops)
+  (valueFn, _, tops) <- getInstrinct (fsLit "llvm.dbg.value") LMVoid [LMMetadata, i64, LMMetadata]
+  let pars = [ MetaStruct [MetaVar val], MetaVar $ LMLitVar (LMIntLit 0 i64), varMeta ]
+  return (unitOL $ Expr $ CallM StdCall valueFn pars [], tops)
 
 -- | Function epilogue. Load STG variables to use as argument for call.
 -- STG Liveness optimisation done here.
@@ -1600,12 +1601,12 @@ funEpilogue live = do
     return (catMaybes vars, concatOL stmts)
 
 -- | Block prologue.
-blockPrologue :: LlvmMetaUnamed -> LlvmM StmtData
+blockPrologue :: Int -> LlvmM StmtData
 blockPrologue varId = do
   -- Declare block marker variable
-  debugDeclareValue (LMMetaRef varId) (LMLitVar (LMIntLit 0 i8))
+  debugDeclareValue (MetaNode varId) (LMLitVar (LMIntLit 0 i8))
 
--- | A serries of statements to trash all the STG registers.
+-- | A series of statements to trash all the STG registers.
 --
 -- In LLVM we pass the STG registers around everywhere in function calls.
 -- So this means LLVM considers them live across the entire function, when
@@ -1695,11 +1696,11 @@ pprPanic s d = Outputable.pprPanic ("LlvmCodeGen.CodeGen." ++ s) d
 
 
 -- | Returns TBAA meta data by unique
-getTBAAMeta :: LMMetaUnique -> LlvmM [MetaData]
+getTBAAMeta :: Unique -> LlvmM [MetaAnnot]
 getTBAAMeta u = do
     mi <- getUniqMeta u
-    return [(tbaa, i) | Just i <- [mi]]
+    return [MetaAnnot tbaa (MetaNode i) | let Just i = mi]
 
 -- | Returns TBAA meta data for given register
-getTBAARegMeta :: GlobalReg -> LlvmM [MetaData]
+getTBAARegMeta :: GlobalReg -> LlvmM [MetaAnnot]
 getTBAARegMeta = getTBAAMeta . getTBAA
