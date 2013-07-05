@@ -415,23 +415,19 @@ bufferAsString (len, buf) = liftIO $ do
   let go p q | p == q    = return ()
              | otherwise = peek p >>= escape . fromIntegral >> go (p `plusPtr` 1) q
 
-      -- Note that LLVM escaping is special: The only valid forms are
+      -- Note that LLVM escaping is special: The only valid escapes are
       -- "\\" and "\xx", where xx is the hexadecimal ASCII code.
-      --
-      -- Note that we are actually too careful here - the way LLVM
-      -- reads strings in, we could actually output arbitrary garbage as
-      -- long as it's not '\\' or '\"'. In the interest of readability
-      -- and all-around saneness, we don't take advantage of that.
       escape c
-        | c == ord '\\'  = putByte bh (ordB '\\') >> putByte bh (ordB '\\')
-        | c == ord '\"'  = putByte bh (ordB '\\') >> putByte bh (ordB '2') >> putByte bh (ordB '2')
-        | c == ord '\n'  = putByte bh (ordB '\\') >> putByte bh (ordB '0') >> putByte bh (ordB 'a')
+        | c == ord '\\'  = putB '\\' >> putB '\\'
+        | c == ord '\"'  = putB '\\' >> putB '2' >> putB '2'
+        | c == ord '\n'  = putB '\\' >> putB '0' >> putB 'a'
+        | c == ord '?'   = putB '\\' >> putB '3' >> putB 'f' -- silence trigraph warnings
         | isAscii (chr c) && isPrint (chr c)
                          = putByte bh $ fromIntegral c
-        | otherwise      = do putByte bh (ordB '\\')
-                              putByte bh $ ordB $ intToDigit (c `div` 16)
-                              putByte bh $ ordB $ intToDigit (c `mod` 16)
-      ordB = (fromIntegral . ord) :: Char -> Word8
+        | otherwise      = do putB '\\'
+                              putB $ intToDigit (c `div` 16)
+                              putB $ intToDigit (c `mod` 16)
+      putB = putByte bh . fromIntegral . ord
   withForeignPtr buf $ \p ->
     go p (p `plusPtr` len)
 
