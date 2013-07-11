@@ -31,6 +31,7 @@ import Outputable
 import PprCmmExpr      ( pprExpr )
 import SrcLoc
 import UniqFM
+import Util            ( seqList )
 import Var
 
 import Compiler.Hoopl
@@ -99,16 +100,16 @@ data DebugModule = DebugModule { dmodPackage :: PackageId
 -- context.
 data DebugBlock =
   DebugBlock
-  { dblProcedure :: Bool              -- ^ Top-level procedure?
-  , dblLabel :: Label                 -- ^ Hoopl label
-  , dblCLabel :: CLabel               -- ^ Output label
-  , dblHasInfoTbl :: Bool             -- ^ Has an info table?
-  , dblTicks :: [RawTickish]          -- ^ Ticks defined in this block
-  , dblSourceTick :: Maybe RawTickish -- ^ Best source tick covering this block
-  , dblPosition :: Maybe Int          -- ^ Output position relative to other blocks in proc.
-                                      --   @Nothing@ means the block has been optimized out.
-  , dblStackOff :: Maybe Int          -- ^ Unwind information
-  , dblBlocks :: [DebugBlock]         -- ^ Nested blocks
+  { dblProcedure  :: Bool                -- ^ Top-level procedure?
+  , dblLabel      :: Label               -- ^ Hoopl label
+  , dblCLabel     :: CLabel              -- ^ Output label
+  , dblHasInfoTbl :: !Bool               -- ^ Has an info table?
+  , dblTicks      :: ![RawTickish]       -- ^ Ticks defined in this block
+  , dblSourceTick :: !(Maybe RawTickish) -- ^ Best source tick covering this block
+  , dblPosition   :: !(Maybe Int)        -- ^ Output position relative to other blocks in proc.
+                                         --   @Nothing@ means the block has been optimized out.
+  , dblStackOff   :: !(Maybe Int)        -- ^ Unwind information
+  , dblBlocks     :: ![DebugBlock]       -- ^ Nested blocks
   }
 
 -- | Extract debug data from a procedure
@@ -127,34 +128,39 @@ cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
       natBlockMap = mapFromList $ flip zip [0..] $ map blockId $ filter (not . allMeta) $
                     concatMap getBlocks nats
 
-      blockMap = toBlockMap g
-      block l = fmap (mkBlock l) $ mapLookup l blockMap
-
       stackOff :: [CmmNode O O] -> Maybe Int
       stackOff []                     = Nothing
       stackOff (CmmUnwind Sp so : _)  = case evalCmmExpr so of
-                                          (Just Sp, o) -> Just o
+                                          (Just Sp, o) -> Just $! o
                                           (_      , _) -> Nothing
       stackOff (_               : xs) = stackOff xs
+
       blockMid b = let (_, mid, _) = blockSplit b in blockToList mid
 
       (topSrc, blockSrc) = findGoodSourceTicks p loc
       hasInfoTable l = l `mapMember` infos
 
-      mkBlock l b = DebugBlock { dblProcedure    = False
-                               , dblLabel        = l
-                               , dblHasInfoTbl   = hasInfoTable l
-                               , dblCLabel       = blockLbl l
-                               , dblTicks        = blockTicks b
-                               , dblPosition     = mapLookup l natBlockMap
-                               , dblStackOff     = stackOff $ blockMid b
-                               , dblSourceTick   = mapLookup l blockSrc
-                               , dblBlocks       = mapMaybe block $ blockContexts b }
-      Just entryBlock = block (g_entry g)
-  in DebugBlock { dblProcedure = True
-                , dblLabel = g_entry g
-                , dblHasInfoTbl = dblHasInfoTbl entryBlock
-                , dblCLabel = case mapLookup (g_entry g) infos of
+      blockMap = toBlockMap g
+      mkBlockByLbl l = fmap (mkBlock l) $ mapLookup l blockMap
+      mkBlock l b =
+        let nested = mapMaybe mkBlockByLbl $ blockContexts b
+            ticks  = blockTicks b
+        in seqList nested $ seqList ticks $
+           DebugBlock { dblProcedure    = False
+                      , dblLabel        = l
+                      , dblHasInfoTbl   = hasInfoTable l
+                      , dblCLabel       = blockLbl l
+                      , dblTicks        = ticks
+                      , dblPosition     = mapLookup l natBlockMap
+                      , dblStackOff     = stackOff $ blockMid b
+                      , dblSourceTick   = mapLookup l blockSrc
+                      , dblBlocks       = nested }
+
+      Just !entryBlock = mkBlockByLbl (g_entry g) -- TODO: all blocks without context parent!
+  in DebugBlock { dblProcedure    = True
+                , dblLabel        = g_entry g
+                , dblHasInfoTbl   = dblHasInfoTbl entryBlock
+                , dblCLabel       = case mapLookup (g_entry g) infos of
                      Nothing                  -> entryLbl
                      Just (Statics infoLbl _) -> infoLbl
                 , dblPosition     = Nothing
