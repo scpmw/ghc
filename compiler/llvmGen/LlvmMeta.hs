@@ -210,7 +210,7 @@ cmmMetaLlvmProc proc@(CmmProc infos cmmLabel _ graph) = do
 
   -- Find source tick to associate with procedure
   mod_loc <- getModLoc
-  let (procTick, blockTicks) = findGoodSourceTicks proc mod_loc
+  let (procTick, blockTicks) = findGoodSourceTicks mod_loc proc
   (file, line, _) <- tickToLoc procTick
   fileId <- emitFileMeta file
 

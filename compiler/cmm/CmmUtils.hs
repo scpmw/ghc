@@ -605,9 +605,9 @@ annotateBlock ts b = blockJoin hd (tstmts `blockAppend` mid) tl
 -- As this might often give us a whole list of ticks to choose from,
 -- we arbitrarily select the first source span, while preferring
 -- source ticks from the same source file or relating to dumps.
-findGoodSourceTicks :: RawCmmDecl -> ModLocation
+findGoodSourceTicks :: ModLocation -> RawCmmDecl
                     -> (Maybe RawTickish, BlockEnv RawTickish)
-findGoodSourceTicks (CmmProc _ _ _ g) mod_loc =
+findGoodSourceTicks mod_loc (CmmProc _ _ _ g) =
   let blockMap = toBlockMap g
       go ctx lbl
         | Just block <- mapLookup lbl blockMap

@@ -256,6 +256,7 @@ data DumpFlag
    | Opt_D_dump_mod_cycles
    | Opt_D_dump_view_pattern_commoning
    | Opt_D_verbose_core2core
+   | Opt_D_dump_debug
 
    deriving (Eq, Show, Enum)
 

@@ -48,8 +48,6 @@ genLlvmProc raw@(CmmProc infos lbl live graph) = do
     (lmblocks, lmdata) <- basicBlocksCodeGen live meta blocks
     let info = mapLookup (g_entry graph) infos
         proc = CmmProc info lbl live (ListGraph lmblocks)
-    loc <- getModLoc
-    addDebugBlock $! cmmProcDebug loc raw (const False) (proc:lmdata)
     return (proc:lmdata)
 
 genLlvmProc _ = panic "genLlvmProc: case that shouldn't reach here!"

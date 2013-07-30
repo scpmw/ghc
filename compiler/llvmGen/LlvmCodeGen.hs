@@ -18,6 +18,7 @@ import LlvmMeta
 
 import CgUtils ( fixStgRegisters )
 import Cmm
+import Debug
 import Hoopl
 import PprCmm
 import Module
@@ -26,6 +27,7 @@ import BufWrite
 import DynFlags
 import ErrUtils
 import FastString
+import MonadUtils
 import Outputable
 import UniqSupply
 import SysTools ( figureLlvmVersion )
@@ -107,8 +109,16 @@ llvmGroupLlvmGens cmm = do
 
         {-# SCC "llvm_datas_gen" #-}
           cmmDataLlvmGens cdata
-        {-# SCC "llvm_procs_gen" #-}
-          mapM_ cmmLlvmGen cmm
+        gens <-
+          {-# SCC "llvm_procs_gen" #-}
+          mapM cmmLlvmGen cmm
+
+        loc <- getModLoc
+        dflags <- getDynFlags
+        let dbgs = cmmProcDebug loc cmm (const False) (concat gens)
+        liftIO $ dumpIfSet_dyn dflags Opt_D_dump_debug "Debug Infos" (vcat $ map ppr dbgs)
+        mapM_ addDebugBlock dbgs
+
 
 -- -----------------------------------------------------------------------------
 -- | Do LLVM code generation on all these Cmms data sections.
@@ -128,7 +138,7 @@ cmmDataLlvmGens statics
        renderLlvm $ pprLlvmData (concat gss, concat tss)
 
 -- | Complete LLVM code generation phase for a single top-level chunk of Cmm.
-cmmLlvmGen ::RawCmmDecl -> LlvmM ()
+cmmLlvmGen :: RawCmmDecl -> LlvmM [LlvmCmmDecl]
 cmmLlvmGen cmm@CmmProc{} = do
 
     -- rewrite assignments to global regs
@@ -153,7 +163,9 @@ cmmLlvmGen cmm@CmmProc{} = do
     renderLlvm (vcat docs)
     mapM_ markUsedVar $ concat ivars
 
-cmmLlvmGen _ = return ()
+    return llvmBC
+
+cmmLlvmGen _ = return []
 
 -- -----------------------------------------------------------------------------
 -- | Marks variables as used where necessary

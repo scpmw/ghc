@@ -92,7 +92,7 @@ cmmTopCodeGen
 cmmTopCodeGen cmm@(CmmProc info lab live graph) = do
   modloc <- getModLoc
   let blocks = toBlockListEntryFirst graph
-      (_, ticks) = findGoodSourceTicks cmm modloc
+      (_, ticks) = findGoodSourceTicks modloc cmm
       addTick b = (b, mapLookup (entryLabel b) ticks)
   (nat_blocks,statics) <- mapAndUnzipM basicBlockCodeGen $ map addTick blocks
   picBaseMb <- getPicBaseMaybeNat

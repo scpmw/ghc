@@ -41,6 +41,7 @@ import Control.Monad ( forM, forM_, foldM )
 import Data.Word
 import Data.Maybe
 import Data.Char     ( ord )
+import Data.List     ( find )
 
 import Foreign.ForeignPtr
 
@@ -109,16 +110,30 @@ data DebugBlock =
   , dblPosition   :: !(Maybe Int)        -- ^ Output position relative to other blocks in proc.
                                          --   @Nothing@ means the block has been optimized out.
   , dblStackOff   :: !(Maybe Int)        -- ^ Unwind information
-  , dblBlocks     :: ![DebugBlock]       -- ^ Nested blocks
+  , dblBlocks     :: [DebugBlock]        -- ^ Nested blocks
   }
 
+instance Outputable DebugBlock where
+  ppr blk = (if dblProcedure blk then text "proc "
+             else if dblHasInfoTbl blk then text "pp-blk " else text "blk ") <>
+            ppr (dblLabel blk) <+> parens (ppr (dblCLabel blk)) <+>
+            (maybe empty ppr (dblSourceTick blk)) <+>
+            (maybe empty ppr (find isCore (dblTicks blk))) <+>
+            (maybe (text "removed") ((text "pos " <>) . ppr) (dblPosition blk)) $$
+            (if null (dblBlocks blk) then empty else ppr (dblBlocks blk))
+    where isCore CoreNote{} = True
+          isCore _other     = False
+
 -- | Extract debug data from a procedure
-cmmProcDebug :: ModLocation -> RawCmmDecl -> (i -> Bool)
+cmmProcDebug :: ModLocation -> [RawCmmDecl] -> (i -> Bool)
                 -> [GenCmmDecl d g (ListGraph i)]
-                -> DebugBlock
-cmmProcDebug _   (CmmData {})                   _      _    = panic "cmmProcDebug: no proc!"
-cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
-  let -- Check whether blocks were actually generated (likely, but we
+                -> [DebugBlock]
+cmmProcDebug loc decls isMeta nats =
+  let isProc CmmProc{} = True
+      isProc _other    = False
+      procs = filter isProc decls
+
+      -- Check whether blocks were actually generated (likely, but we
       -- don't want to run into problems when late-stage optimizations
       -- for some reason remove things)
       getBlocks (CmmProc _ _ _ (ListGraph bs)) = bs
@@ -128,46 +143,54 @@ cmmProcDebug loc p@(CmmProc infos entryLbl _ g) isMeta nats =
       natBlockMap = mapFromList $ flip zip [0..] $ map blockId $ filter (not . allMeta) $
                     concatMap getBlocks nats
 
+      -- Combined maps for all procs
+      entryMap :: LabelMap RawCmmDecl
+      entryMap = mapFromList $ map (\p@(CmmProc _ _ _ g) -> (g_entry g, p)) procs
+
+      -- Find a procedure's stack offset
       stackOff :: [CmmNode O O] -> Maybe Int
       stackOff []                     = Nothing
       stackOff (CmmUnwind Sp so : _)  = case evalCmmExpr so of
                                           (Just Sp, o) -> Just $! o
                                           (_      , _) -> Nothing
       stackOff (_               : xs) = stackOff xs
+      blockMid b = let (_, mid, _) = blockSplit b
+                   in blockToList mid
 
-      blockMid b = let (_, mid, _) = blockSplit b in blockToList mid
+      -- Combined map of source ticks for all blocks
+      blockSrc = mapUnions $ map (snd . findGoodSourceTicks loc) procs
 
-      (topSrc, blockSrc) = findGoodSourceTicks p loc
+      -- Info tables
+      infos = mapUnions $ map (\(CmmProc i _ _ _) -> i) procs
       hasInfoTable l = l `mapMember` infos
 
-      blockMap = toBlockMap g
-      mkBlockByLbl l = fmap (mkBlock l) $ mapLookup l blockMap
-      mkBlock l b =
-        let nested = mapMaybe mkBlockByLbl $ blockContexts b
-            ticks  = blockTicks b
-        in seqList nested $ seqList ticks $
-           DebugBlock { dblProcedure    = False
+      blockMap = mapUnions $ map (\(CmmProc _ _ _ g) -> toBlockMap g) procs
+      dbgBlockMap = mapMapWithKey mkDbgBlock blockMap
+      mkDbgBlock l b =
+        let ticks  = blockTicks b
+            prc    = mapLookup l entryMap
+        in seqList ticks $
+           DebugBlock { dblProcedure    = isJust prc
                       , dblLabel        = l
+                      , dblCLabel       = case prc of
+                          Just (CmmProc infos el _ _) | Just (Statics il _) <- mapLookup l infos
+                                        -> il
+                            | otherwise -> el
+                          _otherwise    -> blockLbl l
                       , dblHasInfoTbl   = hasInfoTable l
-                      , dblCLabel       = blockLbl l
                       , dblTicks        = ticks
                       , dblPosition     = mapLookup l natBlockMap
                       , dblStackOff     = stackOff $ blockMid b
                       , dblSourceTick   = mapLookup l blockSrc
-                      , dblBlocks       = nested }
+                      , dblBlocks       = mapMaybe (flip mapLookup dbgBlockMap) $ blockContexts b
+                      }
 
-      Just !entryBlock = mkBlockByLbl (g_entry g) -- TODO: all blocks without context parent!
-  in DebugBlock { dblProcedure    = True
-                , dblLabel        = g_entry g
-                , dblHasInfoTbl   = dblHasInfoTbl entryBlock
-                , dblCLabel       = case mapLookup (g_entry g) infos of
-                     Nothing                  -> entryLbl
-                     Just (Statics infoLbl _) -> infoLbl
-                , dblPosition     = Nothing
-                , dblTicks        = dblTicks entryBlock
-                , dblStackOff     = dblStackOff entryBlock
-                , dblSourceTick   = topSrc
-                , dblBlocks       = [entryBlock] }
+      -- Find all blocks that are not in the context of another
+      topLevelBlocks :: LabelSet
+      topLevelBlocks = mapFold removeNested (setFromList $ mapKeys dbgBlockMap) dbgBlockMap
+      removeNested dbg lbls = lbls `setDifference` setFromList (map dblLabel $ dblBlocks dbg)
+
+  in mapMaybe (flip mapLookup dbgBlockMap) $ setElems topLevelBlocks
 
 -- | Very limited evaluation of constant Cmm expressions - we assume
 -- it must reduce to something like "reg + off".

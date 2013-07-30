@@ -253,8 +253,8 @@ type NativeGenAcc statics instr
         = ([[CLabel]],
            [([NatCmmDecl statics instr],
              Maybe [Color.RegAllocStats statics instr],
-             Maybe [Linear.RegAllocStats],
-             Maybe DebugBlock)],
+             Maybe [Linear.RegAllocStats])],
+           [DebugBlock],
            DwarfFiles)
 
 nativeCodeGen' :: (Outputable statics, Outputable instr, Instruction instr)
@@ -272,7 +272,7 @@ nativeCodeGen' dflags this_mod modLoc ncgImpl h us cmms
         -- Pretty if it weren't for the fact that we do lots of little
         -- printDocs here (in order to do codegen in constant space).
         bufh <- newBufHandle h
-        (ngs, us') <- cmmNativeGenStream dflags this_mod modLoc ncgImpl bufh us split_cmms ([], [], emptyUFM)
+        (ngs, us') <- cmmNativeGenStream dflags this_mod modLoc ncgImpl bufh us split_cmms ([], [], [], emptyUFM)
         us'' <- finishNativeGen dflags modLoc ncgImpl bufh us' ngs
 
         return us''
@@ -292,14 +292,14 @@ finishNativeGen :: Instruction instr
                 -> UniqSupply
                 -> NativeGenAcc statics instr
                 -> IO UniqSupply
-finishNativeGen dflags modLoc ncgImpl bufh@(BufHandle _ _ h) us (imports, prof, _)
+finishNativeGen dflags modLoc ncgImpl bufh@(BufHandle _ _ h) us (imports, prof, debugs, _)
  = do
         let platform = targetPlatform dflags
-        let (native, colorStats, linearStats, debugs)
-                = unzip4 prof
+        let (native, colorStats, linearStats)
+                = unzip3 prof
 
         -- Write debug data and finish
-        (dwarf, us') <- dwarfGen dflags modLoc us (catMaybes debugs)
+        (dwarf, us') <- dwarfGen dflags modLoc us debugs
         pprNativeCode dflags bufh dwarf
         bFlush bufh
 
@@ -355,14 +355,29 @@ cmmNativeGenStream :: (Outputable statics, Outputable instr, Instruction instr)
               -> NativeGenAcc statics instr
               -> IO (NativeGenAcc statics instr, UniqSupply)
 
-cmmNativeGenStream dflags this_mod modLoc ncgImpl h us cmm_stream ngs@(impAcc, profAcc, fileIds)
+cmmNativeGenStream dflags this_mod modLoc ncgImpl h us cmm_stream ngs@(impAcc, profAcc, dbgs, fileIds)
  = do r <- Stream.runStream cmm_stream
       case r of
           Left () ->
-              return ((reverse impAcc, reverse profAcc, fileIds) , us)
+              return ((reverse impAcc, reverse profAcc, dbgs, fileIds) , us)
           Right (cmms, cmm_stream') -> do
-              (ngs',us') <- cmmNativeGens dflags this_mod modLoc ncgImpl h us cmms ngs 0
-              cmmNativeGenStream dflags this_mod modLoc ncgImpl h us' cmm_stream' ngs'
+              ((impAcc', profAcc', dbgs', fileIds'),us')
+                 <- cmmNativeGens dflags this_mod modLoc ncgImpl h us cmms ngs 0
+
+              ---- generate debug information. Ignore blocks entirely made
+              ---- of meta instructions, as those are prone to getting
+              ---- ignored by the assembler.
+              let nats = map (\(ns, _, _) -> ns) profAcc'
+                  dumpNats = any (flip dopt dflags) [Opt_D_dump_asm, Opt_D_dump_asm_stats]
+                  !ndbgs = cmmProcDebug modLoc cmms isMetaInstr (concat nats)
+              dumpIfSet_dyn dflags Opt_D_dump_debug "Debug Infos" (vcat $ map ppr ndbgs)
+
+              -- Make sure to make natives GC-able before going further
+              let profAcc'' | dumpNats  = profAcc'
+                            | otherwise = map (\(_, a, b) -> ([], a, b)) profAcc'
+              seqList profAcc'' $
+                cmmNativeGenStream dflags this_mod modLoc ncgImpl h us' cmm_stream'
+                  (impAcc', profAcc'', dbgs' ++ ndbgs, fileIds')
 
 -- | Do native code generation on all these cmms.
 --
@@ -380,20 +395,14 @@ cmmNativeGens :: (Outputable statics, Outputable instr, Instruction instr)
 cmmNativeGens _ _ _ _ _ us [] ngs _
         = return (ngs, us)
 
-cmmNativeGens dflags this_mod modLoc ncgImpl h us (cmm : cmms) (impAcc, profAcc, fileIds) count
+cmmNativeGens dflags this_mod modLoc ncgImpl h us (cmm : cmms) (impAcc, profAcc, debugs, fileIds) count
  = do
-        (us', fileIds', native, debug, imports, colorStats, linearStats)
+        (us', fileIds', native, imports, colorStats, linearStats)
                 <- {-# SCC "cmmNativeGen" #-} cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds cmm count
 
         pprNativeCode dflags h $ vcat $
           cmmDwarfFiles fileIds fileIds' :
           map (pprNatCmmDecl ncgImpl) native
-
-        let !lsPprNative =
-                if  dopt Opt_D_dump_asm       dflags
-                 || dopt Opt_D_dump_asm_stats dflags
-                        then native
-                        else []
 
         let !count' = count + 1
 
@@ -402,8 +411,8 @@ cmmNativeGens dflags this_mod modLoc ncgImpl h us (cmm : cmms) (impAcc, profAcc,
 
         cmmNativeGens dflags this_mod modLoc ncgImpl h
             us' cmms ((imports : impAcc),
-                      ((lsPprNative, colorStats, linearStats, debug) : profAcc),
-                      fileIds')
+                      ((native, colorStats, linearStats) : profAcc),
+                      debugs, fileIds')
                      count'
 
  where  seqString []            = ()
@@ -430,7 +439,6 @@ cmmNativeGen
         -> IO   ( UniqSupply
                 , DwarfFiles
                 , [NatCmmDecl statics instr]                -- native code
-                , Maybe DebugBlock                          -- DWARF debug info
                 , [CLabel]                                  -- things imported by this cmm
                 , Maybe [Color.RegAllocStats statics instr] -- stats for the coloring register allocator
                 , Maybe [Linear.RegAllocStats])             -- stats for the linear register allocators
@@ -584,17 +592,9 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds cmm count
                 Opt_D_dump_asm_expanded "Synthetic instructions expanded"
                 (vcat $ map (pprNatCmmDecl ncgImpl) expanded)
 
-        ---- generate debug information. Ignore blocks entirely made
-        ---- of meta instructions, as those are prone to getting
-        ---- ignored by the assembler.
-        let debug = case cmm of
-              CmmProc{} -> Just $ cmmProcDebug modLoc opt_cmm isMetaInstr expanded
-              _other    -> Nothing
-
         return  ( usAlloc
                 , fileIds'
                 , expanded
-                , debug
                 , lastMinuteImports ++ imports
                 , ppr_raStatsColor
                 , ppr_raStatsLinear)

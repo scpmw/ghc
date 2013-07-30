@@ -173,7 +173,16 @@ debugFrameHeader u
             ]
 
 debugFrames :: Unique -> [DebugBlock] -> SDoc
-debugFrames u = vcat . map (debugFrame u)
+debugFrames u = vcat . map (debugFrame u) . concatMap (finishSplit . splitProcs)
+  -- Move all procedures to the top level
+  where splitProcs blk =
+          let (prcss, nested) = unzip $ map splitProcs $ dblBlocks blk
+              blk' = blk { dblBlocks = catMaybes nested }
+          in if dblProcedure blk'
+             then (blk' : concat prcss, Nothing)
+             else (concat prcss, Just blk')
+        finishSplit (prcs, Nothing) = prcs
+        finishSplit (_   , Just b)  = pprPanic "Top-level block in debug data!" (ppr b)
 
 -- | Writes a "Frame Description Entry" for a procedure. This consists
 -- mainly of referencing the CIE and writing state machine
