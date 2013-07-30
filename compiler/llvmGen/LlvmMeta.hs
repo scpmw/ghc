@@ -232,22 +232,22 @@ cmmMetaLlvmProc proc@(CmmProc infos cmmLabel _ graph) = do
 
   procId <- getMetaUniqueId
   renderMeta procId $ mkDwarfMeta dW_TAG_subprogram
-    [ mkI32 0                                   -- "Unused"
-    , MetaNode unitId                           -- Reference to file
-    , MetaStr procedureName                 -- Procedure name
-    , MetaStr displayName                   -- Display name
-    , MetaStr linkageName                   -- MIPS name
-    , MetaNode fileId                           -- Reference to file
-    , mkI32 $ fromIntegral line                  -- Line number
-    , procTypeMeta                               -- Type descriptor
-    , mkI1 local                                 -- Local to compile unit
-    , mkI1 True                                  -- Defined here (not "extern")
-    , mkI32 0                                    -- Virtuality (none)
-    , mkI32 0                                    --
-    , mkNull                       --
-    , mkI1 False                                 -- Artificial (?!)
-    , mkI1 $ opt > 0                             -- Optimized
-    , MetaVar funRef                             -- Function pointer
+    [ mkI32 0                     -- "Unused"
+    , MetaNode unitId             -- Reference to file
+    , MetaStr procedureName       -- Procedure name
+    , MetaStr displayName         -- Display name
+    , MetaStr linkageName         -- MIPS name
+    , MetaNode fileId             -- Reference to file
+    , mkI32 $ fromIntegral line   -- Line number
+    , procTypeMeta                -- Type descriptor
+    , mkI1 local                  -- Local to compile unit
+    , mkI1 True                   -- Defined here (not "extern")
+    , mkI32 0                     -- Virtuality (none)
+    , mkI32 0                     --
+    , mkNull                      --
+    , mkI1 False                  -- Artificial (?!)
+    , mkI1 $ opt > 0              -- Optimized
+    , MetaVar funRef              -- Function pointer
     ]
   addProcMeta procId
   return (procId, blockTicks)
@@ -290,18 +290,18 @@ cmmMetaLlvmBlock (procId, blockTicks) block = do
   bid <- getMetaUniqueId
   renderMeta bid $ mkDwarfMeta dW_TAG_lexical_block
     [ MetaNode procId
-    , mkI32 $ fromIntegral line               -- Source line
-    , mkI32 $ fromIntegral uniqCol            -- Source column
-    , MetaNode fileId                        -- File context
-    , mkI32 0                                 -- Template parameter index
+    , mkI32 $ fromIntegral line     -- Source line
+    , mkI32 $ fromIntegral uniqCol  -- Source column
+    , MetaNode fileId               -- File context
+    , mkI32 0                       -- Template parameter index
     ]
 
   id <- getMetaUniqueId
   renderMeta id $ MetaStruct
-    [ mkI32 $ fromIntegral line               -- Source line
-    , mkI32 $ fromIntegral col                -- Source column
-    , MetaNode bid                           -- Block context
-    , mkNull                                 -- Inlined from location
+    [ mkI32 $ fromIntegral line     -- Source line
+    , mkI32 $ fromIntegral col      -- Source column
+    , MetaNode bid                  -- Block context
+    , mkNull                        -- Inlined from location
     ]
 
   -- Unfortunately, we actually *want* to be able to identify
@@ -359,31 +359,31 @@ typeToMeta' ty = case ty of
    df <- getDynFlags
    return $ mkDwarfMeta tag $
     [ MetaNode unitMeta                              -- Context
-    , MetaStr $ mkFastString $ showSDoc df $ ppr ty -- Name
+    , MetaStr $ mkFastString $ showSDoc df $ ppr ty  -- Name
     , mkNull                                         -- File reference
-    , mkI32 0                                         -- Line number
-    , mkI64 $ fromIntegral $ llvmWidthInBits df ty    -- Width in bits
+    , mkI32 0                                        -- Line number
+    , mkI64 $ fromIntegral $ llvmWidthInBits df ty   -- Width in bits
     , mkI64 $ fromIntegral $ llvmWidthInBits df (llvmWord df) -- Alignment in bits
-    , mkI64 0                                         -- Offset in bits
+    , mkI64 0                                        -- Offset in bits
     ] ++ fields
   baseType enc = mkType dW_TAG_base_type
-    [ mkI32 0                                         -- Flags
-    , mkI32 $ fromIntegral enc                        -- DWARF type encoding
+    [ mkI32 0                                        -- Flags
+    , mkI32 $ fromIntegral enc                       -- DWARF type encoding
     ]
   derivedType tag subty = mkType tag
-    [ mkI64 0                                         -- Offset in bits
-    , subty                                           -- Referenced type
+    [ mkI64 0                                        -- Offset in bits
+    , subty                                          -- Referenced type
     ]
   compositeType tag members subty = mkType tag
-    [ mkI64 0                                         -- Offset in bits
-    , mkI32 0                                         -- Flags
-    , subty                                           -- Referenced type
-    , MetaStruct members                              -- Member descriptors
-    , mkI32 0                                         -- Runtime languages
+    [ mkI64 0                                        -- Offset in bits
+    , mkI32 0                                        -- Flags
+    , subty                                          -- Referenced type
+    , MetaStruct members                             -- Member descriptors
+    , mkI32 0                                        -- Runtime languages
     ]
   subrangeDesc n = mkDwarfMeta dW_TAG_subrange_type
-    [ mkI64 0                                         -- Low value
-    , mkI64 (fromIntegral $ n-1)                      -- High value
+    [ mkI64 0                                        -- Low value
+    , mkI64 (fromIntegral $ n-1)                     -- High value
     ]
 
 genVariableMeta :: LMString -> Maybe Int -> LlvmType -> Int -> LlvmM MetaExpr
@@ -395,12 +395,12 @@ genVariableMeta vname par vty scopeId = do
          Nothing -> dW_TAG_auto_variable
          Just _  -> dW_TAG_arg_variable
     , MetaNode scopeId                               -- Context
-    , MetaStr vname                              -- Name
+    , MetaStr vname                                  -- Name
     , MetaNode fileId                                -- File reference
     , mkI32 (fromIntegral (maybe 0 (+1) par `shiftL` 24))
-                                                      -- Line / argument number
-    , tyDesc                                          -- Type description
-    , mkI32 0                                         -- Flags
+                                                     -- Line / argument number
+    , tyDesc                                         -- Type description
+    , mkI32 0                                        -- Flags
     ]
 
 -- | Return buffer contents as a LLVM string
