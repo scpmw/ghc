@@ -582,7 +582,7 @@ getContextMap = foldGraphBlocks (foldBlockNodesF3 (goEntry, goStmt, goLast)) map
         goLast  _any           (_,  ctxMap) = ctxMap
 
 blockTicks :: Block CmmNode C C -> [RawTickish]
-blockTicks b = foldBlockNodesF goStmt b []
+blockTicks b = reverse $ foldBlockNodesF goStmt b []
   where goStmt :: CmmNode e x -> [RawTickish] -> [RawTickish]
         goStmt  (CmmTick t) ts = t:ts
         goStmt  _other      ts = ts
