@@ -92,6 +92,12 @@ elemCoreMap (bind, con) m = case lookupUFM m bind of
   Just cs -> con `elem` cs
   Nothing -> False
 
+addToCoreMap :: Var -> AltCon -> CoreMap -> CoreMap
+addToCoreMap b a d = addToUFM_C (\o _ -> a:o) d b [a]
+
+unionCoreMap :: CoreMap -> CoreMap -> CoreMap
+unionCoreMap = plusUFM_C (++)
+
 data DebugModule = DebugModule { dmodPackage :: PackageId
                                , dmodLocation :: ModLocation
                                , dmodBlocks :: [DebugBlock]
@@ -246,7 +252,7 @@ putBlock bh dflags pid (bid, coreDone) block = do
     putString bh $ showSDocC $ ppr (dblCLabel block)
   -- Write annotations.
   coreDoneBlock <- foldM (putAnnotEvent bh dflags coreDoneSub) emptyUFM (dblTicks block)
-  return (bid', coreDone `plusUFM` coreDoneSub `plusUFM` coreDoneBlock)
+  return (bid', coreDone `unionCoreMap` coreDoneSub `unionCoreMap` coreDoneBlock)
 
 putAnnotEvent :: BinHandle -> DynFlags -> CoreMap -> CoreMap -> RawTickish -> IO CoreMap
 putAnnotEvent bh _ _ coreDone (SourceNote ss names _) = do
@@ -263,17 +269,17 @@ putAnnotEvent bh _ _ coreDone (SourceNote ss names _) = do
 putAnnotEvent bh dflags coreDoneSub coreDone (CoreNote lbl con corePtr)
   -- This piece of core was already covered earlier in this block?
   | not $ (lbl, con) `elemCoreMap` coreDone
-  = do doneNew <- putEvent bh EVENT_DEBUG_CORE $ do
-         putString bh $ showSDocDump dflags $ ppr lbl
-         putString bh $ case con of
-           DEFAULT -> ""
-           _       -> showSDoc dflags $ ppr con
-         -- Emit core, leaving out (= referencing) any core pieces
-         -- that were emitted from sub-blocks
-         case corePtr of
-           ExprPtr core -> putCoreExpr bh dflags coreDoneSub core
-           AltPtr  alt  -> putCoreAlt bh dflags coreDoneSub alt
-       return $ coreDone `plusUFM` doneNew
+  = putEvent bh EVENT_DEBUG_CORE $ do
+      putString bh $ showSDocDump dflags $ ppr lbl
+      putString bh $ case con of
+        DEFAULT -> ""
+        _       -> showSDoc dflags $ ppr con
+      -- Emit core, leaving out (= referencing) any core pieces
+      -- that were emitted from sub-blocks
+      doneNew <- case corePtr of
+        ExprPtr core -> putCoreExpr bh dflags coreDoneSub core
+        AltPtr  alt  -> putCoreAlt bh dflags coreDoneSub alt
+      return $ addToCoreMap lbl con (coreDone `unionCoreMap` doneNew)
 
 putAnnotEvent _ _ _ coreDone _ = return coreDone
 
@@ -301,7 +307,7 @@ putCoreExpr bh dflags bs (App e1 e2) = do
   put_ bh coreApp
   d1 <- putCoreExpr bh dflags bs e1
   d2 <- putCoreExpr bh dflags bs e2
-  return $ d1 `plusUFM` d2
+  return $ d1 `unionCoreMap` d2
 putCoreExpr bh dflags bs (Lam b e) = do
   put_ bh coreLam
   putString bh $ showSDoc dflags $ ppr b
@@ -311,14 +317,14 @@ putCoreExpr bh dflags bs (Let es e) = do
   put_ bh coreLet
   d1 <- putCoreLet bh dflags bs es
   d2 <- putCoreExpr bh dflags bs e
-  return $ d1 `plusUFM` d2
+  return $ d1 `unionCoreMap` d2
 putCoreExpr bh dflags bs (Case expr bind _ alts) = do
   put_ bh coreCase
   d <- putCoreExpr bh dflags bs expr
   putString bh $ showSDoc dflags $ ppr bind
   putString bh $ showSDoc dflags $ ppr $ varType bind
   put_ bh (fromIntegral (length alts) :: Word16)
-  fmap (foldr plusUFM d) $
+  fmap (foldr unionCoreMap d) $
     forM alts $ \alt@(a, _, _) ->
       checkCoreRef bh dflags bs (bind, a) $
         putCoreAlt bh dflags bs alt
@@ -352,7 +358,7 @@ putCoreLet bh dflags bs (NonRec b e) = do
     putCoreExpr bh dflags bs e
 putCoreLet bh dflags bs (Rec ps) = do
   put_ bh (fromIntegral (length ps) :: Word16)
-  fmap (foldr plusUFM emptyUFM) $
+  fmap (foldr unionCoreMap emptyUFM) $
     forM ps $ \(b, e) -> do
       putString bh $ showSDoc dflags $ ppr b
       putString bh $ showSDoc dflags $ ppr $ varType b
@@ -370,6 +376,4 @@ checkCoreRef bh dflags bs (b,a) code
         DEFAULT -> ""
         _       -> showSDoc dflags $ ppr a
       return emptyUFM
-  | otherwise = do
-      d <- code
-      return $ addToUFM_C (const (a:)) d b [a]
+  | otherwise = fmap (addToCoreMap b a) code
