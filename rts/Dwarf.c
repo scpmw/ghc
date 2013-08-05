@@ -264,11 +264,11 @@ void dwarf_load_file(char *module_path, seg_space *seg)
 	// Load debug data
 	dwarf_load_ghc_debug_data(elf);
 
-	// Load symbols
-	dwarf_load_symbols(module_path, elf, seg);
-
 	// Find symbol address offset
 	dwarf_get_code_bases(elf, seg);
+
+	// Load symbols
+	dwarf_load_symbols(module_path, elf, seg);
 
 	// Open using libdwarf
 	Dwarf_Debug dbg; Dwarf_Error err;
@@ -453,7 +453,6 @@ void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg)
 	Elf_Scn *scn = 0; GElf_Shdr hdr;
 	GElf_Shdr sym_shdr;
 	GElf_Half sym_shndx = ~0;
-	Dwarf_Addr sym_offset = 0;
 	while ((scn = elf_nextscn(elf, scn))) {
 		if (!gelf_getshdr(scn, &hdr))
 			return;
@@ -492,17 +491,13 @@ void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg)
 			// applicable.
 			if (sym.st_shndx != sym_shndx) {
 				if (sym.st_shndx == SHN_ABS) {
-					sym_offset = 0;
 					memset(&sym_shdr, 0, sizeof(sym_shdr));
 				} else if(sym.st_shndx == SHN_UNDEF) {
 					continue;
 				} else {
 
 					Elf_Scn *sym_scn = elf_getscn(elf, sym.st_shndx);
-					if (gelf_getshdr(sym_scn, &sym_shdr) == &sym_shdr) {
-						sym_offset = sym_shdr.sh_offset - sym_shdr.sh_addr;
-					} else {
-						sym_offset = 0;
+					if (gelf_getshdr(sym_scn, &sym_shdr) != &sym_shdr) {
 						memset(&sym_shdr, 0, sizeof(sym_shdr));
 					}
 				}
@@ -537,16 +532,11 @@ void dwarf_load_symbols(char *file, Elf *elf, seg_space *seg)
 				if (!unit)
 					break;
 
-				{
-					Dwarf_Addr start = sym_offset+sym.st_value;
-					Dwarf_Addr end = start+sym.st_size;
+				// Add procedure
+				dwarf_new_proc(unit, name,
+				               sym.st_value, sym.st_value+sym.st_size,
+				               DwarfSourceSymtab, seg);
 
-					// Add procedure
-					dwarf_new_proc(unit, name,
-					               start, end,
-					               DwarfSourceSymtab, seg);
-
-				}
 				break;
 			}
 		}
@@ -780,8 +770,6 @@ DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name,
 	// Apply offset to translate into our address space, then
 	// range-check so we don't associate it with the wrong
 	// memory region.
-	// TODO: Check this is actually doing the right thing, haven't
-	//		 tested with dynamic libs so far
 	void *low_pc_ptr = NULL, *high_pc_ptr = NULL;
 	seg_space *seg;
 	for (seg = segs; seg; seg = seg->next) {
