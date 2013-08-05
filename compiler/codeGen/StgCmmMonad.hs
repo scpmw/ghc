@@ -14,7 +14,7 @@ module StgCmmMonad (
         returnFC, fixC,
         newUnique, newUniqSupply, 
 
-        newLabelC, emitLabel,
+        newLabelC, newLabelC', emitLabel,
 
         emit, emitDecl, emitProc,
         emitProcWithConvention, emitProcWithStackFrame,
@@ -685,12 +685,17 @@ emitAssign l r = emitCgStmt (CgStmt (CmmAssign l r))
 emitStore :: CmmExpr  -> CmmExpr -> FCode ()
 emitStore l r = emitCgStmt (CgStmt (CmmStore l r))
 
-
+{- | Generates a new label into the current block context -}
 newLabelC :: FCode BlockId
-newLabelC = do { u <- newUnique
-               ; let l = mkBlockId u
+newLabelC = do { l <- newLabelC'
                ; emitContext l
                ; return l }
+
+{- | Generates a new label without a context node -}
+newLabelC' :: FCode BlockId
+newLabelC' = do { u <- newUnique
+                ; let l = mkBlockId u
+                ; return l }
 
 emit :: CmmAGraph -> FCode ()
 emit ag
