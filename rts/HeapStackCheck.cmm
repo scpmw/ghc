@@ -172,7 +172,7 @@ INFO_TABLE_RET ( stg_enter, RET_SMALL, W_ info_ptr, P_ closure )
 __stg_gc_enter_1 (P_ node)
 {
 #ifdef TRACING
-    R9 = node;
+    R9 = %ENTRY_CODE(%INFO_PTR(UNTAG(node)));
 #endif
     jump stg_gc_noregs (stg_enter_info, node) ();
 }
@@ -337,6 +337,9 @@ stg_gc_d1 return (D_ d)
 
 stg_gc_l1 return (L_ l)
 {
+#ifdef TRACING
+    R9 = %ENTRY_CODE(Sp(0));
+#endif
     jump stg_gc_noregs (stg_ret_l_info, l) ();
 }
 
@@ -432,7 +435,7 @@ __stg_gc_fun /* explicit stack */
     Sp(1) = size;
     Sp(0) = stg_gc_fun_info;
 #ifdef TRACING
-    R9 = R1;
+    R9 = %GET_ENTRY(UNTAG(R1));
 #endif
     jump stg_gc_noregs [];
 #else
