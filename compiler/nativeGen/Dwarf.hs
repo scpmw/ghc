@@ -188,7 +188,7 @@ debugFrames u = vcat . map (debugFrame u) . concatMap (finishSplit . splitProcs)
 -- mainly of referencing the CIE and writing state machine
 -- instructions to describe how the frame base (CFA) changes.
 debugFrame :: Unique -> DebugBlock -> SDoc
-debugFrame u DebugBlock{ dblCLabel=procLbl, dblBlocks=blocks, dblHasInfoTbl=hasInfo }
+debugFrame u prc@DebugBlock{ dblCLabel=procLbl, dblHasInfoTbl=hasInfo }
   = sdocWithPlatform $ \plat ->
     let fdeLabel    = mkAsmTempDerivedLabel procLbl (fsLit "_fde")
         fdeEndLabel = mkAsmTempDerivedLabel procLbl (fsLit "_fde_end")
@@ -208,7 +208,7 @@ debugFrame u DebugBlock{ dblCLabel=procLbl, dblBlocks=blocks, dblHasInfoTbl=hasI
                          if hasInfo then ptext (sLit "-1") else empty -- see [Note: Info Offset]
                 off    = fromMaybe oldOff m_stackOff
                 nested = concatMap (offsets off) bs
-        sortedOffsets = map snd $ sortBy (comparing fst) $ concatMap (offsets 0) blocks
+        sortedOffsets = map snd $ sortBy (comparing fst) $ offsets 0 prc
 
         -- | Takes the list of offsets and generates a minimal frame program
         -- (= only generates an instruction where the offset actually changes)
