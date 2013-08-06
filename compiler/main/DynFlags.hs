@@ -2254,6 +2254,7 @@ dynamic_flags = [
                                               setVerbosity $ Just 2))
   , Flag "dfaststring-stats"       (NoArg (setGeneralFlag Opt_D_faststring_stats))
   , Flag "dno-llvm-mangler"        (NoArg (setGeneralFlag Opt_NoLlvmMangler)) -- hidden flag
+  , Flag "ddump-debug"             (setDumpFlag Opt_D_dump_debug)
 
         ------ Machine dependant (-m<blah>) stuff ---------------------------
 
