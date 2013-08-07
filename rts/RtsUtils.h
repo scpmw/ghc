@@ -32,6 +32,8 @@ void stgFree(void* p);
  * Misc other utilities
  * -------------------------------------------------------------------------- */
 
+StgArrWords *stgAllocArrWords(Capability *cap, size_t size_in_bytes);
+
 void heapOverflow(void);
 
 char *time_str(void);

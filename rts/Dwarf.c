@@ -52,6 +52,8 @@ void *dwarf_ghc_debug_data = 0;
 
 #define GHC_DEBUG_DATA_SECTION ".debug_ghc"
 
+#define GHC_DEBUG_NO_ID ((StgWord16) 0xffff)
+
 struct seg_space_
 {
     void *base;         // Add this to position in file to get virtual address
@@ -75,10 +77,14 @@ static DwarfUnit *dwarf_new_unit(char *name, char *comp_dir);
 static DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name, Dwarf_Addr low_pc, Dwarf_Addr high_pc,
                                  DwarfSource source, seg_space *seg);
 
+StgWord16 word16LE(StgWord8 *p);
+
 #ifdef TRACING
 static void dwarf_trace_all_unaccounted(void);
 static void dwarf_trace_unaccounted(DwarfUnit *unit, StgBool put_module);
 #endif // TRACING
+
+void dwarf_associate_debug_data(StgBool trace);
 
 #ifndef USE_DL_ITERATE_PHDR
 
@@ -135,7 +141,7 @@ void dwarf_load()
 		// Add to list, if it is an executable section
 		if (exec_perm == 'x' && module_path[0] && module_path[0] != '[') {
 			if (!cur_module) cur_module = strdup(module_path);
-			seg_space *seg = (seg_space *)stgMallocBytes(sizeof(DwarfUnit), "dwarf_new_unit");
+			seg_space *seg = (seg_space *)stgMallocBytes(sizeof(seg_space), "dwarf_new_seg_space");
 			seg->base = NULL; // Might get corrected later
 			seg->start = seg_start;
 			seg->end = seg_end;
@@ -746,9 +752,16 @@ DwarfUnit *dwarf_new_unit(char *name, char *comp_dir)
 	DwarfUnit *unit = (DwarfUnit *)stgMallocBytes(sizeof(DwarfUnit), "dwarf_new_unit");
 	unit->name = strdup(name);
 	unit->comp_dir = strdup(comp_dir);
-	unit->procs = 0;
-	unit->next = dwarf_units;
+	unit->low_pc = NULL;
+	unit->high_pc = NULL;
+	unit->debug_data = NULL;
+	unit->procs = NULL;
+	unit->proc_count = 0;
+	unit->max_proc_id = 0;
 	unit->proc_table = allocStrHashTable();
+	unit->procs_by_id = NULL;
+	unit->procs_by_pc = NULL;
+	unit->next = dwarf_units;
 	dwarf_units = unit;
 	return unit;
 }
@@ -793,16 +806,23 @@ DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name,
     // have the procedure or not (could optimize this in future...)
 	DwarfProc *proc = (DwarfProc *)stgMallocBytes(sizeof(DwarfProc), "dwarf_new_proc");
 	proc->name = strdup(name);
+	proc->id = proc->parent_id = GHC_DEBUG_NO_ID;
 	proc->low_pc = low_pc_ptr;
 	proc->high_pc = high_pc_ptr;
 	proc->source = source;
-	proc->copied = 0;
+	proc->debug_data = NULL;
 
 	proc->next = (after ? after->next : unit->procs);
 	*(after ? &after->next : &unit->procs) = proc;
 
+	// Update unit data
 	if (!after)
 		insertStrHashTable(unit->proc_table, proc->name, proc);
+	if (!unit->low_pc || low_pc_ptr < unit->low_pc)
+		unit->low_pc = low_pc_ptr;
+	if (!unit->high_pc || high_pc_ptr > unit->high_pc)
+		unit->high_pc = high_pc_ptr;
+	unit->proc_count++;
 
 	return proc;
 }
@@ -813,6 +833,8 @@ void dwarf_free()
 	while ((unit = dwarf_units)) {
 		dwarf_units = unit->next;
 		freeHashTable(unit->proc_table, NULL);
+		free(unit->procs_by_id);
+		free(unit->procs_by_pc);
 
 		DwarfProc *proc;
 		while ((proc = unit->procs)) {
@@ -829,13 +851,23 @@ void dwarf_free()
 	dwarf_ghc_debug_data = 0;
 }
 
-#ifdef TRACING
+// Read a little-endian StgWord16
+StgWord16 word16LE(StgWord8 *p) {
+	StgWord8 high = *p++;
+	StgWord8 low = *p;
+	return (((StgWord16) high) << 8) + low;
+}
 
-// Writes debug data to the event log, enriching it with DWARF
-// debugging information where possible
+// Builds up associations between debug and DWARF data. If "trace"
+// parameter is set, we also trace all information (presumably
+// to copy it into an eventlog).
 
-void dwarf_trace_debug_data()
+void dwarf_associate_debug_data(StgBool trace)
 {
+#ifndef TRACING
+	(void)(trace); // unused
+#endif
+
 	// Go through available debugging data
 	StgWord8 *dbg = (StgWord8 *)dwarf_ghc_debug_data;
 	StgWord8 *dbg_limit = dbg + dwarf_ghc_debug_data_size;
@@ -847,12 +879,12 @@ void dwarf_trace_debug_data()
 			dbg++;
 			continue;
 		}
+		StgWord8 *debug_data = dbg;
 
 		// Get event type and size. Note that utils/Binary.hs writes
 		// StdWord16 as little-endian.
 		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
-		StgWord8 sizeh = *dbg++; StgWord8 sizel = *dbg++;
-		StgWord16 size = (((StgWord16)sizeh) << 8) + sizel;
+		StgWord16 size = word16LE(dbg); dbg += 2;
 
 		// Sanity-check size
 		if (dbg + size > dbg_limit) {
@@ -862,25 +894,36 @@ void dwarf_trace_debug_data()
 
 		// Follow data
 		char *proc_name = 0, *unit_name = 0;
+		StgWord16 proc_id = GHC_DEBUG_NO_ID, proc_parent_id = GHC_DEBUG_NO_ID;
 		DwarfProc *proc = 0;
 		switch (num) {
 
 		case EVENT_DEBUG_MODULE: // package, name, ...
 
+#ifdef TRACING
 			// If we had a unit before: Trace all data we didn't see a
 			// matching proc for
-			if (unit) dwarf_trace_unaccounted(unit, 0);
+			if (trace && unit) dwarf_trace_unaccounted(unit, 0);
+#endif
 
 			// Get unit (with minimal added security)
 			if (strlen((char *)dbg) >= size) break;
 			unit_name = ((char *)dbg) + strlen((char *)dbg) + 1;
-			if (strlen((char *)dbg) + strlen(unit_name) + 1 >= size) break;
+			if (strlen((char *)dbg) + strlen(unit_name) + 1 >= size) {
+				errorBelch("Missing string terminator for module record! Probably corrupt debug data.");
+				return;
+			}
 			unit = dwarf_get_unit(unit_name);
+			if (unit) unit->debug_data = debug_data;
 			break;
 
 		case EVENT_DEBUG_PROCEDURE: // instr, parent, name, ...
 			if (!unit) break;
-			proc_name = (char *)dbg + sizeof(StgWord16) + sizeof(StgWord16);
+			proc_id = word16LE(dbg);
+			if (proc_id > unit->max_proc_id)
+				unit->max_proc_id = proc_id;
+			proc_parent_id = word16LE(dbg + 2);
+			proc_name = (char *)dbg + 4;
 			proc = dwarf_get_proc(unit, proc_name);
 			break;
 
@@ -888,23 +931,41 @@ void dwarf_trace_debug_data()
 		}
 
 		// Post data
-		traceDebugData(num, size, dbg);
+#ifdef TRACING
+		if (trace)
+			traceDebugData(num, size, dbg);
+#endif
 		dbg += size;
 
-		// Post additional data about procedure. Note we might have
-		// multiple ranges per procedure!
-		while (proc && !strcmp(proc_name, proc->name)) {
-			traceProcPtrRange(proc->low_pc, proc->high_pc);
-			proc->copied = 1;
+		// Post debug data of procedure. Note we might have
+		// multiple entries and therefore IP ranges!
+		if (!proc) continue;
+		do {
+#ifdef TRACING
+			if (trace)
+				traceProcPtrRange(proc->low_pc, proc->high_pc);
+#endif
+			proc->id = proc_id;
+			proc->parent_id = proc_parent_id;
+			proc->debug_data = debug_data;
 			proc = proc->next;
 		}
+        while (proc && !strcmp(proc_name, proc->name));
 	}
 
-	// Add all left-over debug info
-	if (unit)
-		dwarf_trace_unaccounted(unit, 0);
-	dwarf_trace_all_unaccounted();
+#ifdef TRACING
+	if (trace) {
+
+		// Add all left-over debug info
+		if (unit)
+			dwarf_trace_unaccounted(unit, 0);
+		dwarf_trace_all_unaccounted();
+
+	}
+#endif
 }
+
+#ifdef TRACING
 
 // Writes out information about all procedures that we don't have
 // entries in the debugging info for - but still know something
@@ -916,9 +977,9 @@ void dwarf_trace_all_unaccounted()
 {
 	DwarfUnit *unit;
 
-	for (unit = dwarf_units; unit; unit = unit->next) {
-		dwarf_trace_unaccounted(unit, 1);
-	}
+	for (unit = dwarf_units; unit; unit = unit->next)
+		if (!unit->debug_data)
+			dwarf_trace_unaccounted(unit, 1);
 }
 
 void dwarf_trace_unaccounted(DwarfUnit *unit, StgBool put_module)
@@ -926,7 +987,7 @@ void dwarf_trace_unaccounted(DwarfUnit *unit, StgBool put_module)
 	DwarfProc *proc;
 
 	for (proc = unit->procs; proc; proc = proc->next)
-		if (!proc->copied) {
+		if (!proc->debug_data) {
 
 			// Need to put module header?
 			if (put_module) {
@@ -937,11 +998,224 @@ void dwarf_trace_unaccounted(DwarfUnit *unit, StgBool put_module)
 			// Print everything we know about the procedure
 			traceDebugProc(proc->name);
 			traceProcPtrRange(proc->low_pc, proc->high_pc);
-			proc->copied = 1;
 
 		}
 }
 
+void dwarf_trace_debug_data()
+{
+	// Done as side-effect
+	dwarf_associate_debug_data(1);
+}
+
 #endif /* TRACING */
+
+int compare_low_pc(const void *a, const void *b);
+int compare_low_pc(const void *a, const void *b) {
+	DwarfProc *proca = *(DwarfProc **)a;
+	DwarfProc *procb = *(DwarfProc **)b;
+	if (proca->low_pc < procb->low_pc) return -1;
+	if (proca->low_pc == procb->low_pc) {
+		if (procb->source == DwarfSourceDwarfBlock)
+			return -1;
+		else if(proca->source == DwarfSourceDwarfBlock)
+			return 1;
+		else
+			return 0;
+	}
+	return 1;
+}
+
+void dwarf_dump_tables(DwarfUnit *unit);
+void dwarf_dump_tables(DwarfUnit *unit)
+{
+	StgWord i;
+	printf(" Unit %s (%lu procs, %d max id) %p-%p:\n",
+	       unit->name, unit->proc_count, unit->max_proc_id,
+	       unit->low_pc, unit->high_pc);
+	for (i = 0; i < unit->proc_count; i++) {
+		printf("%p-%p: %s\n",
+			   unit->procs_by_pc[i]->low_pc, unit->procs_by_pc[i]->high_pc,
+			       unit->procs_by_pc[i]->name);
+	}
+	for (i = 0; i <= unit->max_proc_id; i++)
+		if (unit->procs_by_id[i]) {
+			printf("%5lu: %s (p %d)\n", i,
+			       unit->procs_by_id[i]->name, unit->procs_by_id[i]->parent_id);
+		} else {
+			printf("%5lu: (null)\n", i);
+		}
+}
+
+void dwarf_init_lookup(void)
+{
+	// Read debug data - will be used later in actual lookups. For the
+	// moment, we primarily want the procedure IDs so we can build the
+	// table.
+	dwarf_associate_debug_data(0);
+
+	// Build procedure tables for every unit
+	DwarfUnit *unit;
+	for (unit = dwarf_units; unit; unit = unit->next) {
+
+		// Just in case we run this twice for some reason
+		free(unit->procs_by_id); unit->procs_by_id = NULL;
+		free(unit->procs_by_pc); unit->procs_by_pc = NULL;
+
+		// Allocate tables
+		StgWord pcTableSize = unit->proc_count * sizeof(DwarfProc *);
+		StgWord idTableSize = (unit->max_proc_id + 1) * sizeof(DwarfProc *);
+		unit->procs_by_pc = (DwarfProc **)stgMallocBytes(pcTableSize, "dwarf_init_pc_table");
+		unit->procs_by_id = (DwarfProc **)stgMallocBytes(idTableSize, "dwarf_init_id_table");
+		memset(unit->procs_by_id, 0, idTableSize);
+
+		// Populate
+		StgWord i = 0;
+		DwarfProc *proc;
+		for (proc = unit->procs; proc; proc = proc->next) {
+			unit->procs_by_pc[i++] = proc;
+			if (proc->id != GHC_DEBUG_NO_ID && proc->id <= unit->max_proc_id)
+				unit->procs_by_id[proc->id] = proc;
+		}
+
+		// Sort PC table by low_pc
+		qsort(unit->procs_by_pc, unit->proc_count, sizeof(DwarfProc *), compare_low_pc);
+
+	}
+}
+
+DwarfProc *dwarf_lookup_proc(void *ip, DwarfUnit **punit)
+{
+	DwarfUnit *unit;
+	for (unit = dwarf_units; unit; unit = unit->next) {
+
+		// Pointer in unit range?
+		if (ip < unit->low_pc || ip >= unit->high_pc)
+			continue;
+		if (!unit->proc_count || !unit->procs_by_pc)
+			continue;
+
+		// Find first entry with low_pc < ip in table (using binary search)
+		StgWord low = 0, high = unit->proc_count;
+		while (low < high) {
+			int mid = (low + high) / 2;
+			if (unit->procs_by_pc[mid]->low_pc <= ip)
+				low = mid + 1;
+			else
+				high = mid;
+		}
+
+		// Find an entry covering it
+		while (low > 0) {
+			DwarfProc *proc = unit->procs_by_pc[low-1];
+
+			// Security
+			if (ip < proc->low_pc) {
+				debugBelch("DWARF lookup: PC table corruption!");
+				break;
+			}
+
+			// In bounds? Then we have found it
+			if (ip <= proc->high_pc) {
+				if (punit)
+					*punit = unit;
+				return proc;
+			}
+
+			// Not a block? Stop search
+			if (proc->source != DwarfSourceDwarfBlock)
+				break;
+
+			// Otherwise backtrack
+			low--;
+		}
+
+	}
+
+	return NULL;
+}
+
+StgWord dwarf_get_debug_info(DwarfUnit *unit, DwarfProc *proc, DebugInfo *infos, StgWord max_infos)
+{
+	// Read debug information
+	StgWord8 *dbg = proc->debug_data;
+	StgWord8 *dbg_limit = (StgWord8 *)dwarf_ghc_debug_data + dwarf_ghc_debug_data_size;
+	StgBool gotProc = 0;
+	StgBool stopRecurse = 0;
+	StgWord info = 0;
+	StgWord depth = 0;
+	while (dbg && dbg <= dbg_limit && info < max_infos) {
+
+		// Get ID and size
+		EventTypeNum num = (EventTypeNum) *dbg; dbg++;
+		StgWord16 size = word16LE(dbg); dbg += 2;
+
+		// Check record type
+		StgBool done = 0;
+		switch (num) {
+		case EVENT_DEBUG_PROCEDURE:
+			// First time is expected, next means we have reached the
+			// end of records belonging to this proc
+			if (!gotProc)
+				gotProc = 1;
+			else
+				done = 1;
+			break;
+
+		// This is what we are looking for: Data to copy
+		case EVENT_DEBUG_SOURCE: {
+			infos[info].sline = word16LE(dbg);
+			infos[info].scol  = word16LE(dbg+2);
+			infos[info].eline = word16LE(dbg+4);
+			infos[info].ecol  = word16LE(dbg+6);
+			int len = strlen((char *)dbg+8),
+			    len2 = strlen((char *)dbg+9+len);
+			if (10 + len + len2 > size) {
+				errorBelch("Missing string terminator for module record! Probably corrupt debug data.");
+				return info;
+			}
+			infos[info].file = (char *)dbg+8;
+			infos[info].name = (char *)dbg+9+len;
+			infos[info].depth = depth;
+			info++;
+			// Did we find a source annotation for our own module?
+			if (!strcmp(infos[info-1].file, unit->name)) {
+				// Stop recursing to parents then - that would only
+				// dull the precision.
+				stopRecurse = 1;
+				return info;
+			}
+			break;
+		}
+
+		// These can be safely ignored
+		case EVENT_DEBUG_CORE:
+		case EVENT_DEBUG_PTR_RANGE:
+		   break;
+
+		// Unknown events must be considered stoppers.
+		default:
+		   done = 1;
+		}
+		dbg += size;
+
+		// Finished with this proc?
+		if (done) {
+			// Try to jump to parent
+			if (!stopRecurse &&
+			    proc->parent_id <= unit->max_proc_id &&
+			    (proc = unit->procs_by_id[proc->parent_id])) {
+
+				// Continue at parent
+				dbg = proc->debug_data;
+				gotProc = 0;
+				depth++;
+			} else {
+				break;
+			}
+		}
+	}
+	return info;
+}
 
 #endif /* USE_DWARF */

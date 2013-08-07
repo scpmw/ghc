@@ -44,6 +44,12 @@ void wakeUpRts(void);
 /* raiseExceptionHelper */
 StgWord raiseExceptionHelper (StgRegTable *reg, StgTSO *tso, StgClosure *exception);
 
+/* reifyStack */
+StgArrWords *reifyStack (Capability* cap, StgPtr sp);
+
+/* Helper to dump a reified stack */
+void dumpStack (StgArrWords *stack);
+
 /* findRetryFrameHelper */
 StgWord findRetryFrameHelper (Capability *cap, StgTSO *tso);
 

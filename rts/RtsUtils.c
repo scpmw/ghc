@@ -108,6 +108,27 @@ stgFree(void* p)
 }
 
 /* -----------------------------------------------------------------------------
+   Allocating simple arrays.
+   -------------------------------------------------------------------------- */
+
+StgArrWords *
+stgAllocArrWords(Capability *cap, size_t size_in_bytes)
+{
+    StgArrWords* arr;
+    nat data_size_in_words, total_size_in_words;
+
+    /* round up to a whole number of words */
+    data_size_in_words  = (size_in_bytes + sizeof(W_) - 1) / sizeof(W_);
+    total_size_in_words = sizeofW(StgArrWords) + data_size_in_words;
+
+    /* allocate and fill it in */
+    arr = (StgArrWords *)allocate(cap, total_size_in_words);
+    SET_ARR_HDR(arr, &stg_ARR_WORDS_info, CCCS, data_size_in_words);
+
+    return arr;
+}
+
+/* -----------------------------------------------------------------------------
    Stack overflow
    
    Not sure if this belongs here.
