@@ -962,17 +962,23 @@ test.hs:(5,4)-(6,7):
     <option>-fwarn-overlapping-patterns</option>,
     <option>-fwarn-warnings-deprecations</option>,
     <option>-fwarn-deprecated-flags</option>,
+    <option>-fwarn-unrecognised-pragmas</option>,
+    <option>-fwarn-pointless-pragmas</option>,
     <option>-fwarn-duplicate-constraints</option>,
     <option>-fwarn-duplicate-exports</option>,
+    <option>-fwarn-overflowed-literals</option>,
+    <option>-fwarn-empty-enumerations</option>,
     <option>-fwarn-missing-fields</option>,
     <option>-fwarn-missing-methods</option>,
     <option>-fwarn-lazy-unlifted-bindings</option>,
     <option>-fwarn-wrong-do-bind</option>,
     <option>-fwarn-unsupported-calling-conventions</option>,
-    <option>-fwarn-dodgy-foreign-imports</option>, and
-    <option>-fwarn-typeable-instances</option>.  The following
-    flags are
-    simple ways to select standard &ldquo;packages&rdquo; of warnings:
+    <option>-fwarn-dodgy-foreign-imports</option>,
+    <option>-fwarn-typeable-instances</option>,
+    <option>-fwarn-inline-rule-shadowing</option>, and
+    <option>-fwarn-unsupported-llvm-version</option>.
+    The following flags are simple ways to select standard
+    &ldquo;packages&rdquo; of warnings:
     </para>
 
     <variablelist>
@@ -1090,6 +1096,20 @@ test.hs:(5,4)-(6,7):
       </varlistentry>
 
       <varlistentry>
+        <term><option>-fwarn-pointless-pragmas</option>:</term>
+        <listitem>
+          <indexterm><primary><option>-fwarn-pointless-pragmas</option></primary>
+          </indexterm>
+          <indexterm><primary>warnings</primary></indexterm>
+          <indexterm><primary>pragmas</primary></indexterm>
+          <para>Causes a warning to be emitted when GHC detects that a
+          module contains a pragma that has no effect.</para>
+
+          <para>This option is on by default.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><option>-fwarn-warnings-deprecations</option>:</term>
         <listitem>
           <indexterm><primary><option>-fwarn-warnings-deprecations</option></primary>
@@ -1191,6 +1211,30 @@ foreign import "&amp;f" f :: FunPtr t
                 entity that is not exported.</para>
             </listitem>
           </itemizedlist>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-fwarn-overflowed-literals</option>:</term>
+        <listitem>
+          <indexterm><primary><option>-fwarn-overflowed-literals</option></primary>
+          </indexterm>
+          <para>
+              Causes a warning to be emitted if a literal will overflow,
+              e.g. <literal>300 :: Word8</literal>.
+          </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-fwarn-empty-enumerations</option>:</term>
+        <listitem>
+          <indexterm><primary><option>-fwarn-empty-enumerations</option></primary>
+          </indexterm>
+          <para>
+              Causes a warning to be emitted if an enumeration is
+              empty, e.g. <literal>[5 .. 3]</literal>.
+          </para>
         </listitem>
       </varlistentry>
 

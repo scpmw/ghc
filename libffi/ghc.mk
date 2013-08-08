@@ -55,7 +55,7 @@ $(libffi_STAMP_CONFIGURE): $(TOUCH_DEP)
 	$(call removeFiles,$(libffi_STAMP_STATIC_SHARED_BUILD))
 	$(call removeFiles,$(libffi_STAMP_STATIC_SHARED_INSTALL))
 	$(call removeTrees,$(LIBFFI_DIR) libffi/build)
-	cat ghc-tarballs/libffi/libffi*.tar.gz | $(GZIP_CMD) -d | { cd libffi && $(TAR_CMD) -xf - ; }
+	cat libffi-tarballs/libffi*.tar.gz | $(GZIP_CMD) -d | { cd libffi && $(TAR_CMD) -xf - ; }
 	mv libffi/libffi-* libffi/build
 
 # We have to fake a non-working ln for configure, so that the fallback
@@ -86,6 +86,7 @@ $(libffi_STAMP_CONFIGURE): $(TOUCH_DEP)
 	    LD=$(LD) \
 	    AR=$(AR_STAGE1) \
 	    NM=$(NM) \
+	    RANLIB=$(REAL_RANLIB_CMD) \
         CFLAGS="$(SRC_CC_OPTS) $(CONF_CC_OPTS_STAGE1) -w" \
         LDFLAGS="$(SRC_LD_OPTS) $(CONF_GCC_LINKER_OPTS_STAGE1) -w" \
         "$(SHELL)" ./configure \
