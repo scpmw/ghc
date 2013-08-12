@@ -246,14 +246,14 @@ void perf_event_stream(Task *task, StgBool own_task) {
 void perf_event_start_mutator_count(void)
 {
 	Task *task = myTask();
-	if(!task || task->perf_event_fd == -1) return;	
+	if(!task || task->perf_event_fd == -1) return;
 	ioctl(task->perf_event_fd, PERF_EVENT_IOC_ENABLE);
 }
 
 void perf_event_stop_mutator_count(void)
 {
 	Task *task = myTask();
-	if(!task || task->perf_event_fd == -1) return;	
+	if(!task || task->perf_event_fd == -1) return;
 	ioctl(task->perf_event_fd, PERF_EVENT_IOC_DISABLE);
 #ifdef TRACING
 	perf_event_stream(task, 1);

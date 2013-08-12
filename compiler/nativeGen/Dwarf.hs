@@ -30,9 +30,7 @@ import Data.Ord         ( comparing )
 import System.FilePath
 import System.Directory ( getCurrentDirectory )
 
--- | Generate DWARF/debug information for an individual CmmDecl. Takes
--- ticks from the raw CmmDecl and generates the appropriate structures
--- into .debug_info and .debug_ghc.
+-- | Generate DWARF/debug information
 dwarfGen :: DynFlags -> ModLocation -> UniqSupply -> [DebugBlock]
             -> IO (SDoc, UniqSupply)
 dwarfGen df modLoc us blocks = do
