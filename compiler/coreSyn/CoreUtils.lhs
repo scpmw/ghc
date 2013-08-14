@@ -10,7 +10,7 @@ Utility functions on @Core@ syntax
 module CoreUtils (
         -- * Constructing expressions
         mkCast,
-        mkTick, mkTickNoHNF, tickHNFArgs,
+        mkTick, mkTickNoHNF, tickHNFArgs, stripLaxTicks,
         bindNonRec, needsCaseBinding,
         mkAltExpr,
 
@@ -68,6 +68,8 @@ import Platform
 import Util
 import Pair
 import Data.List
+import Control.Applicative
+import Data.Traversable    ( traverse )
 \end{code}
 
 
@@ -289,6 +291,32 @@ copyLaxTicks :: CoreExpr -> CoreExpr -> CoreExpr
 copyLaxTicks (Tick t e) e2
             | tickishLax t = Tick t (copyTicks e e2)
 copyLaxTicks _other e2     = e2
+
+-- | Strip ticks from an expression
+stripLaxTicks :: CoreExpr -> ([Tickish Id], CoreExpr)
+stripLaxTicks e = (t', e')
+  where StripTM t' e' = go e
+        go (App e a)        = App <$> go e <*> go a
+        go (Lam b e)        = Lam b <$> go e
+        go (Let b e)        = Let <$> go_bs b <*> go e
+        go (Case e b t as)  = Case <$> go e <*> pure b <*> pure t <*> traverse go_a as
+        go (Cast e c)       = Cast <$> go e <*> pure c
+        go (Tick t e)
+          | tickishLax t    = let (StripTM ts e') = go e in StripTM (t:ts) e'
+          | otherwise       = Tick t <$> go e
+        go other            = pure other
+        go_bs (NonRec b e)  = NonRec b <$> go e
+        go_bs (Rec bs)      = Rec <$> traverse go_b bs
+        go_b (b, e)         = (,) <$> pure b <*> go e
+        go_a (c,bs,e)       = (,,) <$> pure c <*> pure bs <*> go e
+
+-- Utility definitions to make the above code work.
+data StripTM a = StripTM [Tickish Id] a
+instance Functor StripTM where fmap f (StripTM t a) = StripTM t (f a)
+instance Applicative StripTM where
+  pure a                            = StripTM [] a
+  (StripTM t1 f) <*> (StripTM t2 a) = StripTM (t1 ++ t2) (f a)
+
 
 \end{code}
 
