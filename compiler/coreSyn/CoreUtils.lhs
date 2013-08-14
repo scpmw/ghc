@@ -284,6 +284,12 @@ filterTick t (Tick t2 e)
   | otherwise            = fmap (Tick t2) (filterTick t e)
 filterTick _ other       = Just other
 
+-- | Copies ticks from the top of the given expression
+copyLaxTicks :: CoreExpr -> CoreExpr -> CoreExpr
+copyLaxTicks (Tick t e) e2
+            | tickishLax t = Tick t (copyTicks e e2)
+copyLaxTicks _other e2     = e2
+
 \end{code}
 
 %************************************************************************
@@ -1637,7 +1643,7 @@ tryEtaReduce bndrs body
 
     go (b : bs) (App fun arg) co
       | Just co' <- ok_arg b arg co
-      = go bs fun co'
+      = fmap (copyLaxTicks arg) $ go bs fun co'
 
     go _ _ _  = Nothing         -- Failure!
 
@@ -1685,6 +1691,10 @@ tryEtaReduce bndrs body
        | bndr == v  = Just (mkFunCo Representational (mkSymCo co_arg) co)
        -- The simplifier combines multiple casts into one,
        -- so we can have a simple-minded pattern match here
+    ok_arg bndr (Tick t e) co
+       | not (tickishIsCode t)
+                     = ok_arg bndr e co
+
     ok_arg _ _ _ = Nothing
 \end{code}
 
