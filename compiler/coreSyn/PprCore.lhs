@@ -528,7 +528,7 @@ instance Outputable id => Outputable (Tickish id) where
       hcat [ ptext (sLit "opt<"), ppr rname, ptext (sLit ">") ]
 \end{code}
 
----------------------------------------------------------
+-----------------------------------------------------
 --      Vectorisation declarations
 -----------------------------------------------------
 

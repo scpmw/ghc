@@ -89,11 +89,12 @@ addTicksToBinds dflags mod mod_loc exports tyCons binds =
                       , density      = mkDensity dflags
                       , this_mod     = mod
                       , tickishType  = case hscTarget dflags of
-                          HscInterpreted          -> Breakpoints
-                          _ | gopt Opt_Hpc dflags -> HpcTicks
+                          HscInterpreted            -> Breakpoints
+                          _ | gopt Opt_Hpc dflags   -> HpcTicks
                             | gopt Opt_SccProfilingOn dflags
-                                                  -> ProfNotes
-                            | otherwise           -> SourceNotes
+                                                    -> ProfNotes
+                            | gopt Opt_Debug dflags -> SourceNotes
+                            | otherwise             -> error "addTicksToBinds: No way to annotate!"
                        })
                    (TT
                       { tickBoxCount = 0
@@ -183,14 +184,14 @@ data TickDensity
 
 mkDensity :: DynFlags -> TickDensity
 mkDensity dflags
-  | gopt Opt_Hpc dflags                  = TickForCoverage
+  | gopt Opt_Hpc dflags
+    || gopt Opt_Debug dflags             = TickForCoverage
   | HscInterpreted  <- hscTarget dflags  = TickForBreakPoints
   | ProfAutoAll     <- profAuto dflags   = TickAllFunctions
   | ProfAutoTop     <- profAuto dflags   = TickTopFunctions
   | ProfAutoExports <- profAuto dflags   = TickExportedFunctions
   | ProfAutoCalls   <- profAuto dflags   = TickCallSites
-  | otherwise                            = TickForCoverage
-
+  | otherwise                            = panic "density"
   -- ToDo: -fhpc is taking priority over -fprof-auto here.  It seems
   -- that coverage works perfectly well with profiling, but you don't
   -- get any auto-generated SCCs.  It would make perfect sense to
@@ -1201,36 +1202,27 @@ static void hpc_init_Main(void)
  hs_hpc_module("Main",8,1150288664,_hpc_tickboxes_Main_hpc);}
 
 \begin{code}
-hpcInitCode :: DynFlags -> Module -> ModLocation -> HpcInfo -> SDoc
-hpcInitCode dflags this_mod mod_loc hpc_info
+hpcInitCode :: Module -> HpcInfo -> SDoc
+hpcInitCode _ (NoHpcInfo {}) = empty
+hpcInitCode this_mod (HpcInfo tickCount hashNo)
  = vcat
     [ text "static void hpc_init_" <> ppr this_mod
          <> text "(void) __attribute__((constructor));"
     , text "static void hpc_init_" <> ppr this_mod <> text "(void)"
     , braces (vcat [
-        tickboxes_decl,
+        ptext (sLit "extern StgWord64 ") <> tickboxes <>
+               ptext (sLit "[]") <> semi,
         ptext (sLit "hs_hpc_module") <>
           parens (hcat (punctuate comma [
               doubleQuotes full_name_str,
-              doubleQuotes mod_loc_str,
               int tickCount, -- really StgWord32
               int hashNo,    -- really StgWord32
-              if gopt Opt_Hpc dflags then tickboxes else int 0
+              tickboxes
             ])) <> semi
        ])
     ]
   where
-    do_hpc | not (gopt Opt_Hpc dflags) = False
-           | NoHpcInfo {} <- hpc_info  = False
-           | otherwise                 = True
-    (tickCount, hashNo)
-      | do_hpc    = (hpcInfoTickCount hpc_info, hpcInfoHash hpc_info) 
-      | otherwise = (0, 0)
-
     tickboxes = ppr (mkHpcTicksLabel $ this_mod)
-    tickboxes_decl
-      | gopt Opt_Hpc dflags  = ptext (sLit "extern StgWord64 ") <> tickboxes <> ptext (sLit "[]") <> semi
-      | otherwise            = empty
 
     module_name  = hcat (map (text.charToC) $
                          bytesFS (moduleNameFS (Module.moduleName this_mod)))
@@ -1241,8 +1233,4 @@ hpcInitCode dflags this_mod mod_loc hpc_info
        = module_name
        | otherwise
        = package_name <> char '/' <> module_name
-
-    mod_loc_str = case ml_hs_file mod_loc of
-                       Just path -> text path
-                       Nothing   -> text "*** no source *** "
 \end{code}

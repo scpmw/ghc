@@ -352,8 +352,7 @@ isOneLineSpan (RealSrcSpan s) = srcSpanStartLine s == srcSpanEndLine s
 isOneLineSpan (UnhelpfulSpan _) = False
 
 -- | Tests whether the first span "contains" the other span, meaning
--- that it covers more source than the other one. True if the spans
--- are eqal.
+-- that it covers at least as much source code. True if the spans are eqal.
 containsSpan :: RealSrcSpan -> RealSrcSpan -> Bool
 containsSpan s1 s2
   = srcSpanFile s1 == srcSpanFile s2

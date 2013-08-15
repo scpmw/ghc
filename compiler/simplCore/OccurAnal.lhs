@@ -1183,9 +1183,7 @@ occAnal env (Tick tickish body)
     -- never substitute for any of the Ids in a Breakpoint
 
   | tickishScoped tickish && not (tickishLax tickish)
-  = (mapVarEnv markInsideLam usage, Tick tickish body')
-    -- treat strictly scoped ticks as lambdas - meaning it isn't
-    -- allowed to unconditionally inline into them.
+  = (mapVarEnv markInsideSCC usage, Tick tickish body')
 
   | otherwise
   = (usage, Tick tickish body')

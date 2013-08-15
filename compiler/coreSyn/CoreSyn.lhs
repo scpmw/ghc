@@ -536,10 +536,10 @@ tickishScoped CoreNote{}   = True
 tickishScoped OptNote{}    = True
 
 mkNoTick :: Tickish id -> Tickish id
-mkNoTick n@ProfNote{} = n {profNoteCount = False}
+mkNoTick n@ProfNote{}   = n {profNoteCount = False}
 mkNoTick n@SourceNote{} = n {sourceFloat = sourceFloat n + 1 }
-mkNoTick Breakpoint{} = panic "mkNoTick: Breakpoint" -- cannot split a BP
-mkNoTick t = t
+mkNoTick Breakpoint{}   = panic "mkNoTick: Breakpoint" -- cannot split a BP
+mkNoTick t              = t
 
 mkNoScope :: Tickish id -> Tickish id
 mkNoScope n@ProfNote{} = n {profNoteScope = False}

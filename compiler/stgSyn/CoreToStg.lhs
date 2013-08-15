@@ -367,6 +367,9 @@ coreToStgExpr (Tick tick expr)
        (expr2, fvs, escs) <- coreToStgExpr expr
        return (StgTick tick expr2, fvs, escs)
 
+coreToStgExpr (Tick _ expr)
+  = {- dropped for now ... -} coreToStgExpr expr
+
 coreToStgExpr (Cast expr _)
   = coreToStgExpr expr
 

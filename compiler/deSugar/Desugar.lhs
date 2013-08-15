@@ -94,7 +94,13 @@ deSugar hsc_env
         ; let hpcInfo = emptyHpcInfo other_hpc_info
         ; (msgs, mb_res) <- do
 
-                     let want_ticks = True -- at this point they might be useful in any situation
+                     let want_ticks = gopt Opt_Hpc dflags
+                                   || gopt Opt_Debug dflags
+                                   || target == HscInterpreted
+                                   || (gopt Opt_SccProfilingOn dflags
+                                       && case profAuto dflags of
+                                            NoProfAuto -> False
+                                            _          -> True)
 
                      (binds_cvr,ds_hpc_info, modBreaks)
                          <- if want_ticks && not (isHsBoot hsc_src)

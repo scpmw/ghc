@@ -405,6 +405,9 @@ data GeneralFlag
    | Opt_DistrustAllPackages
    | Opt_PackageTrust
 
+   -- debugging flags
+   | Opt_Debug
+
    deriving (Eq, Show, Enum)
 
 data WarningFlag =
@@ -2349,6 +2352,10 @@ dynamic_flags = [
   , Flag "fno-safe-infer"   (NoArg (setSafeHaskell Sf_None))
   , Flag "fPIC"             (NoArg (setGeneralFlag Opt_PIC))
   , Flag "fno-PIC"          (NoArg (unSetGeneralFlag Opt_PIC))
+
+        ------ Debugging flags ----------------------------------------------
+  , Flag "g"                (NoArg (setGeneralFlag Opt_Debug))
+
  ]
  ++ map (mkFlag turnOn  ""     setGeneralFlag  ) negatableFlags
  ++ map (mkFlag turnOff "no-"  unSetGeneralFlag) negatableFlags

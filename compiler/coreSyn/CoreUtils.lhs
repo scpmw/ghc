@@ -249,7 +249,7 @@ mkTick t (Lam x e)
      -- just a counting tick: leave it on the outside
   | otherwise        = Tick t (Lam x e)
 
-  -- finally make sure we don't add duplicated ticks
+  -- finally make sure we don't duplicate ticks
 mkTick t e = case filterTick t e of
   Just e' -> Tick t e'
   Nothing -> e
@@ -275,10 +275,8 @@ tickHNFArgs t e = push t e
   push t (App f arg) = App (push t f) (mkTick t arg)
   push _t e = e
 
--- | Either returns a core expression that doesn't have ticks
--- annotations covered by the given tick top-level, or "Nothing" if
--- the expression has a tick annotatation that in turn already
--- contains the given tick.
+-- | Filters out ticks covered by the given tick. Returns Nothing
+-- if the expression is already annotated with a bigger tickish.
 filterTick :: Tickish Id -> CoreExpr -> Maybe CoreExpr
 filterTick t (Tick t2 e)
   | tickishContains t t2 = filterTick t e
@@ -554,11 +552,11 @@ example.  Furthermore "scc<n> x" will turn into just "x" in mkTick.
 \begin{code}
 exprIsTrivial :: CoreExpr -> Bool
 exprIsTrivial (Var _)          = True        -- See Note [Variables are trivial]
-exprIsTrivial (Type _)        = True
+exprIsTrivial (Type _)         = True
 exprIsTrivial (Coercion _)     = True
 exprIsTrivial (Lit lit)        = litIsTrivial lit
 exprIsTrivial (App e arg)      = not (isRuntimeArg arg) && exprIsTrivial e
-exprIsTrivial (Tick _ _)       = False  -- See Note [Tick trivial]
+exprIsTrivial (Tick t e)       = not (tickishIsCode t) && exprIsTrivial e -- See Note [Tick trivial]
 exprIsTrivial (Cast e _)       = exprIsTrivial e
 exprIsTrivial (Lam b body)     = not (isRuntimeVar b) && exprIsTrivial body
 exprIsTrivial _                = False
@@ -1632,6 +1630,10 @@ tryEtaReduce bndrs body
     -- for why we have an accumulating coercion
     go [] fun co
       | ok_fun fun = Just (mkCast fun co)
+
+    go bs (Tick t e) co
+      | not (tickishIsCode t)
+      = fmap (Tick t) $ go bs e co
 
     go (b : bs) (App fun arg) co
       | Just co' <- ok_arg b arg co

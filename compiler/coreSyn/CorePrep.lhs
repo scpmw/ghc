@@ -210,7 +210,10 @@ mkDataConWorkers dflags mod_loc data_tycons
             UnhelpfulSpan _  -> case ml_hs_file mod_loc of
               Just file -> realSrcLocSpan $ mkRealSrcLoc (mkFastString file) 1 1
               Nothing   -> realSrcLocSpan $ mkRealSrcLoc (fsLit "???") 1 1
-          tick_it = Tick (SourceNote span (showSDoc dflags (ppr name)) 0) ]
+          nameStr = showSDoc dflags (ppr name)
+          tick_it | gopt Opt_Debug dflags = Tick (SourceNote span nameStr 0)
+                  | otherwise             = id
+    ]
 \end{code}
 
 Note [Floating out of top level bindings]
