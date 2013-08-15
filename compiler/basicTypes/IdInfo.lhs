@@ -69,8 +69,6 @@ module IdInfo (
 	ppCafInfo, mayHaveCafRefs,
 	cafInfo, setCafInfo,
 
-        -- ** Tick-box Info
-        TickBoxOp(..), TickBoxId,
     ) where
 
 import CoreSyn
@@ -84,7 +82,6 @@ import DataCon
 import TyCon
 import ForeignCall
 import Outputable	
-import Module
 import FastString
 import Demand
 
@@ -133,8 +130,6 @@ data IdDetails
   | PrimOpId PrimOp		-- ^ The 'Id' is for a primitive operator
   | FCallId ForeignCall		-- ^ The 'Id' is for a foreign call
 
-  | TickBoxOpId TickBoxOp	-- ^ The 'Id' is for a HPC tick box (both traditional and binary)
-
   | DFunId Int Bool             -- ^ A dictionary function.
        -- Int = the number of "silent" arguments to the dfun
        --       e.g.  class D a => C a where ...
@@ -163,7 +158,6 @@ pprIdDetails other     = brackets (pp other)
    pp (ClassOpId {})    = ptext (sLit "ClassOp")
    pp (PrimOpId _)      = ptext (sLit "PrimOp")
    pp (FCallId _)       = ptext (sLit "ForeignCall")
-   pp (TickBoxOpId _)   = ptext (sLit "TickBoxOp")
    pp (DFunId ns nt)    = ptext (sLit "DFunId")
                              <> ppWhen (ns /= 0) (brackets (int ns))
                              <> ppWhen nt (ptext (sLit "(nt)"))
@@ -510,21 +504,4 @@ zapFragileInfo info
 	       `setOccInfo` zapFragileOcc occ)
   where
     occ = occInfo info
-\end{code}
-
-%************************************************************************
-%*									*
-\subsection{TickBoxOp}
-%*									*
-%************************************************************************
-
-\begin{code}
-type TickBoxId = Int
-
--- | Tick box for Hpc-style coverage
-data TickBoxOp 
-   = TickBox Module {-# UNPACK #-} !TickBoxId
-
-instance Outputable TickBoxOp where
-    ppr (TickBox mod n)         = ptext (sLit "tick") <+> ppr (mod,n)
 \end{code}
