@@ -385,6 +385,8 @@ middleAssignment _ (Plain (CmmTick {})) assign
     = assign
 middleAssignment _ (Plain (CmmContext {})) assign
     = assign
+middleAssignment _ (Plain (CmmUnwind {})) assign
+    = assign
 
 -- Assumptions:
 --  * Writes using Hp do not overlap with any other memory locations
