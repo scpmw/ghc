@@ -1,4 +1,3 @@
-
 How To Build and Use
 ===================
 
@@ -32,6 +31,10 @@ Then fetch the profiling GHC branch:
      $ git remote add profiling http://github.com/scpmw/ghc
      $ git fetch profiling
      $ git checkout profiling-7.6
+     
+Ensure that the sub-projects have a ghc-7.6 revision checked out:
+     
+     $ ./sync-all checkout ghc-7.6.3-release
 
 Make a configuration:
 
