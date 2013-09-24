@@ -26,20 +26,14 @@ Getting GHC
 First get a GHC source tree and a set of libraries compatible to GHC
 7.6:
 
-     $ git clone http://darcs.haskell.org/ghc.git ghc-git 
+     $ git clone http://github.com/scpmw/ghc ghc-git 
      $ cd ghc-git
-     $ ./sync-all get
-
-Then fetch the profiling GHC branch:
-
-     $ git remote add profiling http://github.com/scpmw/ghc
-     $ git fetch profiling
-     $ git checkout profiling-ncg
+     $ ./sync-all -r git://git.haskell.org get
 
 Make a configuration:
 
      $ cat > mk/build.mk
-     GhcLibWays      = v
+     GhcLibWays      = v dyn
      SRC_HC_OPTS     = -O -H64m
      GhcStage1HcOpts = -O -fasm
      GhcStage2HcOpts = -O2 -fasm
