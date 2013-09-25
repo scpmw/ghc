@@ -14,7 +14,7 @@ Requirements
   that's the only way we can currently read debug data. Note that
   if you compile GHC using dynamic linking (the default) you need
   a version of `libdwarf` that was compiled with `--enable-shared`.
-  Getting there might manually involve compiling `libdwarf`. As a
+  Getting there might involve compiling `libdwarf` manually. As a
   rule of thumb, once your system has a `libdwarf.so` file installed,
   it should work.
 
