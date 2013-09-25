@@ -15,7 +15,8 @@ Requirements
 
   You might need to compile `libdwarf` from source using
   `--enable-shared` to get GHC to compile using dynamic linking
-  (the default).
+  (the default). In the end of the day you should be able to
+  locate `libdwarf.so` with `ls /usr/{,local/}lib/libdwarf.so`.
   
 Note the installation will gracefully fail if any of these are not
 met, and just compile a GHC without the respective support enabled.
@@ -44,10 +45,20 @@ Make a configuration:
      BUILD_DOCBOOK_PS   = NO
      BUILD_DOCBOOK_PDF  = NO
       
-Build and install:
+Configure your build:
 
       $ perl boot
       $ ./configure --prefix=$GHC_INSTALL_PREFIX
+
+Now make sure the dwarf flag got set:
+
+      $ grep GhcRtsWithDwarf mk/config.mk                         
+      GhcRtsWithDwarf = YES
+
+If it says no, make sure you have `libdwarf.so` (`libdwarf.a` won't help you)
+      
+Now continue to build:
+
       $ make -j4
       $ make install
 
