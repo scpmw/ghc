@@ -11,12 +11,13 @@ Requirements
   only way to write debug meta data.
 
 * `libelf-dev` and `libdwarf-dev` (or similar) installed - because
-  that's the only way we can currently read debug data.
+  that's the only way we can currently read debug data. Note that
+  if you compile GHC using dynamic linking (the default) you need
+  a version of `libdwarf` that was compiled with `--enable-shared`.
+  Getting there might manually involve compiling `libdwarf`. As a
+  rule of thumb, once your system has a `libdwarf.so` file installed,
+  it should work.
 
-  You might need to compile `libdwarf` from source using
-  `--enable-shared` to get GHC to compile using dynamic linking
-  (the default).
-  
 Note the installation will gracefully fail if any of these are not
 met, and just compile a GHC without the respective support enabled.
 
