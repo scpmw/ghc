@@ -60,7 +60,7 @@ cgExpr (StgOpApp (StgPrimOp SeqOp) [StgVarArg a, _] _res_ty) =
 
 cgExpr (StgOpApp op args ty) = cgOpApp op args ty
 cgExpr (StgConApp con args)  = cgConApp con args
-cgExpr e@(StgTick {})        = cgTicks e >>= cgExpr
+cgExpr e@(StgTick {})        = cgTicks True e >>= cgExpr
 cgExpr (StgLit lit)       = do cmm_lit <- cgLit lit
                                emitReturn [CmmLit cmm_lit]
 
@@ -479,10 +479,10 @@ cgAlts :: (GcPlan,ReturnKind) -> NonVoid Id -> AltType -> [StgAlt]
        -> FCode ReturnKind
 -- At this point the result of the case are in the binders
 cgAlts gc_plan _bndr PolyAlt [(_, _, _, rhs)]
-  = cgTicks rhs >>= \rhs' -> maybeAltHeapCheck gc_plan (cgExpr rhs')
+  = cgTicks False rhs >>= \rhs' -> maybeAltHeapCheck gc_plan (cgExpr rhs')
 
 cgAlts gc_plan _bndr (UbxTupAlt _) [(_, _, _, rhs)]
-  = cgTicks rhs >>= \rhs' -> maybeAltHeapCheck gc_plan (cgExpr rhs')
+  = cgTicks False rhs >>= \rhs' -> maybeAltHeapCheck gc_plan (cgExpr rhs')
         -- Here bndrs are *already* in scope, so don't rebind them
 
 cgAlts gc_plan bndr (PrimAlt _) alts
@@ -580,7 +580,7 @@ cgAltRhss gc_plan bndr alts = do
     cg_alt :: StgAlt -> FCode (AltCon, CmmAGraph)
     cg_alt (con, bndrs, _uses, rhs)
       = getCodeR                  $
-        cgTicks rhs               >>= \rhs' ->
+        cgTicks False rhs         >>= \rhs' ->
         maybeAltHeapCheck gc_plan $
         do { _ <- bindConArgs con base_reg bndrs
            ; _ <- cgExpr rhs'
@@ -745,8 +745,9 @@ emitEnter fun = do
 
 -- | Processes all top-level ticks in the expression if any, then
 -- returns contained code.
-cgTicks :: StgExpr -> FCode StgExpr
-cgTicks (StgTick tick expr) =
+cgTicks :: Bool -> StgExpr -> FCode StgExpr
+cgTicks allowCounts (StgTick tick expr)
+  | allowCounts || not (tickishCounts tick) =
   do { dflags <- getDynFlags
      ; case tick of
        ProfNote   cc t p -> emitSetCCC cc t p
@@ -755,6 +756,6 @@ cgTicks (StgTick tick expr) =
        CoreNote   b c n  -> emitTick $ CoreNote b c n
        OptNote    r      -> emitTick $ OptNote r
        _other            -> return () -- ignore
-     ; cgTicks expr
+     ; cgTicks allowCounts expr
      }
-cgTicks other = return other
+cgTicks _ other = return other

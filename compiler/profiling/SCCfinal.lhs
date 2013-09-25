@@ -33,8 +33,8 @@ import ListSetOps       ( removeDups )
 import Outputable
 import DynFlags
 import CoreSyn          ( Tickish(..) )
-import SrcLoc
 import FastString
+import SrcLoc
 import Util
 
 

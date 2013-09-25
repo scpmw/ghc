@@ -82,9 +82,9 @@ import BasicTypes
 import DataCon
 import TyCon
 import ForeignCall
-import Demand
-import Outputable
+import Outputable	
 import FastString
+import Demand
 
 -- infixl so you can say (id `set` a `set` b)
 infixl 	1 `setSpecInfo`,

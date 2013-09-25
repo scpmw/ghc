@@ -695,6 +695,10 @@ cpeApp env expr
       | ignoreTickish tickish   -- Drop these notes altogether
       = collect_args fun depth  -- They aren't used by the code generator
 
+      | tickishLax tickish
+      = do { (fun',hd,fun_ty,floats,ss) <- collect_args fun depth
+           ; return (fun',hd,fun_ty,addFloat floats (FloatTick tickish),ss) }
+
         -- N-variable fun, better let-bind it
     collect_args fun depth
       = do { (fun_floats, fun') <- cpeArg env evalDmd fun ty
@@ -945,11 +949,14 @@ data FloatingBind
       Id CpeBody
       Bool              -- The bool indicates "ok-for-speculation"
 
+ | FloatTick (Tickish Id)
+
 data Floats = Floats OkToSpec (OrdList FloatingBind)
 
 instance Outputable FloatingBind where
   ppr (FloatLet b) = ppr b
   ppr (FloatCase b r ok) = brackets (ppr ok) <+> ppr b <+> equals <+> ppr r
+  ppr (FloatTick t) = ppr t
 
 instance Outputable Floats where
   ppr (Floats flag fs) = ptext (sLit "Floats") <> brackets (ppr flag) <+>
@@ -995,6 +1002,7 @@ wrapBinds (Floats _ binds) body
   where
     mk_bind (FloatCase bndr rhs _) body = Case rhs bndr (exprType body) [(DEFAULT, [], body)]
     mk_bind (FloatLet bind)        body = Let bind body
+    mk_bind (FloatTick tickish)    body = Tick tickish body
 
 addFloat :: Floats -> FloatingBind -> Floats
 addFloat (Floats ok_to_spec floats) new_float
@@ -1004,6 +1012,7 @@ addFloat (Floats ok_to_spec floats) new_float
     check (FloatCase _ _ ok_for_spec)
         | ok_for_spec  =  IfUnboxedOk
         | otherwise    =  NotOkToSpec
+    check FloatTick{}  = OkToSpec
         -- The ok-for-speculation flag says that it's safe to
         -- float this Case out of a let, and thereby do it more eagerly
         -- We need the top-level flag because it's never ok to float
@@ -1032,6 +1041,7 @@ deFloatTop (Floats _ floats)
   = foldrOL get [] floats
   where
     get (FloatLet b) bs = occurAnalyseRHSs b : bs
+    get FloatTick{}  bs = bs
     get b            _  = pprPanic "corePrepPgm" (ppr b)
 
     -- See Note [Dead code in CorePrep]

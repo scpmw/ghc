@@ -289,7 +289,7 @@ filterTick _ other       = Just other
 -- | Copies ticks from the top of the given expression
 copyLaxTicks :: CoreExpr -> CoreExpr -> CoreExpr
 copyLaxTicks (Tick t e) e2
-            | tickishLax t = Tick t (copyTicks e e2)
+            | tickishLax t = Tick t (copyLaxTicks e e2)
 copyLaxTicks _other e2     = e2
 
 -- | Strip ticks from an expression

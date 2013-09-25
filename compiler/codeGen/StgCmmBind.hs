@@ -480,7 +480,7 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
                 ; granYield arg_regs node_points
 
                 -- Emit ticks early so heap check is covered
-                ; body' <- cgTicks body
+                ; body' <- cgTicks False body
 
                 -- Main payload
                 ; entryHeapCheck cl_info node' arity arg_regs $ do
@@ -545,7 +545,7 @@ thunkCode cl_info fv_details _cc node arity body
              node'       = if node_points then Just node else Nothing
         ; ldvEnterClosure cl_info -- NB: Node always points when profiling
         ; granThunk node_points
-        ; body' <- cgTicks body
+        ; body' <- cgTicks False body
 
         -- Heap overflow check
         ; entryHeapCheck cl_info node' arity [] $ do

@@ -364,10 +364,6 @@ And so the code for let(rec)-things:
 \subsubsection{@GenStgExpr@: @hpc@, @scc@ and other debug annotations}
 %*									*
 %************************************************************************
-%*                                                                      *
-\subsubsection{@GenStgExpr@: @hpc@ expressions}
-%*                                                                      *
-%************************************************************************
 
 Finally for @hpc@ expressions we introduce a new STG construct.
 

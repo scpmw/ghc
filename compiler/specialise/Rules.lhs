@@ -377,7 +377,7 @@ lookupRule dflags in_scope is_active fn args rules
                                    --       , isCheapUnfolding unf] )
                                    go ms rs
 
-    opt_note (r, e) = (r, mkTick (OptNote $ ru_name r) e)
+    opt_note (r, e) = (r, e) -- mkTick (OptNote $ ru_name r) e)
 
 findBest :: (Id, [CoreExpr])
          -> (CoreRule,CoreExpr) -> [(CoreRule,CoreExpr)] -> (CoreRule,CoreExpr)

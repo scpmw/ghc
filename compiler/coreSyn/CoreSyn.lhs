@@ -501,9 +501,8 @@ data Tickish id =
 -- | Tickish out of Core context
 type RawTickish = Tickish ()
 
--- | A hackish newtype mostly for making the expression ignored by all
--- equality checks. Also allows us to cleanly pack expressions as well
--- as "case" alternatives.
+-- | Pointer to a Core expression or case alternative. Ignored for the
+-- purpose of equality checks.
 data ExprPtr id = ExprPtr (Expr id)
                 | AltPtr (Alt id)
                 deriving (Data, Typeable)

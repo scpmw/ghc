@@ -59,15 +59,15 @@ type HashCode = Int
 
 -- Try to find a block that is equal (or ``common'') to b.
 common_block :: State -> (HashCode, CmmBlock) -> State
-common_block state0@(old_change, bmap, subst) (hash, b) =
+common_block (old_change, bmap, subst) (hash, b) =
   case lookupUFM bmap hash of
     Just bs | Just b' <- List.find (eqBlockBodyWith (eqBid subst) b) bs
             -> if mapLookup bid subst == Just (entryLabel b')
-               then state0
-               else tr b' (True, bmap, mapInsert bid (entryLabel b') subst)
+               then (old_change, bmap, subst)
+               else my_trace "found new common block" (ppr bid <> char '=' <> ppr (entryLabel b')) $
+                    (True, bmap, mapInsert bid (entryLabel b') subst)
     m_bs    -> (old_change, addToUFM bmap hash (b : fromMaybe [] m_bs), subst)
   where bid = entryLabel b
-        tr b' = my_trace "found new common block" (ppr bid <> char '=' <> ppr (entryLabel b'))
 
 -- -----------------------------------------------------------------------------
 -- Hashing and equality on blocks
