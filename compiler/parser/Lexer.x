@@ -57,6 +57,8 @@ module Lexer (
    extension, bangPatEnabled, datatypeContextsEnabled,
    traditionalRecordSyntaxEnabled,
    typeLiteralsEnabled,
+   explicitForallEnabled,
+   inRulePrag,
    explicitNamespacesEnabled, sccProfilingOn, hpcEnabled,
    addWarning,
    lexTokenStream
@@ -470,6 +472,7 @@ data Token
   | ITccallconv
   | ITcapiconv
   | ITprimcallconv
+  | ITjavascriptcallconv
   | ITmdo
   | ITfamily
   | ITgroup
@@ -666,8 +669,9 @@ reservedWordsFM = listToUFM $
          ( "ccall",          ITccallconv,     bit ffiBit),
          ( "capi",           ITcapiconv,      bit cApiFfiBit),
          ( "prim",           ITprimcallconv,  bit ffiBit),
+         ( "javascript",     ITjavascriptcallconv, bit ffiBit),
 
-         ( "rec",            ITrec,           bit arrowsBit .|. 
+         ( "rec",            ITrec,           bit arrowsBit .|.
                                               bit recursiveDoBit),
          ( "proc",           ITproc,          bit arrowsBit)
      ]
@@ -711,8 +715,7 @@ reservedSymsFM = listToUFM $
 
        ,("∷",   ITdcolon, unicodeSyntaxEnabled)
        ,("⇒",   ITdarrow, unicodeSyntaxEnabled)
-       ,("∀",   ITforall, \i -> unicodeSyntaxEnabled i &&
-                                explicitForallEnabled i)
+       ,("∀",   ITforall, unicodeSyntaxEnabled)
        ,("→",   ITrarrow, unicodeSyntaxEnabled)
        ,("←",   ITlarrow, unicodeSyntaxEnabled)
 
@@ -1931,8 +1934,8 @@ datatypeContextsEnabled :: Int -> Bool
 datatypeContextsEnabled flags = testBit flags datatypeContextsBit
 qqEnabled :: Int -> Bool
 qqEnabled        flags = testBit flags qqBit
--- inRulePrag :: Int -> Bool
--- inRulePrag       flags = testBit flags inRulePragBit
+inRulePrag :: Int -> Bool
+inRulePrag       flags = testBit flags inRulePragBit
 rawTokenStreamEnabled :: Int -> Bool
 rawTokenStreamEnabled flags = testBit flags rawTokenStreamBit
 alternativeLayoutRule :: Int -> Bool

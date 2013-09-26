@@ -175,7 +175,7 @@ corePrepPgm hsc_env mod_loc binds data_tycons = do
                       floats2 <- corePrepTopBinds initialCorePrepEnv implicit_binds
                       return (deFloatTop (floats1 `appendFloats` floats2))
 
-    endPass dflags CorePrep binds_out []
+    endPass hsc_env CorePrep binds_out []
     return binds_out
 
 corePrepExpr :: DynFlags -> HscEnv -> CoreExpr -> IO CoreExpr

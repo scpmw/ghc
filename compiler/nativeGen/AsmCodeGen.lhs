@@ -172,6 +172,7 @@ nativeCodeGen dflags this_mod modLoc h us cmms
       ArchMipseb  -> panic "nativeCodeGen: No NCG for mipseb"
       ArchMipsel  -> panic "nativeCodeGen: No NCG for mipsel"
       ArchUnknown -> panic "nativeCodeGen: No NCG for unknown arch"
+      ArchJavaScript -> panic "nativeCodeGen: No NCG for JavaScript"
 
 x86NcgImpl :: DynFlags -> NcgImpl (Alignment, CmmStatics) X86.Instr.Instr X86.Instr.JumpDest
 x86NcgImpl dflags

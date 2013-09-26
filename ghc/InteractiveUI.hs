@@ -246,7 +246,8 @@ defFullHelpText =
   "   :info[!] [<name> ...]       display information about the given names\n" ++
   "                               (!: do not filter instances)\n" ++
   "   :issafe [<mod>]             display safe haskell information of module <mod>\n" ++
-  "   :kind <type>                show the kind of <type>\n" ++
+  "   :kind[!] <type>             show the kind of <type>\n" ++
+  "                               (!: also print the normalised type)\n" ++
   "   :load [*]<module> ...       load module(s) and their dependents\n" ++
   "   :main [<arguments> ...]     run the main function with the given arguments\n" ++
   "   :module [+/-] [*]<mod> ...  set the context for expression evaluation\n" ++
@@ -315,6 +316,7 @@ defFullHelpText =
   "   :show linker                show current linker state\n" ++
   "   :show modules               show the currently loaded modules\n" ++
   "   :show packages              show the currently active package flags\n" ++
+  "   :show paths                 show the currently active search paths\n" ++
   "   :show language              show the currently active language flags\n" ++
   "   :show <setting>             show value of <setting>, which is one of\n" ++
   "                                  [args, prog, prompt, editor, stop]\n" ++
@@ -609,6 +611,7 @@ fileLoop hdl = do
 
 mkPrompt :: GHCi String
 mkPrompt = do
+  st <- getGHCiState
   imports <- GHC.getContext
   resumes <- GHC.getResumeContext
 
@@ -639,12 +642,12 @@ mkPrompt = do
 
         deflt_prompt = dots <> context_bit <> modules_bit
 
+        f ('%':'l':xs) = ppr (1 + line_number st) <> f xs
         f ('%':'s':xs) = deflt_prompt <> f xs
         f ('%':'%':xs) = char '%' <> f xs
         f (x:xs) = char x <> f xs
         f [] = empty
 
-  st <- getGHCiState
   dflags <- getDynFlags
   return (showSDoc dflags (f (prompt st)))
 
@@ -957,7 +960,7 @@ lookupCommand' str' = do
   ghci_cmds <- ghci_commands `fmap` getGHCiState
   let{ (str, cmds) = case str' of
       ':' : rest -> (rest, ghci_cmds) -- "::" selects a builtin command
-      _ -> (str', ghci_cmds ++ macros) } -- otherwise prefer macros
+      _ -> (str', macros ++ ghci_cmds) } -- otherwise prefer macros
   -- look for exact match first, then the first prefix match
   return $ case [ c | c <- cmds, str == cmdName c ] of
            c:_ -> Just c
@@ -2155,6 +2158,7 @@ showCmd str = do
         ["breaks"]   -> showBkptTable
         ["context"]  -> showContext
         ["packages"]  -> showPackages
+        ["paths"]     -> showPaths
         ["languages"] -> showLanguages -- backwards compat
         ["language"]  -> showLanguages
         ["lang"]      -> showLanguages -- useful abbreviation
@@ -2261,6 +2265,19 @@ showPackages = do
         showFlag (ExposePackageId p) = text $ "  -package-id " ++ p
         showFlag (TrustPackage    p) = text $ "  -trust " ++ p
         showFlag (DistrustPackage p) = text $ "  -distrust " ++ p
+
+showPaths :: GHCi ()
+showPaths = do
+  dflags <- getDynFlags
+  liftIO $ do
+    cwd <- getCurrentDirectory
+    putStrLn $ showSDoc dflags $
+      text "current working directory: " $$
+        nest 2 (text cwd)
+    let ipaths = importPaths dflags
+    putStrLn $ showSDoc dflags $
+      text ("module import search paths:"++if null ipaths then " none" else "") $$
+        nest 2 (vcat (map text ipaths))
 
 showLanguages :: GHCi ()
 showLanguages = getDynFlags >>= liftIO . showLanguages' False
@@ -2422,7 +2439,7 @@ completeShowOptions = wrapCompleter flagWordBreakChars $ \w -> do
   return (filter (w `isPrefixOf`) opts)
     where opts = ["args", "prog", "prompt", "prompt2", "editor", "stop",
                      "modules", "bindings", "linker", "breaks",
-                     "context", "packages", "language", "imports"]
+                     "context", "packages", "paths", "language", "imports"]
 
 completeShowiOptions = wrapCompleter flagWordBreakChars $ \w -> do
   return (filter (w `isPrefixOf`) ["language"])

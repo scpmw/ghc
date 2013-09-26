@@ -45,6 +45,7 @@ module CoreUtils (
 
 import CoreSyn
 import PprCore
+import CoreFVs( exprFreeVars )
 import Var
 import SrcLoc
 import VarEnv
@@ -140,33 +141,33 @@ Various possibilities suggest themselves:
 
 \begin{code}
 applyTypeToArg :: Type -> CoreExpr -> Type
--- ^ Determines the type resulting from applying an expression to a function with the given type
+-- ^ Determines the type resulting from applying an expression with given type
+-- to a given argument expression
 applyTypeToArg fun_ty (Type arg_ty) = applyTy fun_ty arg_ty
 applyTypeToArg fun_ty _             = funResultTy fun_ty
 
 applyTypeToArgs :: CoreExpr -> Type -> [CoreExpr] -> Type
 -- ^ A more efficient version of 'applyTypeToArg' when we have several arguments.
 -- The first argument is just for debugging, and gives some context
-applyTypeToArgs _ op_ty [] = op_ty
-
-applyTypeToArgs e op_ty (Type ty : args)
-  =     -- Accumulate type arguments so we can instantiate all at once
-    go [ty] args
+applyTypeToArgs e op_ty args
+  = go op_ty args
   where
-    go rev_tys (Type ty : args) = go (ty:rev_tys) args
-    go rev_tys rest_args         = applyTypeToArgs e op_ty' rest_args
-                                 where
-                                   op_ty' = applyTysD msg op_ty (reverse rev_tys)
-                                   msg = ptext (sLit "applyTypeToArgs") <+>
-                                         panic_msg e op_ty
+    go op_ty []               = op_ty
+    go op_ty (Type ty : args) = go_ty_args op_ty [ty] args
+    go op_ty (_ : args)       | Just (_, res_ty) <- splitFunTy_maybe op_ty
+                              = go res_ty args
+    go _ _ = pprPanic "applyTypeToArgs" panic_msg
 
-applyTypeToArgs e op_ty (_ : args)
-  = case (splitFunTy_maybe op_ty) of
-        Just (_, res_ty) -> applyTypeToArgs e res_ty args
-        Nothing -> pprPanic "applyTypeToArgs" (panic_msg e op_ty)
-
-panic_msg :: CoreExpr -> Type -> SDoc
-panic_msg e op_ty = pprCoreExpr e $$ ppr op_ty
+    -- go_ty_args: accumulate type arguments so we can instantiate all at once
+    go_ty_args op_ty rev_tys (Type ty : args) 
+       = go_ty_args op_ty (ty:rev_tys) args
+    go_ty_args op_ty rev_tys args
+       = go (applyTysD panic_msg_w_hdr op_ty (reverse rev_tys)) args
+    
+    panic_msg_w_hdr = hang (ptext (sLit "applyTypeToArgs")) 2 panic_msg
+    panic_msg = vcat [ ptext (sLit "Expression:") <+> pprCoreExpr e
+                     , ptext (sLit "Type:") <+> ppr op_ty
+                     , ptext (sLit "Args:") <+> ppr args ]
 \end{code}
 
 %************************************************************************
@@ -1576,6 +1577,11 @@ are going to avoid allocating this thing altogether.
 
 There are some particularly delicate points here:
 
+* We want to eta-reduce if doing so leaves a trivial expression,
+  *including* a cast.  For example
+       \x. f |> co  -->  f |> co
+  (provided co doesn't mention x)
+
 * Eta reduction is not valid in general:
         \x. bot  /=  bot
   This matters, partly for old-fashioned correctness reasons but,
@@ -1592,7 +1598,7 @@ There are some particularly delicate points here:
   Result: seg-fault because the boolean case actually gets a function value.
   See Trac #1947.
 
-  So it's important to to the right thing.
+  So it's important to do the right thing.
 
 * Note [Arity care]: we need to be careful if we just look at f's
   arity. Currently (Dec07), f's arity is visible in its own RHS (see
@@ -1663,7 +1669,11 @@ tryEtaReduce bndrs body
     -- See Note [Eta reduction with casted arguments]
     -- for why we have an accumulating coercion
     go [] fun co
-      | ok_fun fun = Just (mkCast fun co)
+      | ok_fun fun 
+      , let used_vars = exprFreeVars fun `unionVarSet` tyCoVarsOfCo co
+      , not (any (`elemVarSet` used_vars) bndrs)
+      = Just (mkCast fun co)   -- Check for any of the binders free in the result
+                               -- including the accumulated coercion
 
     go bs (Tick t e) co
       | not (tickishIsCode t)
@@ -1677,13 +1687,10 @@ tryEtaReduce bndrs body
 
     ---------------
     -- Note [Eta reduction conditions]
-    ok_fun (App fun (Type ty))
-        | not (any (`elemVarSet` tyVarsOfType ty) bndrs)
-        =  ok_fun fun
-    ok_fun (Var fun_id)
-        =  not (fun_id `elem` bndrs)
-        && (ok_fun_id fun_id || all ok_lam bndrs)
-    ok_fun _fun = False
+    ok_fun (App fun (Type {})) = ok_fun fun
+    ok_fun (Cast fun _)        = ok_fun fun
+    ok_fun (Var fun_id)        = ok_fun_id fun_id || all ok_lam bndrs
+    ok_fun _fun                = False
 
     ---------------
     ok_fun_id fun = fun_arity fun >= incoming_arity

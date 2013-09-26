@@ -312,6 +312,7 @@ genCall target res args = do
                  CCallConv    -> CC_Ccc
                  CApiConv     -> CC_Ccc
                  PrimCallConv -> panic "LlvmCodeGen.CodeGen.genCall: PrimCallConv"
+                 JavaScriptCallConv -> panic "LlvmCodeGen.CodeGen.genCall: JavaScriptCallConv"
 
             PrimTarget   _ -> CC_Ccc
 

@@ -658,7 +658,9 @@ BUILD_DIRS += compiler
 BUILD_DIRS += utils/hsc2hs
 BUILD_DIRS += utils/ghc-pkg
 BUILD_DIRS += utils/testremove
+ifeq "$(Stage1Only)" "NO"
 BUILD_DIRS += utils/ghctags
+endif
 BUILD_DIRS += utils/dll-split
 BUILD_DIRS += utils/ghc-pwd
 BUILD_DIRS += utils/ghc-cabal
@@ -1281,7 +1283,6 @@ distclean : clean
 	$(call removeFiles,libraries/process/include/HsProcessConfig.h)
 	$(call removeFiles,libraries/unix/include/HsUnixConfig.h)
 	$(call removeFiles,libraries/time/include/HsTimeConfig.h)
-	$(call removeFiles,libraries/time/include/HsTimeConfig.h.in)
 	$(call removeFiles,libraries/old-time/include/HsTimeConfig.h)
 
 # The library configure scripts also like creating autom4te.cache
@@ -1310,6 +1311,7 @@ maintainer-clean : distclean
 	$(call removeFiles,libraries/directory/include/HsDirectoryConfig.h.in)
 	$(call removeFiles,libraries/process/include/HsProcessConfig.h.in)
 	$(call removeFiles,libraries/unix/include/HsUnixConfig.h.in)
+	$(call removeFiles,libraries/time/include/HsTimeConfig.h.in)
 	$(call removeFiles,libraries/old-time/include/HsTimeConfig.h.in)
 
 .PHONY: all_libraries
