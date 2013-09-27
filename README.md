@@ -1,4 +1,3 @@
-
 How To Build and Use
 ===================
 
@@ -12,7 +11,12 @@ Requirements
   only way to write debug meta data.
 
 * `libelf-dev` and `libdwarf-dev` (or similar) installed - because
-  that's the only way we can currently read debug data.
+  that's the only way we can currently read debug data. Note that
+  if you compile GHC using dynamic linking (the default) you need
+  a version of `libdwarf` that was compiled with `--enable-shared`.
+  Getting there might involve compiling `libdwarf` manually. As a
+  rule of thumb, once your system has a `libdwarf.so` file installed,
+  it should work.
 
 Note the installation will gracefully fail if any of these are not
 met, and just compile a GHC without the respective support enabled.
@@ -23,24 +27,18 @@ Getting GHC
 First get a GHC source tree and a set of libraries compatible to GHC
 7.6:
 
-     $ git clone -b ghc-7.6 http://darcs.haskell.org/ghc.git ghc-git 
+     $ git clone http://github.com/scpmw/ghc ghc-git 
      $ cd ghc-git
-     $ ./sync-all get
-
-Then fetch the profiling GHC branch:
-
-     $ git remote add profiling http://github.com/scpmw/ghc
-     $ git fetch profiling
-     $ git checkout profiling-7.6
+     $ ./sync-all -r git://git.haskell.org get
 
 Make a configuration:
 
      $ cat > mk/build.mk
-     GhcLibWays      = v
+     GhcLibWays      = v dyn
      SRC_HC_OPTS     = -O -H64m
      GhcStage1HcOpts = -O -fasm
-     GhcStage2HcOpts = -O2 -fllvm
-     GhcLibHcOpts    = -O2 -fllvm
+     GhcStage2HcOpts = -O2 -fasm
+     GhcLibHcOpts    = -O2
      SplitObjs          = NO
      HADDOCK_DOCS       = NO
      BUILD_DOCBOOK_HTML = NO
@@ -71,10 +69,12 @@ Where `-ls` enables the eventlog output, and `-E` enables
 Getting ThreadScope
 -------------------
 
-Get the source packages here:
+You will need custom versions of ghc-events & ThreadScope:
 
-* [ghc-events-pmw-0.4.0.0.tar.gz](http://www.personal.leeds.ac.uk/~scpmw/ghc-events-pmw-0.4.0.0.tar.gz)
-* [threadscope-pmw-0.2.1.tar.gz](http://www.personal.leeds.ac.uk/~scpmw/threadscope-pmw-0.2.1.tar.gz)
+     $ git clone http://github.com/scpmw/ghc-events ghc-events
+     $ (cd ghc-events; cabal install)
+     $ git clone http://github.com/scpmw/ThreadScope ThreadScope
+     $ (cd ThreadScope; cabal install)
 
 After installing the GTK bindings as well as these packages, you
 should be able to view generated profiles using `threadscope-pmw`:
