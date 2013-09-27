@@ -26,7 +26,9 @@ module CoAxiom (
        coAxBranchLHS, coAxBranchRHS, coAxBranchSpan, coAxBranchIncomps,
        placeHolderIncomps,
 
-       Role(..), pprFullRole
+       Role(..), fsFromRole,
+
+       CoAxiomRule(..), Eqn
        ) where 
 
 import {-# SOURCE #-} TypeRep ( Type )
@@ -38,6 +40,7 @@ import Unique
 import Var
 import Util
 import Binary
+import Pair
 import BasicTypes
 import Data.Typeable ( Typeable )
 import SrcLoc
@@ -432,7 +435,7 @@ instance Typeable br => Data.Data (CoAxiom br) where
 %*                                                                      *
 %************************************************************************
 
-This is defined here to avoid circular dependencies.
+Roles are defined here to avoid circular dependencies.
 
 \begin{code}
 
@@ -441,15 +444,17 @@ This is defined here to avoid circular dependencies.
 data Role = Nominal | Representational | Phantom
   deriving (Eq, Data.Data, Data.Typeable)
 
-pprFullRole :: Role -> SDoc
-pprFullRole Nominal          = ptext (sLit "Nominal")
-pprFullRole Representational = ptext (sLit "Representational")
-pprFullRole Phantom          = ptext (sLit "Phantom")
+-- These names are slurped into the parser code. Changing these strings
+-- will change the **surface syntax** that GHC accepts! If you want to
+-- change only the pretty-printing, do some replumbing. See
+-- mkRoleAnnotDecl in RdrHsSyn
+fsFromRole :: Role -> FastString
+fsFromRole Nominal          = fsLit "nominal"
+fsFromRole Representational = fsLit "representational"
+fsFromRole Phantom          = fsLit "phantom"
 
 instance Outputable Role where
-  ppr Nominal          = char 'N'
-  ppr Representational = char 'R'
-  ppr Phantom          = char 'P'
+  ppr = ftext . fsFromRole
 
 instance Binary Role where
   put_ bh Nominal          = putByte bh 1
@@ -463,3 +468,57 @@ instance Binary Role where
                           _ -> panic ("get Role " ++ show tag)
 
 \end{code}
+
+
+%************************************************************************
+%*                                                                      *
+                    CoAxiomRule
+              Rules for building Evidence
+%*                                                                      *
+%************************************************************************
+
+Conditional axioms.  The general idea is that a `CoAxiomRule` looks like this:
+
+    forall as. (r1 ~ r2, s1 ~ s2) => t1 ~ t2
+
+My intention is to reuse these for both (~) and (~#).
+The short-term plan is to use this datatype to represent the type-nat axioms.
+In the longer run, it may be good to unify this and `CoAxiom`,
+as `CoAxiom` is the special case when there are no assumptions.
+
+\begin{code}
+-- | A more explicit representation for `t1 ~ t2`.
+type Eqn = Pair Type
+
+-- | For now, we work only with nominal equality.
+data CoAxiomRule = CoAxiomRule
+  { coaxrName      :: FastString
+  , coaxrTypeArity :: Int       -- number of type argumentInts
+  , coaxrAsmpRoles :: [Role]    -- roles of parameter equations
+  , coaxrRole      :: Role      -- role of resulting equation
+  , coaxrProves    :: [Type] -> [Eqn] -> Maybe Eqn
+        -- ^ coaxrProves returns @Nothing@ when it doesn't like
+        -- the supplied arguments.  When this happens in a coercion
+        -- that means that the coercion is ill-formed, and Core Lint
+        -- checks for that.
+  } deriving Typeable
+
+instance Data.Data CoAxiomRule where
+  -- don't traverse?
+  toConstr _   = abstractConstr "CoAxiomRule"
+  gunfold _ _  = error "gunfold"
+  dataTypeOf _ = mkNoRepType "CoAxiomRule"
+
+instance Uniquable CoAxiomRule where
+  getUnique = getUnique . coaxrName
+
+instance Eq CoAxiomRule where
+  x == y = coaxrName x == coaxrName y
+
+instance Ord CoAxiomRule where
+  compare x y = compare (coaxrName x) (coaxrName y)
+
+instance Outputable CoAxiomRule where
+  ppr = ppr . coaxrName
+\end{code}
+

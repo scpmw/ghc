@@ -63,7 +63,7 @@ module Type (
 
         -- ** Predicates on types
         isTypeVar, isKindVar,
-        isTyVarTy, isFunTy, isDictTy, isPredTy, isKindTy,
+        isTyVarTy, isFunTy, isDictTy, isPredTy, 
 
         -- (Lifting and boxity)
         isUnLiftedType, isUnboxedTupleType, isAlgType, isClosedAlgType,
@@ -100,6 +100,7 @@ module Type (
         coreView, tcView,
 
         UnaryType, RepType(..), flattenRepType, repType,
+        tyConsOfType,
 
         -- * Type representation for the code generator
         typePrimRep, typeRepArity,
@@ -154,6 +155,7 @@ import TypeRep
 import Var
 import VarEnv
 import VarSet
+import NameEnv
 
 import Class
 import TyCon
@@ -644,6 +646,26 @@ repType ty
 
     go _ ty = UnaryRep ty
 
+
+-- | All type constructors occurring in the type; looking through type
+--   synonyms, but not newtypes.
+--  When it finds a Class, it returns the class TyCon.
+tyConsOfType :: Type -> [TyCon]
+tyConsOfType ty
+  = nameEnvElts (go ty)
+  where
+     go :: Type -> NameEnv TyCon  -- The NameEnv does duplicate elim
+     go ty | Just ty' <- tcView ty = go ty'
+     go (TyVarTy {})               = emptyNameEnv
+     go (LitTy {})                 = emptyNameEnv
+     go (TyConApp tc tys)          = go_tc tc tys
+     go (AppTy a b)                = go a `plusNameEnv` go b
+     go (FunTy a b)                = go a `plusNameEnv` go b
+     go (ForAllTy _ ty)            = go ty
+
+     go_tc tc tys = extendNameEnv (go_s tys) (tyConName tc) tc
+     go_s tys = foldr (plusNameEnv . go) emptyNameEnv tys
+
 -- ToDo: this could be moved to the code generator, using splitTyConApp instead
 -- of inspecting the type directly.
 
@@ -829,9 +851,6 @@ isPredTy ty = go ty []
     go_k (FunTy _ k1)     (_ :args) = go_k k1 args
     go_k (ForAllTy kv k1) (k2:args) = go_k (substKiWith [kv] [k2] k1) args
     go_k _ _ = False                  -- Typeable * Int :: Constraint
-
-isKindTy :: Type -> Bool
-isKindTy = isSuperKind . typeKind
 
 isClassPred, isEqPred, isIPPred :: PredType -> Bool
 isClassPred ty = case tyConAppTyCon_maybe ty of

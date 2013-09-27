@@ -983,6 +983,9 @@ genMachOp _ op [x] = case op of
 
     MO_VS_Quot    _ _ -> panicOp
     MO_VS_Rem     _ _ -> panicOp
+
+    MO_VU_Quot    _ _ -> panicOp
+    MO_VU_Rem     _ _ -> panicOp
  
     MO_VF_Insert  _ _ -> panicOp
     MO_VF_Extract _ _ -> panicOp
@@ -1023,7 +1026,7 @@ genMachOp _ op [x] = case op of
                  w | w > toWidth -> sameConv' reduce
                  _w              -> return x'
         
-        panicOp = panic $ "LLVM.CodeGen.genMachOp: non unary op encourntered"
+        panicOp = panic $ "LLVM.CodeGen.genMachOp: non unary op encountered"
                        ++ "with one argument! (" ++ show op ++ ")"
 
 -- Handle GlobalRegs pointers
@@ -1156,6 +1159,9 @@ genMachOp_slow opt op [x, y] = case op of
 
     MO_VS_Quot l w -> genCastBinMach (LMVector l (widthToLlvmInt w)) LM_MO_SDiv
     MO_VS_Rem  l w -> genCastBinMach (LMVector l (widthToLlvmInt w)) LM_MO_SRem
+
+    MO_VU_Quot l w -> genCastBinMach (LMVector l (widthToLlvmInt w)) LM_MO_UDiv
+    MO_VU_Rem  l w -> genCastBinMach (LMVector l (widthToLlvmInt w)) LM_MO_URem
  
     MO_VF_Add  l w -> genCastBinMach (LMVector l (widthToLlvmFloat w)) LM_MO_FAdd
     MO_VF_Sub  l w -> genCastBinMach (LMVector l (widthToLlvmFloat w)) LM_MO_FSub
@@ -1268,7 +1274,7 @@ genMachOp_slow opt op [x, y] = case op of
                 else
                     panic $ "isSMulOK: Not bit type! (" ++ showSDoc dflags (ppr word) ++ ")"
 
-        panicOp = panic $ "LLVM.CodeGen.genMachOp_slow: unary op encourntered"
+        panicOp = panic $ "LLVM.CodeGen.genMachOp_slow: unary op encountered"
                        ++ "with two arguments! (" ++ show op ++ ")"
 
 -- More then two expression, invalid!
@@ -1588,6 +1594,8 @@ funEpilogue live = do
         isSSE (FloatReg _)  = True
         isSSE (DoubleReg _) = True
         isSSE (XmmReg _)    = True
+        isSSE (YmmReg _)    = True
+        isSSE (ZmmReg _)    = True
         isSSE _             = False
 
     -- Set to value or "undef" depending on whether the register is

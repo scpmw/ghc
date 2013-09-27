@@ -76,6 +76,7 @@ import FastString
 import Outputable
 import CoreSyn (RawTickish)
 
+import qualified Control.Applicative as A
 import Control.Monad
 import Data.List
 import Prelude hiding( sequence, succ )
@@ -114,6 +115,10 @@ newtype FCode a = FCode (CgInfoDownwards -> CgState -> (# a, CgState #))
 
 instance Functor FCode where
   fmap f (FCode g) = FCode $ \i s -> case g i s of (# a, s' #) -> (# f a, s' #)
+
+instance A.Applicative FCode where
+      pure = return
+      (<*>) = ap
 
 instance Monad FCode where
         (>>=) = thenFC

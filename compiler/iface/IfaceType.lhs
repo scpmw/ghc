@@ -23,7 +23,7 @@ module IfaceType (
 
         -- Printing
         pprIfaceType, pprParendIfaceType, pprIfaceContext,
-        pprIfaceIdBndr, pprIfaceTvBndr, pprIfaceTvBndrs, pprIfaceTvBndrsRoles,
+        pprIfaceIdBndr, pprIfaceTvBndr, pprIfaceTvBndrs,
         pprIfaceBndrs,
         tOP_PREC, tYCON_PREC, noParens, maybeParen, pprIfaceForAllPart,
         pprIfaceCoercion, pprParendIfaceCoercion
@@ -106,6 +106,7 @@ data IfaceCoercion
   | IfaceLRCo        LeftOrRight IfaceCoercion
   | IfaceInstCo      IfaceCoercion IfaceType
   | IfaceSubCo       IfaceCoercion
+  | IfaceAxiomRuleCo IfLclName [IfaceType] [IfaceCoercion]
 \end{code}
 
 %************************************************************************
@@ -185,11 +186,6 @@ pprIfaceTvBndr (tv, kind) = parens (ppr tv <> dcolon <> ppr kind)
 
 pprIfaceTvBndrs :: [IfaceTvBndr] -> SDoc
 pprIfaceTvBndrs tyvars = sep (map pprIfaceTvBndr tyvars)
-
-pprIfaceTvBndrsRoles :: [IfaceTvBndr] -> [Role] -> SDoc
-pprIfaceTvBndrsRoles tyvars roles = sep (zipWith ppr_bndr_role tyvars roles)
-  where
-    ppr_bndr_role bndr role = pprIfaceTvBndr bndr <> char '@' <> ppr role
 
 instance Binary IfaceBndr where
     put_ bh (IfaceIdBndr aa) = do
@@ -334,6 +330,10 @@ ppr_co ctxt_prec (IfaceInstCo co ty)
   = maybeParen ctxt_prec tYCON_PREC $
     ptext (sLit "Inst") <+> pprParendIfaceCoercion co <+> pprParendIfaceType ty
 
+ppr_co ctxt_prec (IfaceAxiomRuleCo tc tys cos)
+  = maybeParen ctxt_prec tYCON_PREC
+               (sep [ppr tc, nest 4 (sep (map pprParendIfaceType tys ++ map pprParendIfaceCoercion cos))])
+
 ppr_co ctxt_prec co
   = ppr_special_co ctxt_prec doc cos
   where (doc, cos) = case co of
@@ -352,7 +352,11 @@ ppr_special_co ctxt_prec doc cos
                (sep [doc, nest 4 (sep (map pprParendIfaceCoercion cos))])
 
 ppr_role :: Role -> SDoc
-ppr_role r = underscore <> ppr r
+ppr_role r = underscore <> pp_role
+  where pp_role = case r of
+                    Nominal          -> char 'N'
+                    Representational -> char 'R'
+                    Phantom          -> char 'P'
 
 -------------------
 instance Outputable IfaceTyCon where
@@ -493,7 +497,12 @@ instance Binary IfaceCoercion where
   put_ bh (IfaceSubCo a) = do
           putByte bh 14
           put_ bh a
-  
+  put_ bh (IfaceAxiomRuleCo a b c) = do
+          putByte bh 15
+          put_ bh a
+          put_ bh b
+          put_ bh c
+
   get bh = do
       tag <- getByte bh
       case tag of
@@ -540,6 +549,10 @@ instance Binary IfaceCoercion where
                    return $ IfaceInstCo a b
            14-> do a <- get bh
                    return $ IfaceSubCo a
+           15-> do a <- get bh
+                   b <- get bh
+                   c <- get bh
+                   return $ IfaceAxiomRuleCo a b c
            _ -> panic ("get IfaceCoercion " ++ show tag)             
 
 \end{code}
@@ -629,5 +642,9 @@ toIfaceCoercion (InstCo co ty)      = IfaceInstCo (toIfaceCoercion co)
                                                   (toIfaceType ty)
 toIfaceCoercion (SubCo co)          = IfaceSubCo (toIfaceCoercion co)
 
+toIfaceCoercion (AxiomRuleCo co ts cs) = IfaceAxiomRuleCo
+                                          (coaxrName co)
+                                          (map toIfaceType ts)
+                                          (map toIfaceCoercion cs)
 \end{code}
 

@@ -37,6 +37,7 @@ import TcDeriv
 import TcEnv
 import TcHsType
 import TcUnify
+import TcTyDecls  ( emptyRoleAnnots )
 import MkCore     ( nO_METHOD_BINDING_ERROR_ID )
 import Type
 import TcEvidence
@@ -62,13 +63,13 @@ import Id
 import MkId
 import Name
 import NameSet
-import NameEnv
 import Outputable
 import SrcLoc
 import Util
+import BooleanFormula ( isUnsatisfied, pprBooleanFormulaNice )
 
 import Control.Monad
-import Maybes     ( orElse, isNothing )
+import Maybes     ( orElse, isNothing, isJust, whenIsJust )
 \end{code}
 
 Typechecking instance declarations is done in two passes. The first
@@ -406,14 +407,13 @@ tcInstDecls1 tycl_decls inst_decls deriv_decls
                          ; return (gbl_env, emptyBag, emptyValBindsOut) }
                  else tcDeriving tycl_decls inst_decls deriv_decls
 
-       -- Remove any handwritten instance of poly-kinded Typeable and warn
-       ; dflags <- getDynFlags
-       ; when (wopt Opt_WarnTypeableInstances dflags) $
-              mapM_ (failWithTc . instMsg) typeable_instances
+       -- Fail if there are any handwritten instance of poly-kinded Typeable
+       ; mapM_ (failWithTc . instMsg) typeable_instances
 
        -- Check that if the module is compiled with -XSafe, there are no
        -- hand written instances of old Typeable as then unsafe casts could be
        -- performed. Derived instances are OK.
+       ; dflags <- getDynFlags
        ; when (safeLanguageOn dflags) $
              mapM_ (\x -> when (typInstCheck x)
                                (addErrAt (getSrcSpan $ iSpec x) typInstErr))
@@ -710,7 +710,7 @@ tcDataFamInstDecl mb_clsinfo
               ; return (rep_tc, fam_inst) }
 
          -- Remember to check validity; no recursion to worry about here
-       ; let role_annots = unitNameEnv rep_tc_name (repeat Nothing)
+       ; let role_annots = emptyRoleAnnots
        ; checkValidTyCon rep_tc role_annots
        ; return fam_inst } }
   where
@@ -777,7 +777,7 @@ tcInstDecls2 tycl_decls inst_decls
         ; let dm_ids = collectHsBindsBinders dm_binds
               -- Add the default method Ids (again)
               -- See Note [Default methods and instances]
-        ; inst_binds_s <- tcExtendLetEnv TopLevel dm_ids $
+        ; inst_binds_s <- tcExtendLetEnv TopLevel TopLevel dm_ids $
                           mapM tcInstDecl2 inst_decls
 
           -- Done
@@ -980,7 +980,7 @@ misplacedInstSig name hs_ty
   = vcat [ hang (ptext (sLit "Illegal type signature in instance declaration:"))
               2 (hang (pprPrefixName name)
                     2 (dcolon <+> ppr hs_ty))
-         , ptext (sLit "(Use -XInstanceSigs to allow this)") ]
+         , ptext (sLit "(Use InstanceSigs to allow this)") ]
 
 ------------------------------
 tcSpecInstPrags :: DFunId -> InstBindings Name
@@ -1176,6 +1176,7 @@ tcInstanceMethods dfun_id clas tyvars dfun_ev_vars inst_tys
                   op_items (VanillaInst binds sigs standalone_deriv)
   = do { traceTc "tcInstMeth" (ppr sigs $$ ppr binds)
        ; let hs_sig_fn = mkHsSigFun sigs
+       ; checkMinimalDefinition
        ; mapAndUnzipM (tc_item hs_sig_fn) op_items }
   where
     ----------------------
@@ -1216,7 +1217,6 @@ tcInstanceMethods dfun_id clas tyvars dfun_ev_vars inst_tys
 
     tc_default sig_fn sel_id NoDefMeth     -- No default method at all
       = do { traceTc "tc_def: warn" (ppr sel_id)
-           ; warnMissingMethodOrAT "method" (idName sel_id)
            ; (meth_id, _) <- mkMethIds sig_fn clas tyvars dfun_ev_vars
                                        inst_tys sel_id
            ; dflags <- getDynFlags
@@ -1300,6 +1300,15 @@ tcInstanceMethods dfun_id clas tyvars dfun_ev_vars inst_tys
     add_meth_ctxt sel_id generated_code rn_bind thing
       | generated_code = addLandmarkErrCtxt (derivBindCtxt sel_id clas inst_tys rn_bind) thing
       | otherwise      = thing
+
+    ----------------------
+
+    -- check if one of the minimal complete definitions is satisfied
+    checkMinimalDefinition
+      = whenIsJust (isUnsatisfied methodExists (classMinimalDef clas)) $
+          warnUnsatisifiedMinimalDefinition
+      where
+      methodExists meth = isJust (findMethodBind meth binds)
 
 
 tcInstanceMethods dfun_id clas tyvars dfun_ev_vars inst_tys
@@ -1411,6 +1420,16 @@ warnMissingMethodOrAT what name
                                         -- Don't warn about _foo methods
                 (ptext (sLit "No explicit") <+> text what <+> ptext (sLit "or default declaration for")
                  <+> quotes (ppr name)) }
+
+warnUnsatisifiedMinimalDefinition :: ClassMinimalDef -> TcM ()
+warnUnsatisifiedMinimalDefinition mindef
+  = do { warn <- woptM Opt_WarnMissingMethods
+       ; warnTc warn message
+       }
+  where
+    message = vcat [ptext (sLit "No explicit implementation for")
+                   ,nest 2 $ pprBooleanFormulaNice mindef
+                   ]
 \end{code}
 
 Note [Export helper functions]
@@ -1558,7 +1577,7 @@ badFamInstDecl :: Located Name -> SDoc
 badFamInstDecl tc_name
   = vcat [ ptext (sLit "Illegal family instance for") <+>
            quotes (ppr tc_name)
-         , nest 2 (parens $ ptext (sLit "Use -XTypeFamilies to allow indexed type families")) ]
+         , nest 2 (parens $ ptext (sLit "Use TypeFamilies to allow indexed type families")) ]
 
 notOpenFamily :: TyCon -> SDoc
 notOpenFamily tc

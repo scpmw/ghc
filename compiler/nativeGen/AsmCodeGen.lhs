@@ -82,6 +82,7 @@ import qualified Stream
 import Data.List
 import Data.Maybe
 import Control.Exception
+import Control.Applicative (Applicative(..))
 import Control.Monad
 import System.IO
 
@@ -903,6 +904,13 @@ cmmToCmm dflags this_mod (CmmProc info lbl live graph)
          return $ CmmProc info lbl live (ofBlockList (g_entry graph) blocks')
 
 newtype CmmOptM a = CmmOptM (DynFlags -> Module -> [CLabel] -> (# a, [CLabel] #))
+
+instance Functor CmmOptM where
+    fmap = liftM
+
+instance Applicative CmmOptM where
+    pure = return
+    (<*>) = ap
 
 instance Monad CmmOptM where
   return x = CmmOptM $ \_ _ imports -> (# x, imports #)

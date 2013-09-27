@@ -805,13 +805,13 @@ zonkFlats binds_var untch cts
         isTouchableMetaTyVar untch tv
       , not (isSigTyVar tv) || isTyVarTy ty_lhs     -- Never unify a SigTyVar with a non-tyvar
       , typeKind ty_lhs `tcIsSubKind` tyVarKind tv  -- c.f. TcInteract.trySpontaneousEqOneWay
-      , not (tv `elemVarSet` tyVarsOfType ty_lhs)
-      = ASSERT2( isWantedCt orig_ct, ppr orig_ct )
-        ASSERT2( case tcSplitTyConApp_maybe ty_lhs of { Just (tc,_) -> isSynFamilyTyCon tc; _ -> False }, ppr orig_ct )
+      , not (tv `elemVarSet` tyVarsOfType ty_lhs)   -- Do not construct an infinite type
+      = ASSERT2( case tcSplitTyConApp_maybe ty_lhs of { Just (tc,_) -> isSynFamilyTyCon tc; _ -> False }, ppr orig_ct )
         do { writeMetaTyVar tv ty_lhs
            ; let evterm = EvCoercion (mkTcReflCo ty_lhs)
                  evvar  = ctev_evar (cc_ev zct)
-           ; addTcEvBind binds_var evvar evterm
+           ; when (isWantedCt orig_ct) $         -- Can be derived (Trac #8129)
+             addTcEvBind binds_var evvar evterm
            ; traceTc "zonkFlats/unflattening" $
              vcat [ text "zct = " <+> ppr zct,
                     text "binds_var = " <+> ppr binds_var ]
@@ -836,7 +836,7 @@ constraint solving, cannot produce any more interactions in the
 constraint solver so it is safe to do it as the very very last step.
 
 We choose therefore to do it during zonking, in the function
-zonkFlats. This is in analgoy to the zonking of given flatten skolems
+zonkFlats. This is in analogy to the zonking of given "flatten skolems"
 which are eliminated in favor of the underlying type that they are
 equal to.
 

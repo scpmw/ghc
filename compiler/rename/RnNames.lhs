@@ -206,8 +206,8 @@ rnImportDecl this_mod
            (warnRedundantSourceImport imp_mod_name)
     when (mod_safe && not (safeImportsOn dflags)) $
         addErrAt loc (ptext (sLit "safe import can't be used as Safe Haskell isn't on!")
-                  $+$ ptext (sLit $ "please enable Safe Haskell through either"
-                                 ++ "-XSafe, -XTruswrothy or -XUnsafe"))
+                  $+$ ptext (sLit $ "please enable Safe Haskell through either "
+                                 ++ "Safe, Trustworthy or Unsafe"))
 
     let imp_mod    = mi_module iface
         warns      = mi_warns iface
@@ -490,7 +490,7 @@ getLocalNonValBinders fixity_env
                 hs_instds = inst_decls,
                 hs_fords  = foreign_decls })
   = do  { -- Process all type/class decls *except* family instances
-        ; tc_avails <- mapM new_tc (concat tycl_decls)
+        ; tc_avails <- mapM new_tc (tyClGroupConcat tycl_decls)
         ; envs <- extendGlobalRdrEnvRn tc_avails fixity_env
         ; setEnvs envs $ do {
             -- Bring these things into scope first
@@ -1707,5 +1707,5 @@ moduleWarn mod (DeprecatedTxt txt)
 
 packageImportErr :: SDoc
 packageImportErr
-  = ptext (sLit "Package-qualified imports are not enabled; use -XPackageImports")
+  = ptext (sLit "Package-qualified imports are not enabled; use PackageImports")
 \end{code}

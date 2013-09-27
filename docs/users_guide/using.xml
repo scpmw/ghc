@@ -596,6 +596,11 @@ ghc Main.hs
           invoked, so the dependencies never get out of sync with the
           source.</para>
         </listitem>
+        <listitem>
+          <para>Using the <literal>-j</literal> flag, you can compile
+          modules in parallel. Specify <literal>-jN</literal> to
+          compile <replaceable>N</replaceable> jobs in parallel.</para>
+        </listitem>
       </itemizedlist>
 
       <para>Any of the command-line options described in the rest of
@@ -961,6 +966,7 @@ test.hs:(5,4)-(6,7):
     program.  These are:
     <option>-fwarn-overlapping-patterns</option>,
     <option>-fwarn-warnings-deprecations</option>,
+    <option>-fwarn-amp</option>,
     <option>-fwarn-deprecated-flags</option>,
     <option>-fwarn-unrecognised-pragmas</option>,
     <option>-fwarn-pointless-pragmas</option>,
@@ -974,7 +980,6 @@ test.hs:(5,4)-(6,7):
     <option>-fwarn-wrong-do-bind</option>,
     <option>-fwarn-unsupported-calling-conventions</option>,
     <option>-fwarn-dodgy-foreign-imports</option>,
-    <option>-fwarn-typeable-instances</option>,
     <option>-fwarn-inline-rule-shadowing</option>, and
     <option>-fwarn-unsupported-llvm-version</option>.
     The following flags are simple ways to select standard
@@ -1120,6 +1125,24 @@ test.hs:(5,4)-(6,7):
           module, function or type with a WARNING or DEPRECATED pragma
       is used. See <xref linkend="warning-deprecated-pragma"/> for more
       details on the pragmas.</para>
+
+          <para>This option is on by default.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-fwarn-amp</option>:</term>
+        <listitem>
+          <indexterm><primary><option>-fwarn-amp</option></primary>
+          </indexterm>
+          <indexterm><primary>amp</primary></indexterm>
+          <indexterm><primary>applicative-monad proposal</primary></indexterm>
+          <para>Causes a warning to be emitted when a definition
+          is in conflict with the AMP (Applicative-Monad proosal),
+          namely:
+          1. Instance of Monad without Applicative;
+          2. Instance of MonadPlus without Alternative;
+          3. Custom definitions of join/pure/&lt;*&gt;</para>
 
           <para>This option is on by default.</para>
         </listitem>
@@ -1486,6 +1509,7 @@ module M where
             never <literal>_simpleFn</literal>; and (b)
             instance declarations can define either <literal>complexFn</literal> or <literal>_simpleFn</literal>.
             </para>
+          <para>The MINIMAL pragma can be used to change which combination of methods will be required for instances of a particular class. See <xref linkend="minimal-pragma"/>.</para>
         </listitem>
       </varlistentry>
 
@@ -1735,19 +1759,6 @@ f "2"    = 2
             <programlisting>
                do { popInt 10 ; return 10 }
             </programlisting>
-          </para>
-        </listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term><option>-fwarn-typeable-instances</option>:</term>
-        <listitem>
-          <indexterm><primary><option>-fwarn-typeable-instances</option></primary></indexterm>
-          <indexterm><primary>typeable instances, warning</primary></indexterm>
-
-          <para>Report handwritten (ie. not derived) instances of the
-          <literal>Typeable</literal> class. These are ignore by the compiler;
-          only derived instances of <literal>Typeable</literal> are allowed.
           </para>
         </listitem>
       </varlistentry>
@@ -2143,7 +2154,11 @@ f "2"    = 2
           </term>
           <listitem>
             <para><emphasis>Off by default.</emphasis>Run demand analysis
-            again, at the end of the simplification pipeline
+            again, at the end of the simplification pipeline.  We found some opportunities
+            for discovering strictness that were not visible earlier; and optimisations like
+            <literal>SpecConstr</literal> can create functions with unused arguments which
+            are eliminated by late demand analysis.  Improvements are modest, but so is the
+            cost.  See notes on the <ulink href="http://ghc.haskell.org/trac/ghc/wiki/LateDmd">Trac wiki page</ulink>.
             </para>
             </listitem>
         </varlistentry>
@@ -2184,7 +2199,9 @@ f "2"    = 2
             <para>The type checker sometimes displays a fragment of the type environment
                   in error messages, but only up to some maximum number, set by this flag.
                   The default is 6.  Turning it off with <option>-fno-max-relevant-bindings</option> 
-                   gives an unlimited number. 
+                   gives an unlimited number. Syntactically top-level bindings are also 
+                   usually excluded (since they may be numerous), but 
+                   <option>-fno-max-relevant-bindings</option> includes them too.
             </para>
           </listitem>
         </varlistentry>

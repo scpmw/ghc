@@ -1526,6 +1526,9 @@ tyConToIfaceDecl env tycon
     to_ifsyn_rhs (SynonymTyCon ty)
       = IfaceSynonymTyCon (tidyToIfaceType env1 ty)
 
+    to_ifsyn_rhs (BuiltInSynFamTyCon {}) = pprPanic "toIfaceDecl: BuiltInFamTyCon" (ppr tycon)
+
+
     ifaceConDecls (NewTyCon { data_con = con })     = IfNewTyCon  (ifaceConDecl con)
     ifaceConDecls (DataTyCon { data_cons = cons })  = IfDataTyCon (map ifaceConDecl cons)
     ifaceConDecls (DataFamilyTyCon {})              = IfDataFamTyCon
@@ -1573,6 +1576,7 @@ classToIfaceDecl env clas
                  ifFDs    = map toIfaceFD clas_fds,
                  ifATs    = map toIfaceAT clas_ats,
                  ifSigs   = map toIfaceClassOp op_stuff,
+                 ifMinDef = fmap getOccName (classMinimalDef clas),
                  ifRec    = boolToRecFlag (isRecursiveTyCon tycon) }
   where
     (clas_tyvars, clas_fds, sc_theta, _, clas_ats, op_stuff)
@@ -1833,14 +1837,18 @@ toIfaceExpr (Case s x ty as)
   | otherwise               = IfaceCase (toIfaceExpr s) (getFS x) (map toIfaceAlt as)
 toIfaceExpr (Let b e)       = IfaceLet (toIfaceBind b) (toIfaceExpr e)
 toIfaceExpr (Cast e co)     = IfaceCast (toIfaceExpr e) (toIfaceCoercion co)
-toIfaceExpr (Tick t e)      = IfaceTick (toIfaceTickish t) (toIfaceExpr e)
+toIfaceExpr (Tick t e) 
+  | Just t' <- toIfaceTickish t = IfaceTick t' (toIfaceExpr e) 
+  | otherwise                   = toIfaceExpr e
 
 ---------------------
-toIfaceTickish :: Tickish Id -> IfaceTickish
-toIfaceTickish (ProfNote cc tick push) = IfaceSCC cc tick push
-toIfaceTickish (HpcTick modl ix)       = IfaceHpcTick modl ix
-toIfaceTickish (SourceNote src names f)= IfaceSource src names f
-toIfaceTickish _ = panic "toIfaceTickish"
+toIfaceTickish :: Tickish Id -> Maybe IfaceTickish
+toIfaceTickish (ProfNote cc tick push) = Just (IfaceSCC cc tick push)
+toIfaceTickish (HpcTick modl ix)       = Just (IfaceHpcTick modl ix)
+toIfaceTickish (SourceNote src names f)= Just (IfaceSource src names f)
+toIfaceTickish (Breakpoint {})         = Nothing 
+   -- Ignore breakpoints, since they are relevant only to GHCi, and 
+   -- should not be serialised (Trac #8333)
 
 ---------------------
 toIfaceBind :: Bind Id -> IfaceBinding

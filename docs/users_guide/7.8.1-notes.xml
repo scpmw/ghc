@@ -30,6 +30,26 @@
 
         <listitem>
             <para>
+                GHC can now perform simple evaluation of type-level
+                natural numbers, when using the
+                <literal>DataKinds</literal> extension. For example,
+                given a type-level constraint such as <literal>(x + 3)
+                ~ 5</literal>, GHC is able to infer that
+                <literal>x</literal> is 2. Similarly, GHC can now
+                understand type-level identities such as <literal>x +
+                0 ~ x</literal>.
+           </para>
+
+            <para>
+                Note that the solving of these equations is only used
+                to resolve unification variables - it does not
+                generate new facts in the type checker. This is
+                similar to how functional dependencies work.
+           </para>
+       </listitem>
+
+        <listitem>
+            <para>
                 It is now possible to declare a 'closed' <literal>type
                 family</literal> when using the
                 <literal>TypeFamilies</literal> extension. A closed
@@ -134,24 +154,21 @@
             <para>
                 PrimOps for comparing unboxed values now return
                 <literal>Int#</literal> instead of <literal>Bool</literal>.
-                New PrimOps' names end with <literal>$#</literal> for operators and
-                <literal>I#</literal> for ordinary names, e.g. <literal>==$#</literal>
-                compares <literal>Int#</literal>s for equality and
-                <literal>eqCharI#</literal> does the same for <literal>Char#</literal>s.
-                Old PrimOps have been removed and turned into wrappers. See
+                This change is backwards incompatible. See
                 <ulink url="http://ghc.haskell.org/trac/ghc/wiki/NewPrimopsInGHC7.8">
                 this GHC wiki page</ulink> for instructions how to update your
-                existing code.
+                existing code. See <ulink url="http://ghc.haskell.org/trac/ghc/wiki/PrimBool">
+                here</ulink> for motivation and discussion of implementation details.
            </para>
        </listitem>
 
         <listitem>
-            <para> 
+            <para>
                 New PrimOps for atomic memory operations.
                 The <literal>casMutVar#</literal> PrimOp was introduced in
-                GHC 7.2 (debugged in 7.4).  This release also includes additional 
-                PrimOps for compare-and-swap (<literal>casArray#</literal> and 
-                <literal>casIntArray#</literal>) and one for fetch-and-add 
+                GHC 7.2 (debugged in 7.4).  This release also includes additional
+                PrimOps for compare-and-swap (<literal>casArray#</literal> and
+                <literal>casIntArray#</literal>) and one for fetch-and-add
                 (<literal>fetchAddIntArray#</literal>).
            </para>
        </listitem>
@@ -164,8 +181,75 @@
 
         <listitem>
             <para>
-                TODO: mention new <literal>Typeable</literal> and
-                <literal>AutoDeriveTypeable</literal>
+                <literal>Typeable</literal> is now poly-kinded, making
+                <literal>Typeable1</literal>, <literal>Typeable2</literal>,
+                etc., obsolete, deprecated, and relegated to
+                <literal>Data.OldTypeable</literal>. Furthermore, user-written
+                instances of <literal>Typeable</literal> are now disallowed:
+                use <literal>deriving</literal> or the new extension
+                <literal>-XAutoDeriveTypeable</literal>, which will create
+                <literal>Typeable</literal> instances for every datatype
+                declared in the module.
+           </para>
+       </listitem>
+
+        <listitem>
+            <para>
+                GHC now has a parallel compilation driver. When
+                compiling with <literal>--make</literal> (which is on
+                by default,) you may also specify
+                <literal>-jN</literal> in order to compile
+                <replaceable>N</replaceable> modules in parallel.
+           </para>
+       </listitem>
+
+        <listitem>
+            <para>
+                GHC now has support for a new pragma,
+                <literal>{-# MINIMAL #-}</literal>, allowing you to
+                explicitly declare the minimal complete definition of
+                a class. Should an instance not provide the minimal
+                required definitions, a warning will be emitted.
+           </para>
+       </listitem>
+
+        <listitem>
+            <para>
+                GHC now generates warnings when definitions conflict with the
+                Applicative-Monad Proposal (AMP).
+
+                TODO FIXME: reference.
+           </para>
+
+            <para>
+                A warning is emitted if a type is an instance of
+                <literal>Monad</literal> but not of
+                <literal>Applicative</literal>,
+                <literal>MonadPlus</literal> but not
+                <literal>Alternative</literal>, and when a local
+                function named <literal>join</literal>,
+                <literal>&lt;*&gt;</literal> or <literal>pure</literal> is
+                defined.
+           </para>
+
+            <para>
+                The warnings are enabled by default, and can be controlled
+                using the new flag <literal>-f[no-]warn-amp</literal>.
+           </para>
+       </listitem>
+        <listitem>
+            <para>
+                GHC's internal compiler pipeline is now exposed
+                through a <literal>Hooks</literal> module inside the
+                GHC API. These hooks allow you to control most of the
+                internal compiler phase machinery, including compiling
+                expressions, phase control, and linking.
+           </para>
+
+            <para>
+                Note: this interface will likely see continuous
+                refinment and API changes in future releases, so it
+                should be considered a preview.
            </para>
        </listitem>
    </itemizedlist>
@@ -230,7 +314,42 @@
            </listitem>
        </itemizedlist>
 
+        <itemizedlist>
+            <listitem>
+                <para>
+                     A new built-in function <literal>coerce</literal> is
+                     provided that allows to safely coerce values between types
+                     that have the same run-time-presentation, such as
+                     newtypes, but also newtypes inside containers. See the
+                     haddock documentation of
+                     <ulink url="&libraryBaseLocation;/GHC-Exts.html#v%3Acoerce">coerce</ulink>
+                     and of the class
+                     <ulink url="&libraryBaseLocation;/GHC-Exts.html#t%3ACoercible">Coercible</ulink>
+                     for more details.
+               </para>
+                <para>
+                     This feature is included in this release as a technology
+                     preview, and may change its syntax and/or semantics in the
+                     next release.
+               </para>
+           </listitem>
+       </itemizedlist>
 
+        <itemizedlist>
+            <listitem>
+                <para>
+                     The new pragma, <literal>{-# MINIMAL #-}</literal>,
+                     allows to explicitly declare the minimal complete
+                     definition of a class. Should an instance not provide
+                     the minimal required definitions, a warning will be
+                     emitted.
+               </para>
+
+                <para>
+                     See <xref linkend="minimal-pragma"/> for more details.
+               </para>
+           </listitem>
+       </itemizedlist>
     </sect3>
 
     <sect3>
@@ -310,6 +429,20 @@
                     current search path for Haskell modules.
                </para>
            </listitem>
+
+            <listitem>
+                <para>
+                    The GHCi linker now runs constructors for linked
+                    libraries. This means for example that C code
+                    using
+                    <literal>__attribute__((constructor))</literal>
+                    can now properly be loaded into GHCi.
+               </para>
+
+                <para>
+                    Note: destructors are not supported.
+               </para>
+           </listitem>
        </itemizedlist>
     </sect3>
 
@@ -341,27 +474,6 @@
                     Note that this change in unloading behavior
                     <emphasis>only</emphasis> affects statically
                     linked binaries, and not dynamic ones.
-               </para>
-           </listitem>
-
-            <listitem>
-                <para>
-                     By default, the maximum stack size in the runtime
-                     system is now infinite. This is controlled by the
-                     <literal>+RTS -K</literal> flag, which was
-                     previously defaulted to 8MB. In general, this
-                     will allow more programs to run as they will no
-                     longer stack overflow as quickly, although they
-                     may use much more memory.
-               </para>
-
-                <para>
-                     Note that you will still eventually encounter a
-                     stack overflow - when the heap is completely
-                     exhausted, as stacks are serviced from the
-                     storage manager. This will cause a runtime abort
-                     after invoking
-                     <literal>StackOverflowHook</literal>.
                </para>
            </listitem>
 
@@ -464,6 +576,11 @@
            </listitem>
             <listitem>
                 <para>
+                    There is now a <literal>Data</literal> instance for <literal>Data.Version</literal>
+               </para>
+           </listitem>
+             <listitem>
+                <para>
                     <literal>Control.Concurrent.MVar</literal> has a new
                     implementation of <literal>readMVar</literal>, which
                     fixes a long-standing bug where
@@ -481,6 +598,49 @@
                     There are now byte endian-swapping primitives
                     available in <literal>Data.Word</literal>, which
                     use optimized machine instructions when available.
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                    <literal>Data.Bool</literal> now exports
+                    <literal>bool :: a -> a -> Bool -> a</literal>, analogously
+                    to <literal>maybe</literal> and <literal>either</literal>
+                    in their respective modules.
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                     Rewrote portions of <literal>Text.Printf</literal>, and
+                     made changes to <literal>Numeric</literal> (added
+                     <literal>Numeric.showFFloatAlt</literal> and
+                     <literal>Numeric.showGFloatAlt</literal>) and
+                     <literal>GHC.Float</literal> (added
+                     <literal>formatRealFloatAlt</literal>) to support it.
+                     The rewritten version is extensible to user types, adds a
+                     "generic" format specifier "<literal>%v</literal>",
+                     extends the <literal>printf</literal> spec
+                     to support much of C's <literal>printf(3)</literal>
+                     functionality, and fixes the spurious warnings about
+                     using <literal>Text.Printf.printf</literal> at
+                     <literal>(IO a)</literal> while ignoring the return value.
+                     These changes were contributed by Bart Massey.
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                     The minimal complete definitions for all
+                     type-classes with cyclic default implementations
+                     have been explicitly annotated with the new
+                     <literal>{-# MINIMAL #-}</literal> pragma.
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                     <literal>Control.Applicative.WrappedMonad</literal>,
+                     which can be used to convert a <literal>Monad</literal>
+                     to an <literal>Applicative</literal>, has now
+                     a <literal>Monad m => Monad (WrappedMonad m)</literal>
+                     instance.
                </para>
            </listitem>
        </itemizedlist>
@@ -580,6 +740,14 @@
             <listitem>
                 <para>
                     Version number XXXX (was XXXX)
+               </para>
+           </listitem>
+            <listitem>
+                <para>
+                     The type-classes <literal>Eq</literal> and
+                     <literal>Ord</literal> have been annotated with
+                     the new <literal>{-# MINIMAL #-}</literal>
+                     pragma.
                </para>
            </listitem>
        </itemizedlist>

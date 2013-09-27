@@ -48,6 +48,7 @@ module TyCon(
         isFamilyTyCon, isOpenFamilyTyCon,
         isSynFamilyTyCon, isDataFamilyTyCon,
         isOpenSynFamilyTyCon, isClosedSynFamilyTyCon_maybe,
+        isBuiltInSynFamTyCon_maybe,
         isUnLiftedTyCon,
         isGadtSyntaxTyCon, isDistinctTyCon, isDistinctAlgRhs,
         isTyConAssoc, tyConAssoc_maybe,
@@ -88,12 +89,14 @@ module TyCon(
 
         -- * Recursion breaking
         RecTcChecker, initRecTc, checkRecTc
+
 ) where
 
 #include "HsVersions.h"
 
 import {-# SOURCE #-} TypeRep ( Kind, Type, PredType )
 import {-# SOURCE #-} DataCon ( DataCon, isVanillaDataCon )
+import {-# SOURCE #-} FamInst ( TcBuiltInSynFamily )
 
 import Var
 import Class
@@ -277,11 +280,12 @@ Note [TyCon Role signatures]
 
 Every tycon has a role signature, assigning a role to each of the tyConTyVars
 (or of equal length to the tyConArity, if there are no tyConTyVars). An
-example demonstrates these best: say we have a tycon T, with parameters a@N,
-b@R, and c@P. Then, to prove representational equality between T a1 b1 c1 and
-T a2 b2 c2, we need to have nominal equality between a1 and a2, representational
-equality between b1 and b2, and nothing in particular (i.e., phantom equality)
-between c1 and c2. This might happen, say, with the following declaration:
+example demonstrates these best: say we have a tycon T, with parameters a at
+nominal, b at representational, and c at phantom. Then, to prove
+representational equality between T a1 b1 c1 and T a2 b2 c2, we need to have
+nominal equality between a1 and a2, representational equality between b1 and
+b2, and nothing in particular (i.e., phantom equality) between c1 and c2. This
+might happen, say, with the following declaration:
 
   data T a b c where
     MkT :: b -> T Int b c
@@ -628,6 +632,8 @@ data SynTyConRhs
    -- | A closed type synonym family declared in an hs-boot file with
    -- type family F a where ..
    | AbstractClosedSynFamilyTyCon
+
+   | BuiltInSynFamTyCon TcBuiltInSynFamily
 \end{code}
 
 Note [Closed type families]
@@ -1207,6 +1213,7 @@ isFamilyTyCon :: TyCon -> Bool
 isFamilyTyCon (SynTyCon {synTcRhs = OpenSynFamilyTyCon })              = True
 isFamilyTyCon (SynTyCon {synTcRhs = ClosedSynFamilyTyCon {} })         = True
 isFamilyTyCon (SynTyCon {synTcRhs = AbstractClosedSynFamilyTyCon {} }) = True
+isFamilyTyCon (SynTyCon {synTcRhs = BuiltInSynFamTyCon {} })           = True
 isFamilyTyCon (AlgTyCon {algTcRhs = DataFamilyTyCon {}})               = True
 isFamilyTyCon _ = False
 
@@ -1222,6 +1229,7 @@ isSynFamilyTyCon :: TyCon -> Bool
 isSynFamilyTyCon (SynTyCon {synTcRhs = OpenSynFamilyTyCon {}})           = True
 isSynFamilyTyCon (SynTyCon {synTcRhs = ClosedSynFamilyTyCon {}})         = True
 isSynFamilyTyCon (SynTyCon {synTcRhs = AbstractClosedSynFamilyTyCon {}}) = True
+isSynFamilyTyCon (SynTyCon {synTcRhs = BuiltInSynFamTyCon {}})           = True
 isSynFamilyTyCon _ = False
 
 isOpenSynFamilyTyCon :: TyCon -> Bool
@@ -1233,6 +1241,11 @@ isClosedSynFamilyTyCon_maybe :: TyCon -> Maybe (CoAxiom Branched)
 isClosedSynFamilyTyCon_maybe
   (SynTyCon {synTcRhs = ClosedSynFamilyTyCon ax}) = Just ax
 isClosedSynFamilyTyCon_maybe _ = Nothing
+
+isBuiltInSynFamTyCon_maybe :: TyCon -> Maybe TcBuiltInSynFamily
+isBuiltInSynFamTyCon_maybe
+  SynTyCon {synTcRhs = BuiltInSynFamTyCon ops } = Just ops
+isBuiltInSynFamTyCon_maybe _ = Nothing
 
 -- | Is this a synonym 'TyCon' that can have may have further instances appear?
 isDataFamilyTyCon :: TyCon -> Bool
