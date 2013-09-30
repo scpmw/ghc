@@ -2821,21 +2821,21 @@ dumpStack (StgArrWords *stack)
     StgWord ptrCount = stack->bytes; // it's actually word count
     StgWord i;
     StgBool putHeader = 0;
-    int skipped = 0;
+    int num_skipped = 0;
     for (i = 0; i < ptrCount; i++) {
 
         // Lookup PC
         DwarfUnit *unit;
         DwarfProc *proc = dwarf_lookup_proc(ptrs[i], &unit);
         if (!proc) {
-            skipped++;
+            num_skipped++;
             continue;
         }
 
         // Put skips
-        if (skipped) {
-            debugBelch("     ... %d unknown frames ...\n", skipped);
-            skipped = 0;
+        if (num_skipped) {
+            debugBelch("     ... %d unknown frames ...\n", num_skipped);
+            num_skipped = 0;
         }
 
         // Put header
