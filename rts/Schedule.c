@@ -2833,7 +2833,7 @@ dumpStack (StgArrWords *stack)
         }
 
         // Put skips
-        if (num_skipped) {
+        if (num_skipped > 0) {
             debugBelch("     ... %d unknown frames ...\n", num_skipped);
             num_skipped = 0;
         }
@@ -2847,7 +2847,7 @@ dumpStack (StgArrWords *stack)
         // Find debug info
         DebugInfo infos[MAX_DEBUG_INFOS];
         StgWord infoCount = dwarf_get_debug_info(unit, proc, infos, MAX_DEBUG_INFOS);
-        if (!infoCount) {
+        if (infoCount == 0) {
             debugBelch("%4lu: %s (using %s)\n", i, proc->name, unit->name);
             continue;
         }
