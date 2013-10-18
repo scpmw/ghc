@@ -131,6 +131,7 @@ hash_block block =
 dont_care :: CmmNode O x -> Bool
 dont_care CmmComment {}  = True
 dont_care CmmTick {}     = True
+dont_care CmmContext {}  = True
 dont_care _other         = False
 
 -- Utilities: equality and substitution on the graph.

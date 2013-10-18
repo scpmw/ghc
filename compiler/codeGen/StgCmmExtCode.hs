@@ -150,13 +150,14 @@ newLocal ty name = do
    return reg
 
 
--- | Allocate a fresh label.
+-- | Allocate a fresh procedure-context label.
 newLabel :: FastString -> CmmParse BlockId
 newLabel name = do
-   u <- code newUnique
-   addLabel name (mkBlockId u)
-   return (mkBlockId u)
+   bid <- code F.newLabelC'
+   addLabel name bid
+   return bid
 
+-- | Allocate a fresh label into the current block context.
 newBlockId :: CmmParse BlockId
 newBlockId = code F.newLabelC
 

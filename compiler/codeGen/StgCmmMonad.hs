@@ -14,12 +14,12 @@ module StgCmmMonad (
         returnFC, fixC,
         newUnique, newUniqSupply,
 
-        newLabelC, emitLabel,
+        newLabelC, newLabelC', emitLabel,
 
         emit, emitDecl, emitProc,
         emitProcWithConvention, emitProcWithStackFrame,
         emitOutOfLine, emitAssign, emitStore, emitComment,
-        emitTick,
+        emitTick, emitContext,
 
         getCmm, aGraphToGraph,
         getCodeR, getCode, getHeapUsage,
@@ -657,16 +657,31 @@ emitComment _ = return ()
 emitTick :: RawTickish -> FCode ()
 emitTick = emitCgStmt . CgStmt . CmmTick
 
+whenDebug :: FCode () -> FCode ()
+whenDebug code = do
+  debugFlag <- liftM (gopt Opt_Debug) getDynFlags
+  when debugFlag code
+
+emitContext :: Label -> FCode ()
+emitContext = whenDebug . emitCgStmt . CgStmt . CmmContext
+
 emitAssign :: CmmReg  -> CmmExpr -> FCode ()
 emitAssign l r = emitCgStmt (CgStmt (CmmAssign l r))
 
 emitStore :: CmmExpr  -> CmmExpr -> FCode ()
 emitStore l r = emitCgStmt (CgStmt (CmmStore l r))
 
-
+{- | Generates a new label into the current block context -}
 newLabelC :: FCode BlockId
-newLabelC = do { u <- newUnique
-               ; return $ mkBlockId u }
+newLabelC = do { l <- newLabelC'
+               ; emitContext l
+               ; return l }
+
+{- | Generates a new label without a context node -}
+newLabelC' :: FCode BlockId
+newLabelC' = do { u <- newUnique
+                ; let l = mkBlockId u
+                ; return l }
 
 emit :: CmmAGraph -> FCode ()
 emit ag

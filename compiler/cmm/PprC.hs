@@ -178,6 +178,7 @@ pprStmt stmt =
                           -- large.
 
     CmmTick _ -> empty
+    CmmContext _ -> empty
 
     CmmAssign dest src -> pprAssign dflags dest src
 

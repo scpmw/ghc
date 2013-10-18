@@ -57,7 +57,7 @@ module CmmUtils(
         dataflowAnalFwdBlocks,
 
         -- * Ticks
-        blockTicks, annotateBlock
+        getContextMap, blockTicks, blockContexts, annotateBlock
   ) where
 
 #include "HsVersions.h"
@@ -565,11 +565,27 @@ dataflowPassBwd (CmmGraph {g_entry=entry, g_graph=graph}) facts bwd = do
 -------------------------------------------------
 -- Tick utilities
 
+-- | Builds the context map for a Cmm graph
+getContextMap :: CmmGraph -> BlockEnv Label
+getContextMap = foldGraphBlocks (foldBlockNodesF3 (goEntry, goStmt, goLast)) mapEmpty
+  where goEntry :: CmmNode C O -> BlockEnv Label -> (Label, BlockEnv Label)
+        goEntry (CmmEntry bl)       ctxMap  = (bl, ctxMap)
+        goStmt :: CmmNode O O -> (Label, BlockEnv Label) -> (Label, BlockEnv Label)
+        goStmt  (CmmContext l) (bl, ctxMap) = (bl, mapInsert l bl ctxMap)
+        goStmt  _other         state        = state
+        goLast  _any           (_,  ctxMap) = ctxMap
+
 blockTicks :: Block CmmNode C C -> [RawTickish]
 blockTicks b = reverse $ foldBlockNodesF goStmt b []
   where goStmt :: CmmNode e x -> [RawTickish] -> [RawTickish]
         goStmt  (CmmTick t) ts = t:ts
         goStmt  _other      ts = ts
+
+blockContexts :: Block CmmNode C C -> [Label]
+blockContexts b = foldBlockNodesF goStmt b []
+  where goStmt :: CmmNode e x -> [Label] -> [Label]
+        goStmt  (CmmContext l) ls = l:ls
+        goStmt  _other         ls = ls
 
 annotateBlock :: [RawTickish] -> Block CmmNode C C -> Block CmmNode C C
 annotateBlock ts b = blockJoin hd (tstmts `blockAppend` mid) tl

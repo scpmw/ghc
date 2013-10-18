@@ -42,6 +42,7 @@ import BlockId ()
 import CLabel
 import Cmm
 import CmmUtils
+import DynFlags
 import FastString
 import Outputable
 import PprCmmDecl
@@ -187,6 +188,10 @@ pprNode node = pp_node <+> pp_debug
       CmmTick t -> if gopt Opt_PprShowTicks dflags
                    then ptext (sLit "//tick") <+> ppr t
                    else empty
+      -- //ctx lbl
+      CmmContext l -> if gopt Opt_PprShowTicks dflags
+                      then ptext (sLit "//ctx") <+> ppr l
+                      else empty
 
       -- reg = expr;
       CmmAssign reg expr -> ppr reg <+> equals <+> ppr expr <> semi
@@ -271,6 +276,7 @@ pprNode node = pp_node <+> pp_debug
              CmmEntry {}             -> empty -- Looks terrible with text "  // CmmEntry"
              CmmComment {}           -> empty -- Looks also terrible with text "  // CmmComment"
              CmmTick {}              -> empty -- Looks equally bad with text "  // CmmTick"
+             CmmContext {}           -> empty -- Looks not one bit better with text "  // CmmContext"
              CmmAssign {}            -> text "  // CmmAssign"
              CmmStore {}             -> text "  // CmmStore"
              CmmUnsafeForeignCall {} -> text "  // CmmUnsafeForeignCall"

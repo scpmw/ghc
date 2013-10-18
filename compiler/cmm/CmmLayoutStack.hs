@@ -408,10 +408,13 @@ handleLastNode dflags procpoints liveness cont_info stackmaps
           let lbl_map :: LabelMap Label
               lbl_map = mapFromList [ (l,tmp) | (l,tmp,_,_) <- pps ]
               fix_lbl l = mapFindWithDefault l l lbl_map
-          return ( []
+              fixups = concat [ blk | (_,_,_,blk) <- pps ]
+          return ( if gopt Opt_Debug dflags
+                   then map (CmmContext . entryLabel) fixups
+                   else []
                  , 0
                  , mapSuccessors fix_lbl last
-                 , concat [ blk | (_,_,_,blk) <- pps ]
+                 , fixups
                  , mapFromList [ (l, sm) | (l,_,sm,_) <- pps ] )
 
      -- For each successor of this block

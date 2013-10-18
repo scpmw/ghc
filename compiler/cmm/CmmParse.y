@@ -234,6 +234,7 @@ import StringBuffer
 import FastString
 import Panic
 import Constants
+import OrdList
 import Outputable
 import BasicTypes
 import Bag              ( emptyBag, unitBag )
@@ -418,6 +419,11 @@ cmmproc :: { CmmParse () }
                          (entry_ret_label, info, stk_formals) <- $1;
                          dflags <- getDynFlags;
                          formals <- sequence (fromMaybe [] $3);
+                         env <- getEnv;
+                         let { toCtx (LabelN bid) = Just $ CgStmt $ CmmContext bid
+                             ; toCtx _other       = Nothing };
+                         when (gopt Opt_Debug dflags) $
+                           emit $ toOL $ mapMaybe toCtx $ eltsUFM env;
                          withName (showSDoc dflags (ppr entry_ret_label))
                            $4;
                          return (entry_ret_label, info, stk_formals, formals) }
