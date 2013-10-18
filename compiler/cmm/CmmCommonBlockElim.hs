@@ -13,6 +13,7 @@ import Prelude hiding (iterate, succ, unzip, zip)
 
 import Hoopl hiding (ChangeFlag)
 import Data.Bits
+import Data.Maybe (fromJust, fromMaybe)
 import qualified Data.List as List
 import Data.Word
 import Outputable
@@ -59,17 +60,13 @@ type HashCode = Int
 common_block :: State -> (HashCode, CmmBlock) -> State
 common_block (old_change, bmap, subst) (hash, b) =
   case lookupUFM bmap hash of
-    Just bs -> case (List.find (eqBlockBodyWith (eqBid subst) b) bs,
-                     mapLookup bid subst) of
-                 (Just b', Nothing)                         -> addSubst b'
-                 (Just b', Just b'') | entryLabel b' /= b'' -> addSubst b'
-                                     | otherwise -> (old_change, bmap, subst)
-                 _ -> (old_change, addToUFM bmap hash (b : bs), subst)
-    Nothing -> (old_change, addToUFM bmap hash [b], subst)
+    Just bs | Just b' <- List.find (eqBlockBodyWith (eqBid subst) b) bs
+            -> if mapLookup bid subst == Just (entryLabel b')
+               then (old_change, bmap, subst)
+               else my_trace "found new common block" (ppr bid <> char '=' <> ppr (entryLabel b')) $
+                    (True, bmap, mapInsert bid (entryLabel b') subst)
+    m_bs    -> (old_change, addToUFM bmap hash (b : fromMaybe [] m_bs), subst)
   where bid = entryLabel b
-        addSubst b' = my_trace "found new common block" (ppr bid <> char '=' <> ppr (entryLabel b')) $
-                      (True, bmap, mapInsert bid (entryLabel b') subst)
-
 
 -- -----------------------------------------------------------------------------
 -- Hashing and equality on blocks
