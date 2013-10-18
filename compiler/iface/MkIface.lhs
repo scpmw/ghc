@@ -1831,12 +1831,13 @@ toIfaceExpr (Case s x ty as)
   | otherwise               = IfaceCase (toIfaceExpr s) (getFS x) (map toIfaceAlt as)
 toIfaceExpr (Let b e)       = IfaceLet (toIfaceBind b) (toIfaceExpr e)
 toIfaceExpr (Cast e co)     = IfaceCast (toIfaceExpr e) (toIfaceCoercion co)
-toIfaceExpr (Tick t e)    = IfaceTick (toIfaceTickish t) (toIfaceExpr e)
+toIfaceExpr (Tick t e)      = IfaceTick (toIfaceTickish t) (toIfaceExpr e)
 
 ---------------------
 toIfaceTickish :: Tickish Id -> IfaceTickish
 toIfaceTickish (ProfNote cc tick push) = IfaceSCC cc tick push
 toIfaceTickish (HpcTick modl ix)       = IfaceHpcTick modl ix
+toIfaceTickish (SourceNote src names f)= IfaceSource src names f
 toIfaceTickish _ = panic "toIfaceTickish"
 
 ---------------------

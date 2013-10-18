@@ -10,7 +10,7 @@ Utility functions on @Core@ syntax
 module CoreUtils (
         -- * Constructing expressions
         mkCast,
-        mkTick, mkTickNoHNF, tickHNFArgs,
+        mkTick, mkTickNoHNF, tickHNFArgs, stripLaxTicks,
         bindNonRec, needsCaseBinding,
         mkAltExpr,
 
@@ -68,6 +68,8 @@ import Platform
 import Util
 import Pair
 import Data.List
+import Control.Applicative
+import Data.Traversable    ( traverse )
 \end{code}
 
 
@@ -249,7 +251,10 @@ mkTick t (Lam x e)
      -- just a counting tick: leave it on the outside
   | otherwise        = Tick t (Lam x e)
 
-mkTick t other = Tick t other
+  -- finally make sure we don't duplicate ticks
+mkTick t e = case filterTick t e of
+  Just e' -> Tick t e'
+  Nothing -> e
 
 isSaturatedConApp :: CoreExpr -> Bool
 isSaturatedConApp e = go e []
@@ -271,6 +276,41 @@ tickHNFArgs t e = push t e
   push t (App f (Type u)) = App (push t f) (Type u)
   push t (App f arg) = App (push t f) (mkTick t arg)
   push _t e = e
+
+-- | Filters out ticks covered by the given tick. Returns Nothing
+-- if the expression is already annotated with a bigger tickish.
+filterTick :: Tickish Id -> CoreExpr -> Maybe CoreExpr
+filterTick t (Tick t2 e)
+  | tickishContains t t2 = filterTick t e
+  | tickishContains t2 t = Nothing
+  | otherwise            = fmap (Tick t2) (filterTick t e)
+filterTick _ other       = Just other
+
+-- | Copies ticks from the top of the given expression
+copyLaxTicks :: CoreExpr -> CoreExpr -> CoreExpr
+copyLaxTicks (Tick t e) e2
+            | tickishLax t = Tick t (copyLaxTicks e e2)
+copyLaxTicks _other e2     = e2
+
+-- | Completely strip ticks from an expression
+stripLaxTicks :: CoreExpr -> ([Tickish Id], CoreExpr)
+stripLaxTicks = go
+  where -- Note that [Tickish Id] is a Monoid, which makes
+        -- ((,) [Tickish Id]) an Applicative.
+        go (App e a)        = App <$> go e <*> go a
+        go (Lam b e)        = Lam b <$> go e
+        go (Let b e)        = Let <$> go_bs b <*> go e
+        go (Case e b t as)  = Case <$> go e <*> pure b <*> pure t <*> traverse go_a as
+        go (Cast e c)       = Cast <$> go e <*> pure c
+        go (Tick t e)
+          | tickishLax t    = let (ts, e') = go e in (t:ts, e')
+          | otherwise       = Tick t <$> go e
+        go other            = pure other
+        go_bs (NonRec b e)  = NonRec b <$> go e
+        go_bs (Rec bs)      = Rec <$> traverse go_b bs
+        go_b (b, e)         = (,) <$> pure b <*> go e
+        go_a (c,bs,e)       = (,,) <$> pure c <*> pure bs <*> go e
+
 \end{code}
 
 %************************************************************************
@@ -539,11 +579,11 @@ example.  Furthermore "scc<n> x" will turn into just "x" in mkTick.
 \begin{code}
 exprIsTrivial :: CoreExpr -> Bool
 exprIsTrivial (Var _)          = True        -- See Note [Variables are trivial]
-exprIsTrivial (Type _)        = True
+exprIsTrivial (Type _)         = True
 exprIsTrivial (Coercion _)     = True
 exprIsTrivial (Lit lit)        = litIsTrivial lit
 exprIsTrivial (App e arg)      = not (isRuntimeArg arg) && exprIsTrivial e
-exprIsTrivial (Tick _ _)       = False  -- See Note [Tick trivial]
+exprIsTrivial (Tick t e)       = not (tickishIsCode t) && exprIsTrivial e -- See Note [Tick trivial]
 exprIsTrivial (Cast e _)       = exprIsTrivial e
 exprIsTrivial (Lam b body)     = not (isRuntimeVar b) && exprIsTrivial body
 exprIsTrivial _                = False
@@ -1618,9 +1658,13 @@ tryEtaReduce bndrs body
     go [] fun co
       | ok_fun fun = Just (mkCast fun co)
 
+    go bs (Tick t e) co
+      | not (tickishIsCode t)
+      = fmap (Tick t) $ go bs e co
+
     go (b : bs) (App fun arg) co
       | Just co' <- ok_arg b arg co
-      = go bs fun co'
+      = fmap (copyLaxTicks arg) $ go bs fun co'
 
     go _ _ _  = Nothing         -- Failure!
 
@@ -1668,6 +1712,10 @@ tryEtaReduce bndrs body
        | bndr == v  = Just (mkFunCo Representational (mkSymCo co_arg) co)
        -- The simplifier combines multiple casts into one,
        -- so we can have a simple-minded pattern match here
+    ok_arg bndr (Tick t e) co
+       | not (tickishIsCode t)
+                     = ok_arg bndr e co
+
     ok_arg _ _ _ = Nothing
 \end{code}
 

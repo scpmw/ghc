@@ -95,6 +95,7 @@ deSugar hsc_env
         ; (msgs, mb_res) <- do
 
                      let want_ticks = gopt Opt_Hpc dflags
+                                   || gopt Opt_Debug dflags
                                    || target == HscInterpreted
                                    || (gopt Opt_SccProfilingOn dflags
                                        && case profAuto dflags of

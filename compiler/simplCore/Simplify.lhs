@@ -480,6 +480,11 @@ prepareRhs top_lvl env0 _ rhs0
                         -- The definition of is_exp should match that in
                         -- OccurAnal.occAnalApp
 
+    go n_val_args env (Tick t rhs)
+        | not (tickishIsCode t) -- note we *will* float out bindings past a tick here
+        = do { (is_exp, env', rhs') <- go n_val_args env rhs
+             ; return (is_exp, env', Tick t rhs') }
+
     go _ env other
         = return (False, env, other)
 \end{code}
@@ -1026,7 +1031,7 @@ simplTick env tickish expr cont
   -- tick.  This has the effect of moving the tick to the outside of a
   -- case or application context, allowing the normal case and
   -- application optimisations to fire.
-  | not (tickishScoped tickish)
+  | not (tickishScoped tickish) || tickishLax tickish
   = do { (env', expr') <- simplExprF env expr cont
        ; return (env', mkTick tickish expr')
        }

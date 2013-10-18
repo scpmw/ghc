@@ -45,7 +45,8 @@ module CoreSyn (
         isRuntimeArg, isRuntimeVar,
 
         tickishCounts, tickishScoped, tickishIsCode, mkNoTick, mkNoScope,
-        tickishCanSplit,
+        tickishCanSplit, tickishLax,
+        tickishContains,
 
         -- * Unfolding data types
         Unfolding(..),  UnfoldingGuidance(..), UnfoldingSource(..),
@@ -105,6 +106,7 @@ import DynFlags
 import FastString
 import Outputable
 import Util
+import SrcLoc     ( RealSrcSpan, containsSpan )
 
 import Data.Data hiding (TyCon)
 import Data.Int
@@ -472,6 +474,13 @@ data Tickish id =
                                 -- Note [substTickish] in CoreSubst.
     }
 
+  | SourceNote
+    { sourceSpan :: RealSrcSpan -- ^ Source covered
+    , sourceName :: String      -- ^ Name for source location
+                                --   (uses same names as CCs)
+    , sourceFloat :: !Int
+    }
+
   deriving (Eq, Ord, Data, Typeable)
 
 
@@ -487,6 +496,7 @@ tickishCounts :: Tickish id -> Bool
 tickishCounts n@ProfNote{} = profNoteCount n
 tickishCounts HpcTick{}    = True
 tickishCounts Breakpoint{} = True
+tickishCounts _            = False
 
 tickishScoped :: Tickish id -> Bool
 tickishScoped n@ProfNote{} = profNoteScope n
@@ -495,11 +505,13 @@ tickishScoped Breakpoint{} = True
    -- Breakpoints are scoped: eventually we're going to do call
    -- stacks, but also this helps prevent the simplifier from moving
    -- breakpoints around and changing their result type (see #1531).
+tickishScoped SourceNote{} = True
 
 mkNoTick :: Tickish id -> Tickish id
-mkNoTick n@ProfNote{} = n {profNoteCount = False}
-mkNoTick Breakpoint{} = panic "mkNoTick: Breakpoint" -- cannot split a BP
-mkNoTick t = t
+mkNoTick n@ProfNote{}   = n {profNoteCount = False}
+mkNoTick n@SourceNote{} = n {sourceFloat = sourceFloat n + 1 }
+mkNoTick Breakpoint{}   = panic "mkNoTick: Breakpoint" -- cannot split a BP
+mkNoTick t              = t
 
 mkNoScope :: Tickish id -> Tickish id
 mkNoScope n@ProfNote{} = n {profNoteScope = False}
@@ -509,13 +521,27 @@ mkNoScope t = t
 -- | Return True if this source annotation compiles to some code, or will
 -- disappear before the backend.
 tickishIsCode :: Tickish id -> Bool
-tickishIsCode _tickish = True  -- all of them for now
+tickishIsCode SourceNote{} = False
+tickishIsCode _tickish     = True  -- all the rest for now
 
 -- | Return True if this Tick can be split into (tick,scope) parts with
 -- 'mkNoScope' and 'mkNoTick' respectively.
 tickishCanSplit :: Tickish Id -> Bool
 tickishCanSplit Breakpoint{} = False
 tickishCanSplit _ = True
+
+-- | Return True if it is okay to float new code into the tick
+tickishLax :: Tickish Id -> Bool
+tickishLax SourceNote{} = True
+tickishLax _tickish     = False  -- all the rest for now
+
+-- | Returns whether one tick "contains" the other one, therefore
+-- making the second tick redundant.
+tickishContains :: Tickish Id -> Tickish Id -> Bool
+tickishContains (SourceNote sp1 n1 f1) (SourceNote sp2 n2 f2)
+  = f1 <= f2 && n1 == n2 && containsSpan sp1 sp2
+tickishContains t1 t2
+  = (t1 == t2)
 \end{code}
 
 
@@ -1360,8 +1386,8 @@ seqExpr (Lam b e)       = seqBndr b `seq` seqExpr e
 seqExpr (Let b e)       = seqBind b `seq` seqExpr e
 seqExpr (Case e b t as) = seqExpr e `seq` seqBndr b `seq` seqType t `seq` seqAlts as
 seqExpr (Cast e co)     = seqExpr e `seq` seqCo co
-seqExpr (Tick n e)    = seqTickish n `seq` seqExpr e
-seqExpr (Type t)       = seqType t
+seqExpr (Tick n e)      = seqTickish n `seq` seqExpr e
+seqExpr (Type t)        = seqType t
 seqExpr (Coercion co)   = seqCo co
 
 seqExprs :: [CoreExpr] -> ()
@@ -1372,6 +1398,7 @@ seqTickish :: Tickish Id -> ()
 seqTickish ProfNote{ profNoteCC = cc } = cc `seq` ()
 seqTickish HpcTick{} = ()
 seqTickish Breakpoint{ breakpointFVs = ids } = seqBndrs ids
+seqTickish SourceNote{} = ()
 
 seqBndr :: CoreBndr -> ()
 seqBndr b = b `seq` ()
