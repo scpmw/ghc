@@ -52,6 +52,7 @@ import Outputable
 import FastString
 import Module
 import TysWiredIn ( eqTyConName )
+import SrcLoc
 import Fingerprint
 import Binary
 import BooleanFormula ( BooleanFormula )
@@ -742,6 +743,7 @@ instance Binary IfaceExpr where
 data IfaceTickish
   = IfaceHpcTick Module Int                -- from HpcTick x
   | IfaceSCC     CostCentre Bool Bool      -- from ProfNote
+  | IfaceSource  RealSrcSpan String !Int   -- from SourceNote
   -- no breakpoints: we never export these into interface files
 
 instance Binary IfaceTickish where
@@ -754,6 +756,15 @@ instance Binary IfaceTickish where
         put_ bh cc
         put_ bh tick
         put_ bh push
+    put_ bh (IfaceSource src name f) = do
+        putByte bh 2
+        put_ bh (srcSpanFile src)
+        put_ bh (srcSpanStartLine src)
+        put_ bh (srcSpanStartCol src)
+        put_ bh (srcSpanEndLine src)
+        put_ bh (srcSpanEndCol src)
+        put_ bh f
+        put_ bh name
 
     get bh = do
         h <- getByte bh
@@ -765,6 +776,16 @@ instance Binary IfaceTickish where
                     tick <- get bh
                     push <- get bh
                     return (IfaceSCC cc tick push)
+            2 -> do file <- get bh
+                    sl <- get bh
+                    sc <- get bh
+                    el <- get bh
+                    ec <- get bh
+                    let start = mkRealSrcLoc file sl sc
+                        end = mkRealSrcLoc file el ec
+                    f <- get bh
+                    name <- get bh
+                    return (IfaceSource (mkRealSrcSpan start end) name f)
             _ -> panic ("get IfaceTickish " ++ show h)
 
 type IfaceAlt = (IfaceConAlt, [IfLclName], IfaceExpr)
@@ -1250,6 +1271,8 @@ pprIfaceTickish (IfaceHpcTick m ix)
   = braces (text "tick" <+> ppr m <+> ppr ix)
 pprIfaceTickish (IfaceSCC cc tick scope)
   = braces (pprCostCentreCore cc <+> ppr tick <+> ppr scope)
+pprIfaceTickish (IfaceSource src _names _)
+  = braces (text $ showUserRealSpan True src)
 
 ------------------
 pprIfaceApp :: IfaceExpr -> [SDoc] -> SDoc

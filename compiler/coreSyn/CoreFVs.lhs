@@ -254,7 +254,7 @@ exprOrphNames e
     go (Coercion co)        = orphNamesOfCo co
     go (App e1 e2)          = go e1 `unionNameSets` go e2
     go (Lam v e)            = go e `delFromNameSet` idName v
-    go (Tick _ e)         = go e
+    go (Tick _ e)           = go e
     go (Cast e co)          = go e `unionNameSets` orphNamesOfCo co
     go (Let (NonRec _ r) e) = go e `unionNameSets` go r
     go (Let (Rec prs) e)    = exprsOrphNames (map snd prs) `unionNameSets` go e
