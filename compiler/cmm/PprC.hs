@@ -177,6 +177,8 @@ pprStmt stmt =
                           -- some debugging option is on.  They can get quite
                           -- large.
 
+    CmmTick _ -> empty
+
     CmmAssign dest src -> pprAssign dflags dest src
 
     CmmStore  dest src

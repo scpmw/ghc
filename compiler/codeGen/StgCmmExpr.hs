@@ -831,6 +831,8 @@ cgTicks (StgTick tick expr) =
      ; case tick of
        ProfNote   cc t p -> emitSetCCC cc t p
        HpcTick    m n    -> emit (mkTickBox dflags m n)
+       SourceNote s n f  -> emitTick $ SourceNote s n f
+       CoreNote   b n    -> emitTick $ CoreNote b n
        _other            -> return () -- ignore
      ; cgTicks expr
      }

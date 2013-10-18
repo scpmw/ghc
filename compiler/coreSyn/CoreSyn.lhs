@@ -16,7 +16,7 @@
 -- | CoreSyn holds all the main data types for use by for the Glasgow Haskell Compiler midsection
 module CoreSyn (
 	-- * Main data types
-        Expr(..), Alt, Bind(..), AltCon(..), Arg, Tickish(..), ExprPtr(..),
+        Expr(..), Alt, Bind(..), AltCon(..), Arg, Tickish(..), RawTickish, ExprPtr(..),
         CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
         TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..),
 
@@ -506,6 +506,9 @@ data Tickish id =
     }
 
   deriving (Eq, Ord, Data, Typeable)
+
+-- | Tickish out of Core context
+type RawTickish = Tickish ()
 
 -- | Pointer to a Core expression or case alternative. Ignored for the
 -- purpose of equality checks.
