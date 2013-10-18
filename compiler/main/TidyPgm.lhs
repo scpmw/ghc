@@ -56,9 +56,15 @@ import FastString
 import qualified ErrUtils as Err
 
 import Control.Monad
+import qualified Data.ByteString.Char8 as BS
 import Data.Function
 import Data.List        ( sortBy )
-import Data.IORef       ( atomicModifyIORef )
+import qualified Data.Map as Map
+import Data.IORef       ( atomicModifyIORef, readIORef )
+import Data.Set         ( elems )
+import System.IO
+import System.FilePath
+import System.Directory
 \end{code}
 
 
@@ -377,6 +383,13 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
               (showSDoc dflags (ppr CoreTidy <+> ptext (sLit "rules")))
               (pprRulesForUser tidy_rules)
 
+           -- When dumping to files, we might have markers in there
+           -- that we ought to convert into annotations of the Core tree
+           -- so debug info can refer to it.
+        ; final_binds <- if (gopt Opt_DumpToFile dflags)
+                         then extractDumpMarkers dflags all_tidy_binds
+                         else return all_tidy_binds
+
           -- Print one-line size info
         ; let cs = coreBindsStats tidy_binds
         ; when (dopt Opt_D_dump_core_stats dflags)
@@ -389,7 +402,7 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
 
         ; return (CgGuts { cg_module   = mod,
                            cg_tycons   = alg_tycons,
-                           cg_binds    = all_tidy_binds,
+                           cg_binds    = final_binds,
                            cg_foreign  = foreign_stubs,
                            cg_dep_pkgs = map fst $ dep_pkgs deps,
                            cg_hpc_info = hpc_info,
@@ -1225,6 +1238,87 @@ cafRefsV (_, p) id
 fastOr :: FastBool -> (a -> FastBool) -> a -> FastBool
 -- hack for lazy-or over FastBool.
 fastOr a f x = fastBool (isFastTrue a || isFastTrue (f x))
+
+--------------------------
+
+extractDumpMarkers :: DynFlags -> CoreProgram -> IO CoreProgram
+extractDumpMarkers dflags binds = do
+  dumps <- readIORef $ generatedDumps dflags
+  let extract binds file = do
+        marks <- extractDumpMarkersFile file
+        return $ map (annotateMarkers dflags marks file) binds
+  foldlM extract binds (elems dumps)
+
+extractDumpMarkersFile :: FilePath -> IO (Map.Map String Int)
+extractDumpMarkersFile dumpFile = do
+  (tmpFile, hout) <- openTempFile (takeDirectory dumpFile) (takeFileName dumpFile)
+
+  -- Open dump file, extract the markers
+  hin <- openFile dumpFile ReadMode
+  let extractMarkers (!n, marks) = do
+        end <- hIsEOF hin
+        if end then return marks else do
+          line <- BS.hGetLine hin
+          marks' <- extractMarksLine line n marks
+          hPutChar hout '\n'
+          extractMarkers (n+1, marks')
+      markStart = BS.pack "ann<#"
+      markEnd = BS.pack "#>"
+      extractMarksLine line n marks = do
+        -- Look for annotation start, output everything up to that point
+        let (pre,match) = BS.breakSubstring markStart line
+        BS.hPutStr hout pre
+        case () of
+          _ | BS.null match  -> return marks
+                -- If the marker is within a quote, we jump over
+                -- it. This is really more a band-aid, as it's just
+                -- fixing one of the more obvious problems we might
+                -- run into trying to naively "parse" an undefined
+                -- format like this.
+            | openQuotes pre -> case BS.break (== '"') match of
+                (quoted, rest)
+                  | BS.null rest -> BS.hPutStrLn hout quoted >> return marks
+                  | otherwise    -> do BS.hPutStr hout quoted
+                                       hPutChar hout '"'
+                                       extractMarksLine (BS.tail rest) n marks
+            | (body, rest) <- BS.breakSubstring markEnd (BS.drop (BS.length markStart) match) ->
+                let !marks' = Map.insert (BS.unpack body) n marks
+                in extractMarksLine (BS.drop (BS.length markEnd) rest) n marks'
+      openQuotes = BS.foldr' (\x -> if x == '"' then not else id) False
+  marks <- extractMarkers (1, Map.empty)
+
+  -- Close files, replace old file with stripped one
+  hClose hin
+  hClose hout
+  renameFile tmpFile dumpFile
+  return $! marks
+
+annotateMarkers :: DynFlags -> Map.Map String Int -> FilePath -> CoreBind -> CoreBind
+annotateMarkers dflags marks file = annotBind
+  where annotBind (NonRec b e)    = NonRec b $ annot b $ annotExpr e
+        annotBind (Rec bs)        = Rec $ map (\(b, e) -> (b, annot b $ annotExpr e)) bs
+
+        annotExpr (App e1 e2)     = App (annotExpr e1) (annotExpr e2)
+        annotExpr (Lam b e)       = Lam b $ annot b $ annotExpr e
+        annotExpr (Let bs e)      = Let (annotBind bs) (annotExpr e)
+        annotExpr (Case e b t as) = Case (annotExpr e) b t $ map (annotAlt b) as
+        annotExpr (Cast e c)      = Cast (annotExpr e) c
+        annotExpr (Tick t e)      = Tick t (annotExpr e)
+        annotExpr other           = other
+
+        annotAlt b (con, bs, e)   = (con, bs, annot (b, con) $ annotExpr e)
+
+        fileFS = mkFastString file
+        mkSpan n = realSrcLocSpan (mkRealSrcLoc fileFS n 1)
+
+        annot name expr =
+          let nameStr = showSDocDump dflags (ppr name)
+          in case Map.lookup nameStr marks of
+            Just n  -> let ann (Lam b e) = Lam b (ann e)
+                           ann other     = Tick (SourceNote (mkSpan n) nameStr) other
+                        in ann expr
+            Nothing -> expr
+
 \end{code}
 
 

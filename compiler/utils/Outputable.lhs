@@ -61,8 +61,9 @@ module Outputable (
         pprDeeper, pprDeeperList, pprSetDepth,
         codeStyle, userStyle, debugStyle, dumpStyle, asmStyle,
         ifPprDebug, qualName, qualModule,
-        mkErrStyle, defaultErrStyle, defaultDumpStyle, defaultUserStyle,
+        mkErrStyle, defaultErrStyle, defaultDumpStyle, defaultUserStyle, lineAnnotatedDumpStyle,
         mkUserStyle, cmdlineParserStyle, Depth(..),
+        pprAnnotate,
 
         -- * Error handling and debugging utilities
         pprPanic, pprSorry, assertPprPanic, pprPanicFastInt, pprPgmError,
@@ -125,9 +126,12 @@ data PprStyle
   | PprCode CodeStyle
                 -- Print code; either C or assembler
 
-  | PprDump     -- For -ddump-foo; less verbose than PprDebug.
+  | PprDump Bool -- For -ddump-foo; less verbose than PprDebug.
                 -- Does not assume tidied code: non-external names
                 -- are printed with uniques.
+
+                -- Parameter governs whether to generate markers
+                -- for finding line number information later
 
   | PprDebug    -- Full debugging output
 
@@ -193,7 +197,10 @@ defaultUserStyle, defaultDumpStyle :: PprStyle
 defaultUserStyle = mkUserStyle alwaysQualify AllTheWay
 
 defaultDumpStyle |  opt_PprStyle_Debug = PprDebug
-                 |  otherwise          = PprDump
+                 |  otherwise          = PprDump False
+
+lineAnnotatedDumpStyle :: PprStyle
+lineAnnotatedDumpStyle = PprDump True
 
 -- | Style for printing error messages
 mkErrStyle :: DynFlags -> PrintUnqualified -> PprStyle
@@ -313,8 +320,8 @@ asmStyle (PprCode AsmStyle)  = True
 asmStyle _other              = False
 
 dumpStyle :: PprStyle -> Bool
-dumpStyle PprDump = True
-dumpStyle _other  = False
+dumpStyle (PprDump _) = True
+dumpStyle _other      = False
 
 debugStyle :: PprStyle -> Bool
 debugStyle PprDebug = True
@@ -398,7 +405,7 @@ showSDocDebug dflags d = renderWithStyle dflags d PprDebug
 showSDocDumpOneLine :: DynFlags -> SDoc -> String
 showSDocDumpOneLine dflags d
  = Pretty.showDoc OneLineMode irrelevantNCols $
-   runSDoc d (initSDocContext dflags PprDump)
+   runSDoc d (initSDocContext dflags (PprDump False))
 
 showPpr :: Outputable a => DynFlags -> a -> String
 showPpr dflags thing = showSDoc dflags (ppr thing)
@@ -923,6 +930,16 @@ isOrAre [_] = ptext (sLit "is")
 isOrAre _   = ptext (sLit "are")
 \end{code}
 
+
+\begin{code}
+
+pprAnnotate :: String -> SDoc -> SDoc
+pprAnnotate name sdoc = SDoc $ \ctx ->
+    case sdocStyle ctx of
+      PprDump True -> Pretty.zeroWidthText name Pretty.<> runSDoc sdoc ctx
+      _other       -> runSDoc sdoc ctx
+
+\end{code}
 
 %************************************************************************
 %*                                                                      *
