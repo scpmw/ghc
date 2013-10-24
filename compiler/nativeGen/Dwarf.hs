@@ -84,7 +84,12 @@ dwarfGen df modLoc us blocks = do
                  debugFrameHeader framesU $$
                  debugFrames framesU procs
 
-  return (infoSct $$ abbrevSct $$ lineSct $$ frameSct, us'')
+  -- .debug_ghc section: debug data in eventlog format (GHC-specific, obviously)
+  evData <- writeDebugToEventlog df modLoc blocks
+  let ghcSct = dwarfGhcSection $$
+               pprBuffer evData
+
+  return (infoSct $$ abbrevSct $$ lineSct $$ frameSct $$ ghcSct, us'')
 
 -- | Header for a compilation unit, establishing global format
 -- parameters
