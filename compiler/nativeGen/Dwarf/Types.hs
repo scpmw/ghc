@@ -4,6 +4,7 @@ module Dwarf.Types
   , pprDwarfInfo
   , pprAbbrevDecls
   , pprByte
+  , pprData4'
   , pprWord
   , pprLEBWord
   , pprLEBInt
@@ -89,6 +90,7 @@ pprAbbrevDecls =
        , (dW_AT_external, dW_FORM_flag)
        , (dW_AT_low_pc, dW_FORM_addr)
        , (dW_AT_high_pc, dW_FORM_addr)
+       , (dW_AT_frame_base, dW_FORM_block1)
        ] $$
      mkAbbrev DwAbbrBlock dW_TAG_lexical_block dW_CHILDREN_yes
        [ (dW_AT_name, dW_FORM_string)
@@ -158,6 +160,8 @@ pprDwarfInfoOpen (DwarfSubprogram _ name label) = sdocWithDynFlags $ \df ->
   $$ pprFlag (externallyVisibleCLabel label)
   $$ pprWord (ppr label)
   $$ pprWord (ppr $ mkAsmTempEndLabel label)
+  $$ pprByte 1
+  $$ pprByte dW_OP_call_frame_cfa
 pprDwarfInfoOpen (DwarfBlock _ label marker) = sdocWithDynFlags $ \df ->
   pprAbbrev DwAbbrBlock
   $$ pprString (renderWithStyle df (ppr label) (mkCodeStyle CStyle))
