@@ -47,6 +47,7 @@ import Instruction
 import PIC
 import Reg
 import NCGMonad
+import Dwarf
 import Debug
 
 import BlockId
@@ -273,18 +274,23 @@ nativeCodeGen' dflags this_mod modLoc ncgImpl h us cmms
         -- printDocs here (in order to do codegen in constant space).
         bufh <- newBufHandle h
         (ngs, us') <- cmmNativeGenStream dflags this_mod modLoc ncgImpl bufh us cmms ([], [], [], emptyUFM)
-        finishNativeGen dflags ncgImpl bufh ngs
-
-        return us'
+        finishNativeGen dflags modLoc bufh us' ngs
 
 finishNativeGen :: Instruction instr
                 => DynFlags
-                -> NcgImpl statics instr jumpDest
+                -> ModLocation
                 -> BufHandle
+                -> UniqSupply
                 -> NativeGenAcc statics instr
-                -> IO ()
-finishNativeGen dflags ncgImpl bufh@(BufHandle _ _ h) (imports, prof, _, _)
+                -> IO UniqSupply
+finishNativeGen dflags modLoc bufh@(BufHandle _ _ h) us (imports, prof, debugs, _)
  = do
+        -- Write debug data and finish
+        let emitDwarf = gopt Opt_Debug dflags && not (gopt Opt_SplitObjs dflags)
+        us' <- if not emitDwarf then return us else do
+          (dwarf, us') <- dwarfGen dflags modLoc us debugs
+          emitNativeCode dflags bufh dwarf
+          return us'
         bFlush bufh
 
         let platform = targetPlatform dflags
@@ -324,6 +330,7 @@ finishNativeGen dflags ncgImpl bufh@(BufHandle _ _ h) (imports, prof, _, _)
         Pretty.printDoc Pretty.LeftMode (pprCols dflags) h
                 $ withPprStyleDoc dflags (mkCodeStyle AsmStyle)
                 $ makeImportsDoc dflags (concat imports)
+        return us'
 
 cmmNativeGenStream :: (Outputable statics, Outputable instr, Instruction instr)
               => DynFlags
@@ -362,17 +369,19 @@ cmmNativeGenStream dflags this_mod modLoc ncgImpl h us cmm_stream ngs@(impAcc, p
 
               -- Emit & clear DWARF information when generating split
               -- object files, as we need to land in the same object file
-              (dbgs'', fileIds'') <-
+              (dbgs'', fileIds'', us'') <-
                 if debugFlag && splitFlag
-                then return ([], emptyUFM)
-                else return (dbgs' ++ ldbgs, fileIds')
+                then do (dwarf, us'') <- dwarfGen dflags modLoc us ldbgs
+                        emitNativeCode dflags h dwarf
+                        return ([], emptyUFM, us'')
+                else return (dbgs' ++ ldbgs, fileIds', us')
 
               -- Strip references to native code unless we want to dump it later
               let dumpFlag = dopt Opt_D_dump_asm_stats dflags
                   profAcc'' | dumpFlag  = profAcc'
                             | otherwise = map (\(_, a, b) -> ([], a, b)) profAcc'
               seqList profAcc'' $ seqList dbgs'' $
-                cmmNativeGenStream dflags this_mod modLoc ncgImpl h us' cmm_stream'
+                cmmNativeGenStream dflags this_mod modLoc ncgImpl h us'' cmm_stream'
                   (impAcc', profAcc'', dbgs'', fileIds'')
 
   where split_marker = CmmProc mapEmpty mkSplitMarkerLabel []
