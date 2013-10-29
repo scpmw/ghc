@@ -526,6 +526,10 @@ instance Outputable id => Outputable (Tickish id) where
          _            -> hcat [ptext (sLit "scc<"),     ppr cc, char '>']
   ppr (SourceNote span _) =
       hcat [ ptext (sLit "src<"), text (showUserRealSpan True span), char '>']
+  ppr (CoreNote {coreBind = bnd, coreNote = ExprPtr{}}) =
+      hcat [ ptext (sLit "core<"), ppr bnd, ptext (sLit "=...>") ]
+  ppr (CoreNote {coreBind = bnd, coreNote = AltPtr (con,_,_)}) =
+      hcat [ ptext (sLit "core<"), ppr bnd <+> ppr con <>ptext (sLit "->...>") ]
 \end{code}
 
 -----------------------------------------------------
