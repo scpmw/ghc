@@ -47,6 +47,7 @@ import Instruction
 import PIC
 import Reg
 import NCGMonad
+import Debug
 
 import BlockId
 import CgUtils          ( fixStgRegisters )
@@ -152,14 +153,14 @@ data NcgImpl statics instr jumpDest = NcgImpl {
     }
 
 --------------------
-nativeCodeGen :: DynFlags -> Module -> Handle -> UniqSupply
+nativeCodeGen :: DynFlags -> Module -> ModLocation -> Handle -> UniqSupply
               -> Stream IO RawCmmGroup ()
               -> IO UniqSupply
-nativeCodeGen dflags this_mod h us cmms
+nativeCodeGen dflags this_mod modLoc h us cmms
  = let platform = targetPlatform dflags
        nCG' :: (Outputable statics, Outputable instr, Instruction instr)
             => NcgImpl statics instr jumpDest -> IO UniqSupply
-       nCG' ncgImpl = nativeCodeGen' dflags this_mod ncgImpl h us cmms
+       nCG' ncgImpl = nativeCodeGen' dflags this_mod modLoc ncgImpl h us cmms
    in case platformArch platform of
       ArchX86     -> nCG' (x86NcgImpl    dflags)
       ArchX86_64  -> nCG' (x86_64NcgImpl dflags)
@@ -253,24 +254,25 @@ type NativeGenAcc statics instr
         = ([[CLabel]],
            [([NatCmmDecl statics instr],
              Maybe [Color.RegAllocStats statics instr],
-             Maybe [Linear.RegAllocStats])])
+             Maybe [Linear.RegAllocStats])],
+           [DebugBlock])
 
 nativeCodeGen' :: (Outputable statics, Outputable instr, Instruction instr)
                => DynFlags
-               -> Module
+               -> Module -> ModLocation
                -> NcgImpl statics instr jumpDest
                -> Handle
                -> UniqSupply
                -> Stream IO RawCmmGroup ()
                -> IO UniqSupply
-nativeCodeGen' dflags this_mod ncgImpl h us cmms
+nativeCodeGen' dflags this_mod modLoc ncgImpl h us cmms
  = do
         let split_cmms  = Stream.map add_split cmms
         -- BufHandle is a performance hack.  We could hide it inside
         -- Pretty if it weren't for the fact that we do lots of little
         -- printDocs here (in order to do codegen in constant space).
         bufh <- newBufHandle h
-        (ngs, us') <- cmmNativeGenStream dflags this_mod ncgImpl bufh us split_cmms ([], [])
+        (ngs, us') <- cmmNativeGenStream dflags this_mod modLoc ncgImpl bufh us split_cmms ([], [], [])
         finishNativeGen dflags ncgImpl bufh ngs
 
         return us'
@@ -289,18 +291,13 @@ finishNativeGen :: Instruction instr
                 -> BufHandle
                 -> NativeGenAcc statics instr
                 -> IO ()
-finishNativeGen dflags ncgImpl bufh@(BufHandle _ _ h) (imports, prof)
+finishNativeGen dflags ncgImpl bufh@(BufHandle _ _ h) (imports, prof, _debugs)
  = do
         bFlush bufh
 
         let platform = targetPlatform dflags
         let (native, colorStats, linearStats)
                 = unzip3 prof
-
-        -- dump native code
-        dumpIfSet_dyn dflags
-                Opt_D_dump_asm "Asm code"
-                (vcat $ map (pprNatCmmDecl ncgImpl) $ concat native)
 
         -- dump global NCG stats for graph coloring allocator
         (case concat $ catMaybes colorStats of
@@ -338,7 +335,7 @@ finishNativeGen dflags ncgImpl bufh@(BufHandle _ _ h) (imports, prof)
 
 cmmNativeGenStream :: (Outputable statics, Outputable instr, Instruction instr)
               => DynFlags
-              -> Module
+              -> Module -> ModLocation
               -> NcgImpl statics instr jumpDest
               -> BufHandle
               -> UniqSupply
@@ -346,14 +343,34 @@ cmmNativeGenStream :: (Outputable statics, Outputable instr, Instruction instr)
               -> NativeGenAcc statics instr
               -> IO (NativeGenAcc statics instr, UniqSupply)
 
-cmmNativeGenStream dflags this_mod ncgImpl h us cmm_stream ngs@(impAcc, profAcc)
+cmmNativeGenStream dflags this_mod modLoc ncgImpl h us cmm_stream ngs@(impAcc, profAcc, dbgs)
  = do r <- Stream.runStream cmm_stream
       case r of
           Left () ->
-              return ((reverse impAcc, reverse profAcc) , us)
+              return ((reverse impAcc, reverse profAcc, dbgs) , us)
           Right (cmms, cmm_stream') -> do
-              (ngs',us') <- cmmNativeGens dflags this_mod ncgImpl h us cmms ngs 0
-              cmmNativeGenStream dflags this_mod ncgImpl h us' cmm_stream' ngs'
+
+              -- Generate debug information
+              let debugFlag = gopt Opt_Debug dflags
+                  ndbgs | debugFlag = cmmDebugGen modLoc cmms
+                        | otherwise = []
+
+              -- Generate native code
+              ((impAcc', profAcc', dbgs'),us')
+                 <- cmmNativeGens dflags this_mod ncgImpl h us cmms ngs 0
+
+              -- Link native code information into debug blocks
+              let nats = map (\(ns, _, _) -> ns) profAcc'
+                  !ldbgs = cmmDebugLink isMetaInstr (concat nats) ndbgs
+              dumpIfSet_dyn dflags Opt_D_dump_debug "Debug Infos" (vcat $ map ppr ldbgs)
+
+              -- Strip references to native code unless we want to dump it later
+              let dumpFlag = dopt Opt_D_dump_asm_stats dflags
+                  profAcc'' | dumpFlag  = profAcc'
+                            | otherwise = map (\(_, a, b) -> ([], a, b)) profAcc'
+              seqList profAcc'' $ seqList ndbgs $
+                cmmNativeGenStream dflags this_mod modLoc ncgImpl h us' cmm_stream'
+                  (impAcc', profAcc'', dbgs' ++ ldbgs)
 
 -- | Do native code generation on all these cmms.
 --
@@ -371,20 +388,13 @@ cmmNativeGens :: (Outputable statics, Outputable instr, Instruction instr)
 cmmNativeGens _ _ _ _ us [] ngs _
         = return (ngs, us)
 
-cmmNativeGens dflags this_mod ncgImpl h us (cmm : cmms) (impAcc, profAcc) count
+cmmNativeGens dflags this_mod ncgImpl h us (cmm : cmms) (impAcc, profAcc, debugs) count
  = do
         (us', native, imports, colorStats, linearStats)
                 <- {-# SCC "cmmNativeGen" #-} cmmNativeGen dflags this_mod ncgImpl us cmm count
 
-        {-# SCC "pprNativeCode" #-} Pretty.bufLeftRender h
-                $ withPprStyleDoc dflags (mkCodeStyle AsmStyle)
-                $ vcat $ map (pprNatCmmDecl ncgImpl) native
-
-        let !lsPprNative =
-                if  dopt Opt_D_dump_asm       dflags
-                 || dopt Opt_D_dump_asm_stats dflags
-                        then native
-                        else []
+        emitNativeCode dflags h $ vcat $
+          map (pprNatCmmDecl ncgImpl) native
 
         let !count' = count + 1
 
@@ -393,12 +403,24 @@ cmmNativeGens dflags this_mod ncgImpl h us (cmm : cmms) (impAcc, profAcc) count
 
         cmmNativeGens dflags this_mod ncgImpl h
             us' cmms ((imports : impAcc),
-                      ((lsPprNative, colorStats, linearStats) : profAcc))
+                      ((native, colorStats, linearStats) : profAcc),
+                      debugs)
                      count'
 
  where  seqString []            = ()
         seqString (x:xs)        = x `seq` seqString xs
 
+
+emitNativeCode :: DynFlags -> BufHandle -> SDoc -> IO ()
+emitNativeCode dflags h sdoc = do
+
+        {-# SCC "pprNativeCode" #-} Pretty.bufLeftRender h
+                $ withPprStyleDoc dflags (mkCodeStyle AsmStyle) sdoc
+
+        -- dump native code
+        dumpIfSet_dyn dflags
+                Opt_D_dump_asm "Asm code"
+                sdoc
 
 -- | Complete native code generation phase for a single top-level chunk of Cmm.
 --      Dumping the output of each stage along the way.

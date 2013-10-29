@@ -132,6 +132,7 @@ Library
         BasicTypes
         DataCon
         Demand
+        Debug
         Exception
         GhcMonad
         Hooks
