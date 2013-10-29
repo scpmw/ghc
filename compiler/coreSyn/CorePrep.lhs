@@ -179,7 +179,13 @@ corePrepPgm hsc_env mod_loc binds data_tycons = do
                       return (deFloatTop (floats1 `appendFloats` floats2))
 
     endPass hsc_env CorePrep binds_out []
-    return binds_out
+
+    -- Output of Core preparation might be useful for debugging
+    let binds_out'
+          | gopt Opt_DebugCore dflags = map annotateCoreNotes binds_out
+          | otherwise                 = binds_out
+
+    return binds_out'
 
 corePrepExpr :: DynFlags -> HscEnv -> CoreExpr -> IO CoreExpr
 corePrepExpr dflags hsc_env expr = do

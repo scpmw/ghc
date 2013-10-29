@@ -337,7 +337,10 @@ mkTopStgRhs dflags this_mod rhs_fvs srt bndr binder_info rhs =
 
 stripLaxStgTicks :: StgExpr -> ([Tickish Id], StgExpr)
 stripLaxStgTicks = go []
-   where go ts (StgTick t e) = go (t:ts) e
+   where go ts (StgTick t e) | tickishLax t
+                             = go (t:ts) e
+                             | StgLam{} <- e
+                             = pprPanic "Non-lax tickish on lambda!" (ppr t $$ ppr e)
          go ts other         = (reverse ts, other)
 
 getUpdateFlag :: Id -> UpdateFlag
@@ -398,6 +401,7 @@ coreToStgExpr (Tick tick expr)
          HpcTick{}    -> return ()
          ProfNote{}   -> return ()
          SourceNote{} -> return ()
+         CoreNote{}   -> return ()
          Breakpoint{} -> panic "coreToStgExpr: breakpoint should not happen"
        (expr2, fvs, escs) <- coreToStgExpr expr
        return (StgTick tick expr2, fvs, escs)

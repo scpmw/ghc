@@ -16,7 +16,7 @@
 -- | CoreSyn holds all the main data types for use by for the Glasgow Haskell Compiler midsection
 module CoreSyn (
 	-- * Main data types
-        Expr(..), Alt, Bind(..), AltCon(..), Arg, Tickish(..),
+        Expr(..), Alt, Bind(..), AltCon(..), Arg, Tickish(..), ExprPtr(..),
         CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
         TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..),
 
@@ -44,6 +44,7 @@ module CoreSyn (
         isValArg, isTypeArg, isTyCoArg, valArgCount, valBndrCount,
         isRuntimeArg, isRuntimeVar,
 
+        exprPtrCons,
         tickishCounts, tickishScoped, tickishIsCode, mkNoTick, mkNoScope,
         tickishCanSplit, tickishLax,
         tickishContains,
@@ -497,8 +498,28 @@ data Tickish id =
     , sourceFloat :: !Int
     }
 
+  -- | A core note. These types of ticks only live after Core2Stg and
+  -- carry the core that a piece of Stg was generated from.
+  | CoreNote
+    { coreBind :: Var          -- ^ Name the core fragment is bound to
+    , coreNote :: ExprPtr Var  -- ^ Source covered
+    }
+
   deriving (Eq, Ord, Data, Typeable)
 
+-- | Pointer to a Core expression or case alternative. Ignored for the
+-- purpose of equality checks.
+data ExprPtr id = ExprPtr (Expr id)
+                | AltPtr (Alt id)
+                deriving (Data, Typeable)
+instance Eq (ExprPtr id)  where _ == _       = True
+instance Ord (ExprPtr id) where compare _ _  = EQ
+
+-- | Gives constructor of expr pointer or DEFAULT if not an
+-- alternative.
+exprPtrCons :: ExprPtr a -> AltCon
+exprPtrCons ExprPtr{}          = DEFAULT
+exprPtrCons (AltPtr (con,_,_)) = con
 
 -- | A "tick" note is one that counts evaluations in some way.  We
 -- cannot discard a tick, and the compiler should preserve the number
@@ -522,6 +543,7 @@ tickishScoped Breakpoint{} = True
    -- stacks, but also this helps prevent the simplifier from moving
    -- breakpoints around and changing their result type (see #1531).
 tickishScoped SourceNote{} = True
+tickishScoped CoreNote{}   = True
 
 mkNoTick :: Tickish id -> Tickish id
 mkNoTick n@ProfNote{}   = n {profNoteCount = False}
@@ -538,6 +560,7 @@ mkNoScope t = t
 -- disappear before the backend.
 tickishIsCode :: Tickish id -> Bool
 tickishIsCode SourceNote{} = False
+tickishIsCode CoreNote{}   = False
 tickishIsCode _tickish     = True  -- all the rest for now
 
 -- | Return True if this Tick can be split into (tick,scope) parts with
@@ -550,6 +573,7 @@ tickishCanSplit _ = True
 -- | Return True if it is okay to float new code into the tick
 tickishLax :: Tickish Id -> Bool
 tickishLax SourceNote{} = True
+tickishLax CoreNote{}   = True
 tickishLax _tickish     = False  -- all the rest for now
 
 -- | Returns whether one tick "contains" the other one, therefore
@@ -1429,6 +1453,7 @@ seqTickish ProfNote{ profNoteCC = cc } = cc `seq` ()
 seqTickish HpcTick{} = ()
 seqTickish Breakpoint{ breakpointFVs = ids } = seqBndrs ids
 seqTickish SourceNote{} = ()
+seqTickish CoreNote{} = ()
 
 seqBndr :: CoreBndr -> ()
 seqBndr b = b `seq` ()
