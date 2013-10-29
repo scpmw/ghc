@@ -43,7 +43,7 @@ module CoreUtils (
         dataConRepInstPat, dataConRepFSInstPat,
 
         -- * Working with ticks
-        stripTicksTop, stripTicks,
+        stripTicksTop, stripTicks, annotateCoreNotes,
     ) where
 
 #include "HsVersions.h"
@@ -241,8 +241,8 @@ mkTick t orig_expr = mkTick' id id orig_expr
 
     -- Walk through ticks, making sure to not introduce tick duplication
     -- along the way. The "rest" parameter accumulates ticks we need to
-    -- put on the result expression *if* we end up with the decision to
-    -- actually modify the expression.
+    -- put on the result expression *if* we end up
+    -- actually modifying the expression.
     Tick t2 e | tickishContains t t2   -> mkTick' top rest e
               | tickishContains t2 t   -> orig_expr
               | otherwise              -> mkTick' top (rest . Tick t2) e
@@ -345,6 +345,28 @@ stripTicks p expr = (fromOL ticks, expr')
         go_bs (Rec bs)      = Rec <$> traverse go_b bs
         go_b (b, e)         = (,) <$> pure b <*> go e
         go_a (c,bs,e)       = (,,) <$> pure c <*> pure bs <*> go e
+
+-- | Add Core ticks to a Core expression.
+annotateCoreNotes :: CoreBind -> CoreBind
+annotateCoreNotes = go_bs
+  where go (App e a)        = App (go e) (go a)
+        go (Lam b e)        = Lam b (go e)
+        go (Let b e)        = Let (go_bs b) (go e)
+        go (Case e b t as)  = Case (go e) b t (map (go_a b) as)
+        go (Cast e c)       = Cast (go e) c
+        go (Tick t e)       = Tick t (go e)
+        go other            = other
+        go_bs (NonRec b e)  = NonRec b $ tick_bind b e $ go e
+        go_bs (Rec bs)      = Rec $ map go_b bs
+        go_b (b, e)         = (b, tick_bind b e $ go e)
+        go_a b alt@(c,bs,e) = (c, bs, Tick (CoreNote b (AltPtr alt)) $ go e)
+        -- When ticking let bindings, we want to move the Core note
+        -- inside lambdas in order to fulfill CorePrep invariants
+        tick_bind b e (Lam b' e') = Lam b' (tick_bind b e e')
+        tick_bind b e (Tick t e') | tickishFloatable t
+                                  = Tick t (tick_bind b e e')
+        tick_bind b e (Cast e' c) = Cast (tick_bind b e e') c
+        tick_bind b e e'          = Tick (CoreNote b (ExprPtr e)) e'
 
 \end{code}
 

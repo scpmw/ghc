@@ -16,7 +16,7 @@
 module CoreSyn (
 	-- * Main data types
         Expr(..), Alt, Bind(..), AltCon(..), Arg,
-        Tickish(..), TickishScoping(..), TickishPlacement(..),
+        Tickish(..), TickishScoping(..), TickishPlacement(..), ExprPtr(..),
         CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
         TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..), deTagExpr,
 
@@ -47,6 +47,7 @@ module CoreSyn (
         tickishCounts, tickishScoped, tickishScopesLike, tickishFloatable,
         tickishCanSplit, mkNoCount, mkNoScope,
         tickishIsCode, tickishPlace,
+        exprPtrCons,
         tickishContains,
 
         -- * Unfolding data types
@@ -499,7 +500,22 @@ data Tickish id =
                                 --   (uses same names as CCs)
     }
 
+  -- | A core note. These types of ticks only live after Core2Stg and
+  -- carry the core that a piece of Stg was generated from.
+  | CoreNote
+    { coreBind :: Var          -- ^ Name the core fragment is bound to
+    , coreNote :: ExprPtr Var  -- ^ Source covered
+    }
+
   deriving (Eq, Ord, Data, Typeable)
+
+-- | Pointer to a Core expression or case alternative. Ignored for the
+-- purpose of equality checks.
+data ExprPtr id = ExprPtr (Expr id)
+                | AltPtr (Alt id)
+                deriving (Data, Typeable)
+instance Eq (ExprPtr id)  where _ == _       = True
+instance Ord (ExprPtr id) where compare _ _  = EQ
 
 
 -- | A "counting tick" (where tickishCounts is True) is one that
@@ -589,6 +605,7 @@ tickishScoped Breakpoint{} = CostCentreScope
    -- stacks, but also this helps prevent the simplifier from moving
    -- breakpoints around and changing their result type (see #1531).
 tickishScoped SourceNote{} = SoftScope
+tickishScoped CoreNote{}   = SoftScope
 
 -- | Returns whether the tick scoping rule is at least as permissive
 -- as the given scoping rule.
@@ -651,6 +668,7 @@ mkNoScope _                               = panic "mkNoScope: Undefined split!"
 -- translate the code as if it found the latter.
 tickishIsCode :: Tickish id -> Bool
 tickishIsCode SourceNote{} = False
+tickishIsCode CoreNote{}   = False
 tickishIsCode _tickish     = True  -- all the rest for now
 
 
@@ -696,6 +714,7 @@ tickishPlace n@ProfNote{}
 tickishPlace HpcTick{}     = PlaceRuntime
 tickishPlace Breakpoint{}  = PlaceRuntime
 tickishPlace SourceNote{}  = PlaceNonLam
+tickishPlace CoreNote{}    = PlaceNonLam
 
 -- | Returns whether one tick "contains" the other one, therefore
 -- making the second tick redundant.
@@ -704,6 +723,13 @@ tickishContains (SourceNote sp1 n1) (SourceNote sp2 n2)
   = n1 == n2 && containsSpan sp1 sp2
 tickishContains t1 t2
   = t1 == t2
+
+-- | Gives constructor of expr pointer or DEFAULT if not an
+-- alternative.
+exprPtrCons :: ExprPtr a -> AltCon
+exprPtrCons ExprPtr{}          = DEFAULT
+exprPtrCons (AltPtr (con,_,_)) = con
+
 \end{code}
 
 
@@ -1594,6 +1620,7 @@ seqTickish ProfNote{ profNoteCC = cc } = cc `seq` ()
 seqTickish HpcTick{} = ()
 seqTickish Breakpoint{ breakpointFVs = ids } = seqBndrs ids
 seqTickish SourceNote{} = ()
+seqTickish CoreNote{} = ()
 
 seqBndr :: CoreBndr -> ()
 seqBndr b = b `seq` ()

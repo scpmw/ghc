@@ -430,6 +430,7 @@ data GeneralFlag
 
    -- debugging flags
    | Opt_Debug
+   | Opt_DebugCore
 
    deriving (Eq, Show, Enum)
 
@@ -2508,6 +2509,7 @@ dynamic_flags = [
 
         ------ Debugging flags ----------------------------------------------
   , Flag "g"                (NoArg (setGeneralFlag Opt_Debug))
+  , Flag "fsave-core"       (NoArg (setGeneralFlag Opt_DebugCore))
 
  ]
  ++ map (mkFlag turnOn  ""     setGeneralFlag  ) negatableFlags
