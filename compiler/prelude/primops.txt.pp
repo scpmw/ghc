@@ -1612,7 +1612,7 @@ section "Exceptions"
 
 primop  CatchOp "catch#" GenPrimOp
           (State# RealWorld -> (# State# RealWorld, a #) )
-       -> (b -> State# RealWorld -> (# State# RealWorld, a #) )
+       -> (b -> ByteArray# -> State# RealWorld -> (# State# RealWorld, a #) )
        -> State# RealWorld
        -> (# State# RealWorld, a #)
    with
@@ -1630,6 +1630,13 @@ primop  RaiseOp "raise#" GenPrimOp
       -- NB: result is bottom
    out_of_line = True
 
+primop  RaiseWithStackOp "raiseWithStack#" GenPrimOp
+   a -> ByteArray# -> b
+   with
+   strictness  = { \ _arity -> mkClosedStrictSig [topDmd, topDmd] botRes }
+      -- NB: result is bottom
+   out_of_line = True
+
 -- raiseIO# needs to be a primop, because exceptions in the IO monad
 -- must be *precise* - we don't want the strictness analyser turning
 -- one kind of bottom into another, as it is allowed to do in pure code.
@@ -1644,6 +1651,19 @@ primop  RaiseIOOp "raiseIO#" GenPrimOp
    a -> State# RealWorld -> (# State# RealWorld, b #)
    with
    strictness  = { \ _arity -> mkClosedStrictSig [topDmd, topDmd] botRes }
+   out_of_line = True
+   has_side_effects = True
+
+primop  RaiseWithStackIOOp "raiseWithStackIO#" GenPrimOp
+   a -> ByteArray# -> State# RealWorld -> (# State# RealWorld, b #)
+   with
+   strictness  = { \ _arity -> mkClosedStrictSig [topDmd, topDmd, topDmd] botRes }
+   out_of_line = True
+   has_side_effects = True
+
+primop  DumpStackOp "dumpStack#" GenPrimOp
+   ByteArray# -> State# RealWorld -> State# RealWorld
+   with
    out_of_line = True
    has_side_effects = True
 

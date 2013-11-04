@@ -422,16 +422,23 @@ section "data" {
   no_break_on_exception: W_[1];
 }
 
-INFO_TABLE_RET(stg_raise_ret, RET_SMALL, W_ info_ptr, P_ exception)
+INFO_TABLE_RET(stg_raiseWithStack_ret, RET_SMALL, W_ info_ptr, P_ exception, P_ reified_stack)
     return (P_ ret)
 {
     W_[no_break_on_exception] = 1;
-    jump stg_raisezh (exception);
+    jump stg_raiseWithStackzh (exception, reified_stack);
 }
 
-stg_raisezh /* explicit stack */
+stg_raisezh(P_ exception)
+{
+    W_ reified_stack;
+    ("ptr" reified_stack) = ccall reifyStack (MyCapability() "ptr", Sp "ptr");
+    jump stg_raiseWithStackzh (exception, reified_stack);
+}
+
+stg_raiseWithStackzh /* explicit stack */
 /*
- * args : R1 :: Exception
+ * args : R1 :: Exception, R2 :: stack
  *
  * Here we assume that the NativeNodeCall convention always puts the
  * first argument in R1 (which it does).  We cannot use high-level cmm
@@ -442,8 +449,10 @@ stg_raisezh /* explicit stack */
     W_ handler;
     W_ frame_type;
     W_ exception;
+    W_ reified_stack;
 
-   exception = R1;
+    exception = R1;
+    reified_stack = R2;
 
 #if defined(PROFILING)
     /* Debugging tool: on raising an  exception, show where we are. */
@@ -519,9 +528,10 @@ retry_pop_stack:
             // be per-thread.
             CInt[rts_stop_on_exception] = 0;
             ("ptr" ioAction) = ccall deRefStablePtr (W_[rts_breakpoint_io_action] "ptr");
-            Sp = Sp - WDS(6);
+            Sp = Sp - WDS(7);
+            Sp(6) = reified_stack;
             Sp(5) = exception;
-            Sp(4) = stg_raise_ret_info;
+            Sp(4) = stg_raiseWithStack_ret_info;
             Sp(3) = exception;             // the AP_STACK
             Sp(2) = ghczmprim_GHCziTypes_True_closure; // dummy breakpoint info
             Sp(1) = ghczmprim_GHCziTypes_True_closure; // True <=> a breakpoint
@@ -605,19 +615,31 @@ retry_pop_stack:
       Sp = Sp + SIZEOF_StgCatchSTMFrame;
     }
 
-    /* Call the handler, passing the exception value and a realworld
+    /* Call the handler, passing the exception value, stack, and a realworld
      * token as arguments.
      */
-    Sp_adj(-1);
+    Sp_adj(-2);
+    Sp(1) = reified_stack;
     Sp(0) = exception;
     R1 = handler;
     Sp_adj(-1);
     TICK_UNKNOWN_CALL();
-    TICK_SLOW_CALL_fast_pv();
-    jump RET_LBL(stg_ap_pv) [R1];
+    TICK_SLOW_CALL_fast_ppv();
+    jump RET_LBL(stg_ap_ppv) [R1];
 }
 
 stg_raiseIOzh (P_ exception)
 {
     jump stg_raisezh (exception);
+}
+
+stg_raiseWithStackIOzh (P_ exception, P_ reified_stack)
+{
+    jump stg_raiseWithStackzh (exception, reified_stack);
+}
+
+stg_dumpStackzh (P_ reified_stack)
+{
+    ccall dumpStack(reified_stack "ptr");
+    return ();
 }
