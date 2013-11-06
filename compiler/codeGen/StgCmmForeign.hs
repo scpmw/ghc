@@ -267,7 +267,12 @@ maybe_assign_temp e = do
 saveThreadState :: DynFlags -> CmmAGraph
 saveThreadState dflags =
   -- CurrentTSO->stackobj->sp = Sp;
-  mkStore (cmmOffset dflags (CmmLoad (cmmOffset dflags stgCurrentTSO (tso_stackobj dflags)) (bWord dflags)) (stack_SP dflags)) stgSp
+  let stackobj = CmmLoad (cmmOffset dflags stgCurrentTSO (tso_stackobj dflags)) (bWord dflags)
+      sp_fld = cmmOffset dflags stackobj (stack_SP dflags)
+  in (if gopt Opt_Debug dflags
+      then mkUnwind Sp (CmmLoad sp_fld (bWord dflags))
+      else mkNop)
+  <*> mkStore sp_fld stgSp
   <*> closeNursery dflags
   -- and save the current cost centre stack in the TSO when profiling:
   <*> if gopt Opt_SccProfilingOn dflags then
