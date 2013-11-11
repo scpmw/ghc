@@ -167,6 +167,11 @@ typedef struct {
 
 typedef struct {
     const StgInfoTable* info;
+    StgArrWords* stack;
+} StgReifiedStackFrame;
+
+typedef struct {
+    const StgInfoTable* info;
     struct StgStack_ *next_chunk;
 } StgUnderflowFrame;
 

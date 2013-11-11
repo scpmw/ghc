@@ -112,6 +112,7 @@ checkStackFrame( StgPtr c )
     case CATCH_RETRY_FRAME:
     case CATCH_STM_FRAME:
     case CATCH_FRAME:
+    case REIFIED_STACK_FRAME:
       // small bitmap cases (<= 32 entries)
     case UNDERFLOW_FRAME:
     case STOP_FRAME:
@@ -360,6 +361,7 @@ checkClosure( StgClosure* p )
     case UNDERFLOW_FRAME:
     case STOP_FRAME:
     case CATCH_FRAME:
+    case REIFIED_STACK_FRAME:
     case ATOMICALLY_FRAME:
     case CATCH_RETRY_FRAME:
     case CATCH_STM_FRAME:

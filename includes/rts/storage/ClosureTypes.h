@@ -79,6 +79,7 @@
 #define CATCH_RETRY_FRAME       58
 #define CATCH_STM_FRAME         59
 #define WHITEHOLE               60
-#define N_CLOSURE_TYPES         61
+#define REIFIED_STACK_FRAME	61
+#define N_CLOSURE_TYPES         62
 
 #endif /* RTS_STORAGE_CLOSURETYPES_H */

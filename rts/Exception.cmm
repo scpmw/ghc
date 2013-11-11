@@ -442,8 +442,11 @@ stg_raisezh /* explicit stack */
     W_ handler;
     W_ frame_type;
     W_ exception;
+    W_ reified_stack;
 
-   exception = R1;
+    exception = R1;
+
+    ("ptr" reified_stack) = ccall reifyStack (MyCapability() "ptr", Sp "ptr", 0);
 
 #if defined(PROFILING)
     /* Debugging tool: on raising an  exception, show where we are. */
@@ -459,7 +462,7 @@ stg_raisezh /* explicit stack */
         LOAD_THREAD_STATE();
     }
 #endif
-    
+
 retry_pop_stack:
     SAVE_THREAD_STATE();
     (frame_type) = ccall raiseExceptionHelper(BaseReg "ptr", CurrentTSO "ptr", exception "ptr");
@@ -498,7 +501,7 @@ retry_pop_stack:
         StgTSO_trec(CurrentTSO) = trec;
         R1 = StgAtomicallyFrame_code(Sp);
         jump stg_ap_v_fast [R1];
-      }          
+      }
     }
 
     // After stripping the stack, see whether we should break here for
@@ -605,13 +608,14 @@ retry_pop_stack:
       Sp = Sp + SIZEOF_StgCatchSTMFrame;
     }
 
-    /* Call the handler, passing the exception value and a realworld
-     * token as arguments.
+    /* Push the reified stack frame, then call the handler, passing
+     * the exception value and a realworld token as arguments.
      */
-    Sp_adj(-1);
-    Sp(0) = exception;
+    Sp_adj(-4);
+    Sp(3) = reified_stack;
+    Sp(2) = stg_reified_stack_frame_info;
+    Sp(1) = exception;
     R1 = handler;
-    Sp_adj(-1);
     TICK_UNKNOWN_CALL();
     TICK_SLOW_CALL_fast_pv();
     jump RET_LBL(stg_ap_pv) [R1];
@@ -620,4 +624,34 @@ retry_pop_stack:
 stg_raiseIOzh (P_ exception)
 {
     jump stg_raisezh (exception);
+}
+
+/* -----------------------------------------------------------------------------
+   Reified stacks
+   -------------------------------------------------------------------------- */
+
+/* Just like catch frames are left on the stack purely for a catch#
+ * frame walk to find them later, reified stack frames are left on the
+ * stack for stack dumps to find and incorprorate them as
+ * required. They therefore carry just a pointer to the reified stack,
+ * and otherwise act like a catch frame (= simply return).
+ */
+
+INFO_TABLE_RET(stg_reified_stack_frame, REIFIED_STACK_FRAME, W_ info_ptr, P_ reified_stack)
+    return (P_ ret)
+{
+    return (ret);
+}
+
+stg_dumpStackzh (P_ reified_stack)
+{
+    ccall dumpStack(reified_stack "ptr");
+    return ();
+}
+
+stg_traceStackzh ()
+{
+    W_ reified_stack;
+    ("ptr" reified_stack) = ccall reifyStack (MyCapability() "ptr", Sp "ptr", 1);
+    return (reified_stack);
 }

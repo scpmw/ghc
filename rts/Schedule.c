@@ -61,6 +61,11 @@
 #ifdef TRACING
 #include "eventlog/EventLog.h"
 #endif
+
+#ifdef USE_DWARF
+#include "Dwarf.h"
+#endif
+
 /* -----------------------------------------------------------------------------
  * Global variables
  * -------------------------------------------------------------------------- */
@@ -2726,6 +2731,167 @@ raiseExceptionHelper (StgRegTable *reg, StgTSO *tso, StgClosure *exception)
     }
 }
 
+/* -----------------------------------------------------------------------------
+   reifyStack
+
+   This function is called by the raise# primitve, to reify the STG stack as an
+   array of code pointers
+   -------------------------------------------------------------------------- */
+
+StgArrWords *
+reifyStack (Capability *cap, StgPtr sp, StgBool full)
+{
+    const StgRetInfoTable* ret_info;
+    StgWord framecount;
+    StgArrWords* reified;
+    StgFunPtr *reified_payload;
+
+    StgArrWords *prev_stack = 0;
+    StgPtr pstart = sp;
+
+    framecount = 0;
+
+    // Determine the length of the array we need to allocate to
+    // store the stack frame pointer array
+    StgPtr p = pstart;
+    while((ret_info = get_ret_itbl((StgClosure *)p)) &&
+          ret_info->i.type != STOP_FRAME) {
+
+        // Underflow frames are probably not interesting?
+        if (ret_info->i.type == UNDERFLOW_FRAME) {
+            p = ((StgUnderflowFrame*)p)->next_chunk->sp;
+            continue;
+        }
+
+        framecount++;
+
+        if (ret_info->i.type == REIFIED_STACK_FRAME) {
+
+            // Found an existing reified stack on the frame: We should
+            // discard what we have gathered so far and take over those
+            // pointers.
+            prev_stack = ((StgReifiedStackFrame *)p)->stack;
+            framecount = prev_stack->bytes;
+            pstart = p + stack_frame_sizeW((StgClosure *)p);
+
+        } else if (ret_info->i.type == CATCH_FRAME ||
+                   ret_info->i.type == CATCH_STM_FRAME) {
+
+            // A catch frame means that we can stop reification
+            // here. We will continue if the exception gets rethrown.
+            if (!full) break;
+        }
+        p += stack_frame_sizeW((StgClosure *)p);
+
+    }
+
+    // Allocate array of that size. The length will be stored in
+    // the StgArrWords, so we don't need any terminators
+    reified = stgAllocArrWords(cap, framecount * sizeof(char *));
+    reified_payload = (StgFunPtr*)reified->payload;
+
+    // Push existing stack on top
+    if (prev_stack) {
+        StgWord i;
+        for (i = 0; i < prev_stack->bytes; i++) {
+            *(reified_payload++) = (StgFunPtr) prev_stack->payload[i];
+        }
+    }
+
+    // Crawl the stack again, but this time filling in the
+    // newly-allocated array
+    p = pstart;
+    while((ret_info = get_ret_itbl((StgClosure *)p)) &&
+          ret_info->i.type != STOP_FRAME) {
+        if (ret_info->i.type == UNDERFLOW_FRAME) {
+            p = ((StgUnderflowFrame*)p)->next_chunk->sp;
+            continue;
+        }
+#if defined(TABLES_NEXT_TO_CODE)
+        *(reified_payload++) = *(StgFunPtr *)p;
+#else
+        *(reified_payload++) = ret_info->i.entry;
+#endif
+        if (ret_info->i.type == CATCH_FRAME ||
+            ret_info->i.type == CATCH_STM_FRAME)
+            if (!full) break;
+        p += stack_frame_sizeW((StgClosure *)p);
+    }
+
+    return reified;
+}
+
+/* -----------------------------------------------------------------------------
+   dumpStack
+
+   Dumps a reified stack to the console.
+   -------------------------------------------------------------------------- */
+
+#define MAX_DEBUG_INFOS 8
+
+void
+dumpStack (StgArrWords *stack)
+{
+
+#ifdef USE_DWARF
+
+    // Load dwarf data
+    debugBelch("Loading debug data...\n");
+    dwarf_load();
+    dwarf_init_lookup();
+
+    // Pointer count
+    StgFunPtr *ptrs = (StgFunPtr *)stack->payload;
+    StgWord ptrCount = stack->bytes; // it's actually word count
+    StgWord i;
+    StgBool putHeader = 0;
+    int num_skipped = 0;
+    for (i = 0; i < ptrCount; i++) {
+
+        // Lookup PC
+        DwarfUnit *unit;
+        DwarfProc *proc = dwarf_lookup_proc(ptrs[i], &unit);
+        if (!proc) {
+            num_skipped++;
+            continue;
+        }
+
+        // Put skips
+        if (num_skipped > 0) {
+            debugBelch("     ... %d unknown frames ...\n", num_skipped);
+            num_skipped = 0;
+        }
+
+        // Put header
+        if (!putHeader) {
+            debugBelch("Stack trace:\n");
+            putHeader = 1;
+        }
+
+        // Find debug info
+        DebugInfo infos[MAX_DEBUG_INFOS];
+        StgWord infoCount = dwarf_get_debug_info(unit, proc, infos, MAX_DEBUG_INFOS);
+        if (infoCount == 0) {
+            debugBelch("%4lu: %s (using %s)\n", i, proc->name, unit->name);
+            continue;
+        }
+
+        // Write what we know
+        StgWord j;
+        for (j = 0; j < infoCount; j++) {
+            if (!j) debugBelch("%4lu: ", i); else debugBelch("      ");
+            debugBelch("%s (at %s:%d:%d-%d:%d)\n",
+                       infos[j].name, infos[j].file,
+                       infos[j].sline, infos[j].scol, infos[j].eline, infos[j].ecol);
+        }
+    }
+
+    // Clean up
+    dwarf_free();
+
+#endif
+
+}
 
 /* -----------------------------------------------------------------------------
    findRetryFrameHelper

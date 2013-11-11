@@ -1647,6 +1647,18 @@ primop  RaiseIOOp "raiseIO#" GenPrimOp
    out_of_line = True
    has_side_effects = True
 
+primop  DumpStackOp "dumpStack#" GenPrimOp
+   ByteArray# -> State# RealWorld -> State# RealWorld
+   with
+   out_of_line = True
+   has_side_effects = True
+
+primop  TraceStackOp "traceStack#" GenPrimOp
+   State# RealWorld -> (# State# RealWorld, ByteArray# #)
+   with
+   out_of_line = True
+   has_side_effects = True
+
 primop  MaskAsyncExceptionsOp "maskAsyncExceptions#" GenPrimOp
         (State# RealWorld -> (# State# RealWorld, a #))
      -> (State# RealWorld -> (# State# RealWorld, a #))
