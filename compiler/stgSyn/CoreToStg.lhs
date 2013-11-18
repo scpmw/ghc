@@ -317,7 +317,7 @@ mkTopStgRhs :: DynFlags -> Module -> FreeVarsInfo
             -> StgRhs
 
 mkTopStgRhs dflags this_mod rhs_fvs srt bndr binder_info rhs =
-  case stripLaxStgTicks rhs of
+  case stripStgTicks (not . tickishStrict) rhs of
    (ticks, StgLam bndrs body)
       -> StgRhsClosure noCCS binder_info
                        (getFVs rhs_fvs)
@@ -335,13 +335,10 @@ mkTopStgRhs dflags this_mod rhs_fvs srt bndr binder_info rhs =
                       srt
                       [] rhs
 
-stripLaxStgTicks :: StgExpr -> ([Tickish Id], StgExpr)
-stripLaxStgTicks = go []
-   where go ts (StgTick t e) | tickishLax t
-                             = go (t:ts) e
-                             | StgLam{} <- e
-                             = pprPanic "Non-lax tickish on lambda!" (ppr t $$ ppr e)
-         go ts other         = (reverse ts, other)
+stripStgTicks :: (Tickish Id -> Bool) -> StgExpr -> ([Tickish Id], StgExpr)
+stripStgTicks p = go []
+   where go ts (StgTick t e) | p t = go (t:ts) e
+         go ts other               = (reverse ts, other)
 
 getUpdateFlag :: Id -> UpdateFlag
 getUpdateFlag bndr
@@ -661,7 +658,7 @@ coreToStgArgs (arg : args) = do         -- Non-type argument
     let
         fvs = args_fvs `unionFVInfo` arg_fvs
 
-        (aticks, arg'') = stripLaxStgTicks arg'
+        (aticks, arg'') = stripStgTicks (not . tickishStrict) arg'
         stg_arg = case arg'' of
                        StgApp v []      -> StgVarArg v
                        StgConApp con [] -> StgVarArg (dataConWorkId con)
@@ -838,7 +835,7 @@ coreToStgRhs scope_fv_info binders (bndr, rhs) = do
 
 mkStgRhs :: FreeVarsInfo -> SRT -> Id -> StgBinderInfo -> StgExpr -> StgRhs
 mkStgRhs rhs_fvs srt bndr binder_info rhs =
-  case stripLaxStgTicks rhs of
+  case stripStgTicks (not . tickishStrict) rhs of
     (_, StgConApp con args) -> StgRhsCon noCCS con args
 
     (ts, StgLam bndrs body) -> StgRhsClosure noCCS binder_info
@@ -1176,7 +1173,7 @@ myCollectBinders expr
   where
     go bs ts (Lam b e)          = go (b:bs) ts e
     go bs ts e@(Tick t e')
-        | not (tickishLax t)    = (reverse bs, reverse ts, e)
+        | tickishStrict t       = (reverse bs, reverse ts, e)
         | otherwise             = go bs (t:ts) e'
         -- Stop at code source annotations, return non-code ticks
     go bs ts (Cast e _)         = go bs ts e

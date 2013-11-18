@@ -41,7 +41,7 @@ module CoreUtils (
         dataConRepInstPat, dataConRepFSInstPat,
 
         -- * Working with ticks
-        stripLaxTicks, annotateCoreNotes,
+        stripTicksTop, stripTicks, annotateCoreNotes,
     ) where
 
 #include "HsVersions.h"
@@ -290,15 +290,15 @@ filterTick t (Tick t2 e)
   | otherwise            = fmap (Tick t2) (filterTick t e)
 filterTick _ other       = Just other
 
--- | Copies ticks from the top of the given expression
-copyLaxTicks :: CoreExpr -> CoreExpr -> CoreExpr
-copyLaxTicks (Tick t e) e2
-            | tickishLax t = Tick t (copyLaxTicks e e2)
-copyLaxTicks _other e2     = e2
+-- | Strip ticks satisfying a predicate from top of an expression
+stripTicksTop :: (Tickish Id -> Bool) -> CoreExpr -> ([Tickish Id], CoreExpr)
+stripTicksTop p = go []
+  where go ts (Tick t e) | p t = go (t:ts) e
+        go ts other            = (reverse ts, other)
 
--- | Completely strip ticks from an expression
-stripLaxTicks :: CoreExpr -> ([Tickish Id], CoreExpr)
-stripLaxTicks = go
+-- | Completely strip ticks satisfying a predicate from an expression
+stripTicks :: (Tickish Id -> Bool) -> CoreExpr -> ([Tickish Id], CoreExpr)
+stripTicks p = go
   where -- Note that [Tickish Id] is a Monoid, which makes
         -- ((,) [Tickish Id]) an Applicative.
         go (App e a)        = App <$> go e <*> go a
@@ -307,7 +307,7 @@ stripLaxTicks = go
         go (Case e b t as)  = Case <$> go e <*> pure b <*> pure t <*> traverse go_a as
         go (Cast e c)       = Cast <$> go e <*> pure c
         go (Tick t e)
-          | tickishLax t    = let (ts, e') = go e in (t:ts, e')
+          | p t             = let (ts, e') = go e in (t:ts, e')
           | otherwise       = Tick t <$> go e
         go other            = pure other
         go_bs (NonRec b e)  = NonRec b <$> go e
@@ -334,7 +334,7 @@ annotateCoreNotes = go_bs
         -- When ticking let bindings, we want to move the Core note
         -- inside lambdas in order to fulfill CorePrep invariants
         tick_bind b e (Lam b' e') = Lam b' (tick_bind b e e')
-        tick_bind b e (Tick t e') | tickishLax t
+        tick_bind b e (Tick t e') | not (tickishStrict t)
                                   = Tick t (tick_bind b e e')
         tick_bind b e (Cast e' c) = Cast (tick_bind b e e') c
         tick_bind b e e'          = Tick (CoreNote b (ExprPtr e)) e'
@@ -1702,8 +1702,9 @@ tryEtaReduce bndrs body
       = fmap (Tick t) $ go bs e co
 
     go (b : bs) (App fun arg) co
-      | Just co' <- ok_arg b arg co
-      = fmap (copyLaxTicks arg) $ go bs fun co'
+      | let (ticks, arg') = stripTicksTop (not . tickishStrict) arg
+      , Just co' <- ok_arg b arg' co
+      = fmap (flip (foldr mkTick) ticks) $ go bs fun co'
 
     go _ _ _  = Nothing         -- Failure!
 
@@ -1740,19 +1741,16 @@ tryEtaReduce bndrs body
     -- See Note [Eta reduction with casted arguments]
     ok_arg bndr (Type ty) co
        | Just tv <- getTyVar_maybe ty
-       , bndr == tv  = Just (mkForAllCo tv co)
+       , bndr == tv            = Just (mkForAllCo tv co)
     ok_arg bndr (Var v) co
-       | bndr == v   = Just (mkFunCo Representational
-                                     (mkReflCo Representational (idType bndr)) co)
+       | bndr == v             = Just (mkFunCo Representational
+                                       (mkReflCo Representational (idType bndr)) co)
     ok_arg bndr (Cast (Var v) co_arg) co
-       | bndr == v  = Just (mkFunCo Representational (mkSymCo co_arg) co)
+       | bndr == v             = Just (mkFunCo Representational (mkSymCo co_arg) co)
        -- The simplifier combines multiple casts into one,
        -- so we can have a simple-minded pattern match here
-    ok_arg bndr (Tick t e) co
-       | not (tickishIsCode t)
-                     = ok_arg bndr e co
 
-    ok_arg _ _ _ = Nothing
+    ok_arg _ _ _               = Nothing
 \end{code}
 
 Note [Eta reduction of an eval'd function]

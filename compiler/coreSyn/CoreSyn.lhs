@@ -46,7 +46,7 @@ module CoreSyn (
 
         exprPtrCons,
         tickishCounts, tickishScoped, tickishIsCode, mkNoTick, mkNoScope,
-        tickishCanSplit, tickishLax,
+        tickishCanSplit, tickishStrict,
         tickishContains,
 
         -- * Unfolding data types
@@ -538,6 +538,8 @@ tickishCounts HpcTick{}    = True
 tickishCounts Breakpoint{} = True
 tickishCounts _            = False
 
+-- | Returns True if code covered by this tick should be guaranteed
+-- to stay covered.
 tickishScoped :: Tickish id -> Bool
 tickishScoped n@ProfNote{} = profNoteScope n
 tickishScoped HpcTick{}    = False
@@ -548,16 +550,35 @@ tickishScoped Breakpoint{} = True
 tickishScoped SourceNote{} = True
 tickishScoped CoreNote{}   = True
 
+-- | Returns True if new code is not allowed to be inserted into the
+-- scope of this tick. This property is dual to @tickishScoped@: The
+-- guarantee is that code that is /not/ covered stays uncovered.
+tickishStrict :: Tickish id -> Bool
+tickishStrict SourceNote{} = False
+tickishStrict CoreNote{}   = False
+tickishStrict HpcTick{}    = False
+tickishStrict _tickish     = True  -- all the rest for now
+
+-- | For a tick that is both counting /and/ scoping, this function
+-- returns @True@ if it can be split into its (tick, scope) parts
+-- using 'mkNoScope' and 'mkNoTick' respectively.
+tickishCanSplit :: Tickish id -> Bool
+tickishCanSplit t | not (tickishCounts t) || not (tickishScoped t)
+                           = panic "tickishCanSplit: Split undefined!"
+tickishCanSplit ProfNote{} = True
+tickishCanSplit _          = False
+
 mkNoTick :: Tickish id -> Tickish id
-mkNoTick n@ProfNote{}   = n {profNoteCount = False}
-mkNoTick n@SourceNote{} = n {sourceFloat = sourceFloat n + 1 }
-mkNoTick Breakpoint{}   = panic "mkNoTick: Breakpoint" -- cannot split a BP
-mkNoTick t              = t
+mkNoTick n | not (tickishCounts n)   = n
+           | not (tickishCanSplit n) = panic "mkNoTick: Cannot split!"
+mkNoTick n@ProfNote{}                = n {profNoteCount = False}
+mkNoTick _                           = panic "mkNoTick: Undefined split!"
 
 mkNoScope :: Tickish id -> Tickish id
-mkNoScope n@ProfNote{} = n {profNoteScope = False}
-mkNoScope Breakpoint{} = panic "mkNoScope: Breakpoint" -- cannot split a BP
-mkNoScope t = t
+mkNoScope n | not (tickishScoped n)   = n
+            | not (tickishCanSplit n) = panic "mkNoScope: Cannot split!"
+mkNoScope n@ProfNote{}                = n {profNoteScope = False}
+mkNoScope _                           = panic "mkNoScope: Undefined split!"
 
 -- | Return True if this source annotation compiles to some code, or will
 -- disappear before the backend.
@@ -565,19 +586,6 @@ tickishIsCode :: Tickish id -> Bool
 tickishIsCode SourceNote{} = False
 tickishIsCode CoreNote{}   = False
 tickishIsCode _tickish     = True  -- all the rest for now
-
--- | Return True if this Tick can be split into (tick,scope) parts with
--- 'mkNoScope' and 'mkNoTick' respectively.
-tickishCanSplit :: Tickish Id -> Bool
-tickishCanSplit Breakpoint{} = False
-tickishCanSplit HpcTick{}    = False
-tickishCanSplit _ = True
-
--- | Return True if it is okay to float new code into the tick
-tickishLax :: Tickish Id -> Bool
-tickishLax SourceNote{} = True
-tickishLax CoreNote{}   = True
-tickishLax _tickish     = False  -- all the rest for now
 
 -- | Returns whether one tick "contains" the other one, therefore
 -- making the second tick redundant.

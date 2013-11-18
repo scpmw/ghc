@@ -192,7 +192,7 @@ roughTopName (App f _) = roughTopName f
 roughTopName (Var f)   | isGlobalId f   -- Note [Care with roughTopName]
                        , isDataConWorkId f || idArity f > 0
                        = Just (idName f)
-roughTopName (Tick t e) | tickishLax t
+roughTopName (Tick t e) | not (tickishStrict t)
                         = roughTopName e
 roughTopName _ = Nothing
 
@@ -611,7 +611,7 @@ match :: RuleMatchEnv
 
 -- We look through certain ticks. See note [Tick annotations in RULE matching]
 match renv subst e1 (Tick t e2)
-  | tickishLax t
+  | not (tickishStrict t)
   = match renv subst' e1 e2
   where subst' = subst { rs_binds = rs_binds subst . mkTick t }
 
@@ -895,10 +895,16 @@ Hence, (a) the guard (not (isLocallyBoundR v2))
 
 Note [Tick annotations in RULE matching]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We used to look through Notes in both template and expression being
-matched.  This would be incorrect for ticks, which we cannot discard.
-So we either not look through Ticks at all - or float them to the
-top of the rule application where it makes sense.
+
+We used to unconditionally look through Notes in both template and
+expression being matched. This would be plain undefined for strict
+ticks, because we have no place to put them where we could guarantee
+no new cost entering the scope. So now we just fail the match in these
+cases.
+
+On the other hand, where we are allowed to insert new cost into the
+tick scope (= non-strict ticks), we can float them upwards to the rule
+application site.
 
 cf Note [Notes in call patterns] in SpecConstr
 

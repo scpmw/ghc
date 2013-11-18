@@ -115,8 +115,7 @@ The goal of this pass is to prepare for code generation.
     special case where we use the S# constructor for Integers that
     are in the range of Int.
 
-11. Float lax ticks out of applications, and allow lets to get
-    floated through them (with appropriate wrapping)
+11. Float non-strict ticks out of applications.
 
 This is all done modulo type applications and abstractions, so that
 when type erasure is done for conversion to STG, we don't end up with
@@ -521,7 +520,7 @@ cpeRhsE env (Let bind expr)
 cpeRhsE env (Tick tickish expr)
   | ignoreTickish tickish
   = cpeRhsE env expr
-  | tickishLax tickish && tickishCanSplit tickish
+  | not (tickishStrict tickish) && not (tickishCounts tickish)
   = do { (floats, body) <- cpeRhsE env expr
          -- See [Floating Ticks in CorePrep]
        ; return (addFloat floats (FloatTick tickish), body) }
@@ -711,8 +710,9 @@ cpeApp env expr
       | ignoreTickish tickish   -- Drop these notes altogether
       = collect_args fun depth  -- They aren't used by the code generator
 
-      | tickishLax tickish && tickishCanSplit tickish
+      | not (tickishStrict tickish) && not (tickishCounts tickish)
       = do { (fun',hd,fun_ty,floats,ss) <- collect_args fun depth
+             -- See [Floating Ticks in CorePrep]
            ; return (fun',hd,fun_ty,addFloat floats (FloatTick tickish),ss) }
 
         -- N-variable fun, better let-bind it
@@ -1267,7 +1267,7 @@ newVar ty
 wrapTicks :: Floats -> CoreExpr -> (Floats, CoreExpr)
 wrapTicks (Floats flag floats0) expr = (Floats flag floats1, expr')
   where (floats1, expr') = foldrOL go (nilOL, expr) floats0
-        go (FloatTick t) (fs, e) = (mapOL (wrap (mkNoTick t)) fs, Tick t e)
+        go (FloatTick t) (fs, e) = (mapOL (wrap t) fs, Tick t e)
         go other         (fs, e) = (other `consOL` fs, e)
         wrap t (FloatLet bind)    = FloatLet (wrapBind t bind)
         wrap t (FloatCase b r ok) = FloatCase b (Tick t r) ok

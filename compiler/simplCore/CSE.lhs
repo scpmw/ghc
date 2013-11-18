@@ -13,7 +13,7 @@ import Var              ( Var )
 import Id               ( Id, idType, idInlineActivation, zapIdOccInfo )
 import CoreUtils        ( mkAltExpr
                         , exprIsTrivial
-                        , stripLaxTicks, mkTick)
+                        , stripTicks, mkTick)
 import Type             ( tyConAppArgs )
 import CoreSyn
 import Outputable
@@ -283,7 +283,7 @@ emptyCSEnv = CS { cs_map = emptyCoreMap, cs_subst = emptySubst }
 
 lookupCSEnv :: CSEnv -> OutExpr -> Maybe OutExpr
 lookupCSEnv (CS { cs_map = csmap }) expr
-  = let (ts, expr') = stripLaxTicks expr in
+  = let (ts, expr') = stripTicks (not . tickishStrict) expr in
     case lookupCoreMap csmap expr' of
       Just (_,e) -> Just $ foldr mkTick e ts
       Nothing    -> Nothing
@@ -302,7 +302,7 @@ addCSEnvItem = extendCSEnv
 
 extendCSEnv :: CSEnv -> OutExpr -> OutExpr -> CSEnv
 extendCSEnv cse expr expr'
-  = extendCSEnv' cse (snd $ stripLaxTicks expr) expr'
+  = extendCSEnv' cse (snd $ stripTicks (not . tickishStrict) expr) expr'
 
 extendCSEnv' :: CSEnv -> OutExpr -> OutExpr -> CSEnv
 extendCSEnv' cse expr expr'

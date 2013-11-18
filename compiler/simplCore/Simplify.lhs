@@ -484,7 +484,7 @@ prepareRhs top_lvl env0 _ rhs0
                         -- OccurAnal.occAnalApp
 
     go n_val_args env (Tick t rhs)
-        | tickishCanSplit t
+        | not (tickishCounts t) || tickishCanSplit t
         = do { (is_exp, env', rhs') <- go n_val_args env rhs
              ; let tickIt (id, expr) = (id, mkTick (mkNoTick t) expr)
              ; return (is_exp, mapFloats env' tickIt, Tick t rhs') }
@@ -1030,11 +1030,11 @@ simplTick env tickish expr cont
 --  | tickishScoped tickish && not (tickishCounts tickish)
 --  = simplExprF env expr (TickIt tickish cont)
 
-  -- For non-scoped ticks, we push the continuation inside the
-  -- tick.  This has the effect of moving the tick to the outside of a
-  -- case or application context, allowing the normal case and
-  -- application optimisations to fire.
-  | not (tickishScoped tickish) || tickishLax tickish
+  -- For non-strict ticks, we are allowed to float in new cost, so we
+  -- push the continuation inside the tick.  This has the effect of
+  -- moving the tick to the outside of a case or application context,
+  -- allowing the normal case and application optimisations to fire.
+  | not (tickishStrict tickish)
   = do { (env', expr') <- simplExprF env expr cont
        ; return (env', mkTick tickish expr')
        }

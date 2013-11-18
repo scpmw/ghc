@@ -1186,7 +1186,7 @@ occAnal env (Tick tickish body)
          +++ mkVarEnv (zip ids (repeat NoOccInfo)), Tick tickish body')
     -- never substitute for any of the Ids in a Breakpoint
 
-  | tickishScoped tickish && not (tickishLax tickish)
+  | tickishStrict tickish
   = (mapVarEnv markInsideSCC usage, Tick tickish body')
 
   | otherwise
