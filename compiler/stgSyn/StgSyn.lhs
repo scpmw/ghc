@@ -39,7 +39,9 @@ module StgSyn (
         stgArgType,
 
         pprStgBinding, pprStgBindings,
-        pprStgLVs
+        pprStgLVs,
+
+        stripStgTicksTop,
     ) where
 
 #include "HsVersions.h"
@@ -792,5 +794,11 @@ pprStgRhs (StgRhsCon cc con args)
 pprMaybeSRT :: SRT -> SDoc
 pprMaybeSRT (NoSRT) = empty
 pprMaybeSRT srt     = ptext (sLit "srt:") <> pprSRT srt
+
+stripStgTicksTop :: (Tickish Id -> Bool) -> StgExpr -> ([Tickish Id], StgExpr)
+stripStgTicksTop p = go []
+   where go ts (StgTick t e) | p t = go (t:ts) e
+         go ts other               = (reverse ts, other)
+
 \end{code}
 

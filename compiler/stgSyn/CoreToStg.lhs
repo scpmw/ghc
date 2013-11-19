@@ -317,7 +317,7 @@ mkTopStgRhs :: DynFlags -> Module -> FreeVarsInfo
             -> StgRhs
 
 mkTopStgRhs dflags this_mod rhs_fvs srt bndr binder_info rhs =
-  case stripStgTicks (not . tickishStrict) rhs of
+  case stripStgTicksTop (not . tickishStrict) rhs of
    (ticks, StgLam bndrs body)
       -> StgRhsClosure noCCS binder_info
                        (getFVs rhs_fvs)
@@ -334,11 +334,6 @@ mkTopStgRhs dflags this_mod rhs_fvs srt bndr binder_info rhs =
                       (getUpdateFlag bndr)
                       srt
                       [] rhs
-
-stripStgTicks :: (Tickish Id -> Bool) -> StgExpr -> ([Tickish Id], StgExpr)
-stripStgTicks p = go []
-   where go ts (StgTick t e) | p t = go (t:ts) e
-         go ts other               = (reverse ts, other)
 
 getUpdateFlag :: Id -> UpdateFlag
 getUpdateFlag bndr
@@ -658,7 +653,7 @@ coreToStgArgs (arg : args) = do         -- Non-type argument
     let
         fvs = args_fvs `unionFVInfo` arg_fvs
 
-        (aticks, arg'') = stripStgTicks (not . tickishStrict) arg'
+        (aticks, arg'') = stripStgTicksTop (not . tickishStrict) arg'
         stg_arg = case arg'' of
                        StgApp v []      -> StgVarArg v
                        StgConApp con [] -> StgVarArg (dataConWorkId con)
@@ -835,7 +830,7 @@ coreToStgRhs scope_fv_info binders (bndr, rhs) = do
 
 mkStgRhs :: FreeVarsInfo -> SRT -> Id -> StgBinderInfo -> StgExpr -> StgRhs
 mkStgRhs rhs_fvs srt bndr binder_info rhs =
-  case stripStgTicks (not . tickishStrict) rhs of
+  case stripStgTicksTop (not . tickishStrict) rhs of
     (_, StgConApp con args) -> StgRhsCon noCCS con args
 
     (ts, StgLam bndrs body) -> StgRhsClosure noCCS binder_info

@@ -6,7 +6,7 @@
 --
 -----------------------------------------------------------------------------
 
-module StgCmmExpr ( cgExpr, cgTicks ) where
+module StgCmmExpr ( cgExpr, cgTicksHeapCheck ) where
 
 #define FAST_STRING_NOT_NEEDED
 #include "HsVersions.h"
@@ -60,7 +60,7 @@ cgExpr (StgOpApp (StgPrimOp SeqOp) [StgVarArg a, _] _res_ty) =
 
 cgExpr (StgOpApp op args ty) = cgOpApp op args ty
 cgExpr (StgConApp con args)  = cgConApp con args
-cgExpr e@(StgTick {})        = cgTicks True e >>= cgExpr
+cgExpr (StgTick t e)         = cgTick t >> cgExpr e
 cgExpr (StgLit lit)       = do cmm_lit <- cgLit lit
                                emitReturn [CmmLit cmm_lit]
 
@@ -490,10 +490,10 @@ cgAlts :: (GcPlan,ReturnKind) -> NonVoid Id -> AltType -> [StgAlt]
        -> FCode ReturnKind
 -- At this point the result of the case are in the binders
 cgAlts gc_plan _bndr PolyAlt [(_, _, _, rhs)]
-  = cgTicks False rhs >>= \rhs' -> maybeAltHeapCheck gc_plan (cgExpr rhs')
+  = maybeAltHeapCheck gc_plan . cgExpr =<< cgTicksHeapCheck rhs
 
 cgAlts gc_plan _bndr (UbxTupAlt _) [(_, _, _, rhs)]
-  = cgTicks False rhs >>= \rhs' -> maybeAltHeapCheck gc_plan (cgExpr rhs')
+  = maybeAltHeapCheck gc_plan . cgExpr =<< cgTicksHeapCheck rhs
         -- Here bndrs are *already* in scope, so don't rebind them
 
 cgAlts gc_plan bndr (PrimAlt _) alts
@@ -591,7 +591,7 @@ cgAltRhss gc_plan bndr alts = do
     cg_alt :: StgAlt -> FCode (AltCon, CmmAGraph)
     cg_alt (con, bndrs, _uses, rhs)
       = getCodeR                  $
-        cgTicks False rhs         >>= \rhs' ->
+        cgTicksHeapCheck rhs      >>= \rhs' ->
         maybeAltHeapCheck gc_plan $
         do { _ <- bindConArgs con base_reg bndrs
            ; _ <- cgExpr rhs'
@@ -824,18 +824,22 @@ emitEnter fun = do
 --              Ticks
 ------------------------------------------------------------------------
 
--- | Processes all top-level ticks in the expression if any, then
--- returns contained code.
-cgTicks :: Bool -> StgExpr -> FCode StgExpr
-cgTicks allowCounts (StgTick tick expr)
-  | allowCounts || not (tickishCounts tick) =
-  do { dflags <- getDynFlags
-     ; case tick of
-       ProfNote   cc t p -> emitSetCCC cc t p
-       HpcTick    m n    -> emit (mkTickBox dflags m n)
-       SourceNote s n f  -> emitTick $ SourceNote s n f
-       CoreNote   b n    -> emitTick $ CoreNote b n
-       _other            -> return () -- ignore
-     ; cgTicks allowCounts expr
-     }
-cgTicks _ other = return other
+cgTick :: Tickish Id -> FCode ()
+cgTick tick
+  = do { dflags <- getDynFlags
+       ; case tick of
+           ProfNote   cc t p -> emitSetCCC cc t p
+           HpcTick    m n    -> emit (mkTickBox dflags m n)
+           SourceNote s n f  -> emitTick $ SourceNote s n f
+           CoreNote   b n    -> emitTick $ CoreNote b n
+           _other            -> return () -- ignore
+       }
+
+-- | Processes all non-counting top-level ticks in the expression,
+-- then returns the remaining code. Used to generate ticks in front of
+-- heap checks.
+cgTicksHeapCheck :: StgExpr -> FCode StgExpr
+cgTicksHeapCheck expr
+  = do { let (ticks, expr') = stripStgTicksTop (not . tickishCounts) expr
+       ; mapM_ cgTick ticks
+       ; return expr' }

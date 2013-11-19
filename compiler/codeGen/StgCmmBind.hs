@@ -479,7 +479,7 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
                       node' = if node_points then Just node else Nothing
                 ; when node_points (ldvEnterClosure cl_info)
                 -- Emit ticks early so heap check is covered
-                ; body' <- cgTicks False body
+                ; body' <- cgTicksHeapCheck body
                 -- Emit new label that might potentially be a header
                 -- of a self-recursive tail call. See Note
                 -- [Self-recursive tail calls] in StgCmmExpr
@@ -554,9 +554,9 @@ thunkCode cl_info fv_details _cc node arity body
        ; let node_points = nodeMustPointToIt dflags (closureLFInfo cl_info)
              node'       = if node_points then Just node else Nothing
         ; ldvEnterClosure cl_info -- NB: Node always points when profiling
-        ; body' <- cgTicks False body
 
         -- Heap overflow check
+        ; body' <- cgTicksHeapCheck body
         ; entryHeapCheck cl_info node' arity [] $ do
         { -- Overwrite with black hole if necessary
           -- but *after* the heap-overflow check
