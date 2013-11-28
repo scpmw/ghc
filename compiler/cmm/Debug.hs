@@ -131,11 +131,11 @@ cmmDebugGen loc decls =
         -- Make sure we never have a block in the context tree that's
         -- not a direct or indirect child of its procedure entry
         -- block. This might fail for two reasons:
-        -- * cproc is Nothing, in which case this must be a naked
+        -- + cproc is Nothing, in which case this must be a naked
         --   block without context. This is probably CodeGen
         --   forgetting to generate a suitable CmmContext directive
         --   for a new block.
-        -- * Otherwise, the CmmContext led us to an internal block
+        -- + Otherwise, the CmmContext led us to an internal block
         --   from another procedure. While this is not fatal at this
         --   point, it's just no good idea to refer to internal labels
         --   from another procedure.
