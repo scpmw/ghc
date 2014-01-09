@@ -62,11 +62,9 @@ addTicksToBinds
         -> LHsBinds Id
         -> IO (LHsBinds Id, HpcInfo, ModBreaks)
 
-addTicksToBinds dflags mod mod_loc exports tyCons binds =
-
- case ml_hs_file mod_loc of
-   Nothing        -> return (binds, emptyHpcInfo False, emptyModBreaks)
-   Just orig_file -> do
+addTicksToBinds dflags mod mod_loc exports tyCons binds
+  | let passes = coveragePasses dflags, not (null passes),
+    Just orig_file <- ml_hs_file mod_loc = do
 
      if "boot" `isSuffixOf` orig_file
          then return (binds, emptyHpcInfo False, emptyModBreaks)
@@ -74,9 +72,8 @@ addTicksToBinds dflags mod mod_loc exports tyCons binds =
 
      let  orig_file2 = guessSourceFile binds orig_file
 
-          (binds1,_,st)
-                 = unTM (addTickLHsBinds binds)
-                   (TTE
+          tickPass tickish (binds,st) =
+            let env = TTE
                       { fileName     = mkFastString orig_file2
                       , declPath     = []
                       , tte_dflags   = dflags
@@ -86,20 +83,18 @@ addTicksToBinds dflags mod mod_loc exports tyCons binds =
                       , blackList    = Map.fromList
                                           [ (getSrcSpan (tyConName tyCon),())
                                           | tyCon <- tyCons ]
-                      , density      = mkDensity dflags
+                      , density      = mkDensity tickish dflags
                       , this_mod     = mod
-                      , tickishType  = case hscTarget dflags of
-                          HscInterpreted            -> Breakpoints
-                          _ | gopt Opt_Hpc dflags   -> HpcTicks
-                            | gopt Opt_SccProfilingOn dflags
-                                                    -> ProfNotes
-                            | gopt Opt_Debug dflags -> SourceNotes
-                            | otherwise             -> error "addTicksToBinds: No way to annotate!"
-                       })
-                   (TT
-                      { tickBoxCount = 0
-                      , mixEntries   = []
-                      })
+                      , tickishType  = tickish
+                      }
+                (binds',_,st') = unTM (addTickLHsBinds binds) env st
+            in (binds', st')
+          (binds1,st) = foldr tickPass
+                              (binds,
+                               TT { tickBoxCount = 0
+                                  , mixEntries   = []
+                                  } )
+                              passes
 
      let entries = reverse $ mixEntries st
 
@@ -113,6 +108,7 @@ addTicksToBinds dflags mod mod_loc exports tyCons binds =
 
      return (binds1, HpcInfo count hashNo, modBreaks)
 
+  | otherwise = return (binds, emptyHpcInfo False, emptyModBreaks)
 
 guessSourceFile :: LHsBinds Id -> FilePath -> FilePath
 guessSourceFile binds orig_file =
@@ -182,21 +178,18 @@ data TickDensity
   | TickCallSites         -- for stack tracing
   deriving Eq
 
-mkDensity :: DynFlags -> TickDensity
-mkDensity dflags
-  | gopt Opt_Hpc dflags
-    || gopt Opt_Debug dflags             = TickForCoverage
-  | HscInterpreted  <- hscTarget dflags  = TickForBreakPoints
-  | ProfAutoAll     <- profAuto dflags   = TickAllFunctions
-  | ProfAutoTop     <- profAuto dflags   = TickTopFunctions
-  | ProfAutoExports <- profAuto dflags   = TickExportedFunctions
-  | ProfAutoCalls   <- profAuto dflags   = TickCallSites
-  | otherwise                            = panic "density"
-  -- ToDo: -fhpc is taking priority over -fprof-auto here.  It seems
-  -- that coverage works perfectly well with profiling, but you don't
-  -- get any auto-generated SCCs.  It would make perfect sense to
-  -- allow both of them, and indeed to combine some of the other flags
-  -- (-fprof-auto-calls -fprof-auto-top, for example)
+mkDensity :: TickishType -> DynFlags -> TickDensity
+mkDensity tickish dflags = case tickish of
+  HpcTicks             -> TickForCoverage
+  SourceNotes          -> TickForCoverage
+  Breakpoints          -> TickForBreakPoints
+  ProfNotes ->
+    case profAuto dflags of
+      ProfAutoAll      -> TickAllFunctions
+      ProfAutoTop      -> TickTopFunctions
+      ProfAutoExports  -> TickExportedFunctions
+      ProfAutoCalls    -> TickCallSites
+      _other           -> panic "mkDensity"
 
 -- | Decide whether to add a tick to a binding or not.
 shouldTickBind  :: TickDensity
@@ -562,6 +555,13 @@ addTickHsExpr (ArithSeq  ty wit arith_seq) =
              where addTickWit Nothing = return Nothing
                    addTickWit (Just fl) = do fl' <- addTickHsExpr fl
                                              return (Just fl')
+
+-- We might encounter existing ticks (multiple Coverage passes)
+addTickHsExpr (HsTick t e) =
+        liftM (HsTick t) (addTickLHsExpr e)
+addTickHsExpr (HsBinTick t0 t1 e) =
+        liftM (HsBinTick t0 t1) (addTickLHsExpr e)
+
 addTickHsExpr (HsTickPragma _ (L pos e0)) = do
     e2 <- allocTickBox (ExpBox False) False False pos $
                 addTickHsExpr e0
@@ -944,6 +944,15 @@ data TickTransEnv = TTE { fileName     :: FastString
 
 data TickishType = ProfNotes | HpcTicks | Breakpoints | SourceNotes
 
+coveragePasses :: DynFlags -> [TickishType]
+coveragePasses dflags =
+    ifa (hscTarget dflags == HscInterpreted) Breakpoints $
+    ifa (gopt Opt_Hpc dflags)                HpcTicks $
+    ifa (gopt Opt_SccProfilingOn dflags &&
+         profAuto dflags /= NoProfAuto)      ProfNotes $
+    ifa (gopt Opt_Debug dflags)              SourceNotes []
+  where ifa f x xs | f         = x:xs
+                   | otherwise = xs
 
 -- | Tickishs that only make sense when their source code location
 -- refers to the current file. This might not always be true due to
