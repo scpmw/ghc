@@ -60,10 +60,7 @@ cgExpr (StgOpApp (StgPrimOp SeqOp) [StgVarArg a, _] _res_ty) =
 
 cgExpr (StgOpApp op args ty) = cgOpApp op args ty
 cgExpr (StgConApp con args)  = cgConApp con args
-cgExpr (StgSCC cc tick push expr) = do { emitSetCCC cc tick push; cgExpr expr }
-cgExpr (StgTick m n expr) = do dflags <- getDynFlags
-                               emit (mkTickBox dflags m n)
-                               cgExpr expr
+cgExpr e@(StgTick {})        = cgTicks e >>= cgExpr
 cgExpr (StgLit lit)       = do cmm_lit <- cgLit lit
                                emitReturn [CmmLit cmm_lit]
 
@@ -829,3 +826,20 @@ emitEnter fun = do
        ; return (ReturnedTo lret off)
        }
   }
+
+------------------------------------------------------------------------
+--              Ticks
+------------------------------------------------------------------------
+
+-- | Processes all top-level ticks in the expression if any, then
+-- returns contained code.
+cgTicks :: StgExpr -> FCode StgExpr
+cgTicks (StgTick tick expr) =
+  do { dflags <- getDynFlags
+     ; case tick of
+       ProfNote   cc t p -> emitSetCCC cc t p
+       HpcTick    m n    -> emit (mkTickBox dflags m n)
+       _other            -> return () -- ignore
+     ; cgTicks expr
+     }
+cgTicks other = return other
