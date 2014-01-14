@@ -115,6 +115,9 @@ The goal of this pass is to prepare for code generation.
     special case where we use the S# constructor for Integers that
     are in the range of Int.
 
+11. Uphold tick consistency while doing this: Move floatable ticks
+    out of applications, and wrap floats for scoped ticks.
+
 This is all done modulo type applications and abstractions, so that
 when type erasure is done for conversion to STG, we don't end up with
 any trivial or useless bindings.
@@ -400,7 +403,7 @@ cpePair top_lvl is_rec dmd is_unlifted env bndr rhs
        ; (floats2, rhs2) <- float_from_rhs floats1 rhs1
 
        -- Make the arity match up
-       ; (floats3, rhs')
+       ; (floats3, rhs3)
             <- if manifestArity rhs1 <= arity
                then return (floats2, cpeEtaExpand arity rhs2)
                else WARN(True, text "CorePrep: silly extra arguments:" <+> ppr bndr)
@@ -410,15 +413,18 @@ cpePair top_lvl is_rec dmd is_unlifted env bndr rhs
                         ; return ( addFloat floats2 float
                                  , cpeEtaExpand arity (Var v)) })
 
+        -- Wrap floating ticks
+       ; let (floats4, rhs4) = wrapTicks floats3 rhs3
+
         -- Record if the binder is evaluated
         -- and otherwise trim off the unfolding altogether
         -- It's not used by the code generator; getting rid of it reduces
         -- heap usage and, since we may be changing uniques, we'd have
         -- to substitute to keep it right
-       ; let bndr' | exprIsHNF rhs' = bndr `setIdUnfolding` evaldUnfolding
+       ; let bndr' | exprIsHNF rhs3 = bndr `setIdUnfolding` evaldUnfolding
                    | otherwise      = bndr `setIdUnfolding` noUnfolding
 
-       ; return (floats3, bndr', rhs') }
+       ; return (floats4, bndr', rhs4) }
   where
     is_strict_or_unlifted = (isStrictDmd dmd) || is_unlifted
 
@@ -507,9 +513,11 @@ cpeRhsE env (Let bind expr)
        ; return (new_binds `appendFloats` floats, body) }
 
 cpeRhsE env (Tick tickish expr)
-  | ignoreTickish tickish
-  = cpeRhsE env expr
-  | otherwise         -- Just SCCs actually
+  | tickishFloatable tickish
+  = do { (floats, body) <- cpeRhsE env expr
+         -- See [Floating Ticks in CorePrep]
+       ; return (addFloat floats (FloatTick tickish), body) }
+  | otherwise
   = do { body <- cpeBodyNF env expr
        ; return (emptyFloats, Tick tickish' body) }
   where
@@ -692,8 +700,10 @@ cpeApp env expr
            ; return (Cast fun' co, hd, ty2, floats, ss) }
 
     collect_args (Tick tickish fun) depth
-      | ignoreTickish tickish   -- Drop these notes altogether
-      = collect_args fun depth  -- They aren't used by the code generator
+      | tickishSoftScope tickish
+      = do { (fun',hd,fun_ty,floats,ss) <- collect_args fun depth
+             -- See [Floating Ticks in CorePrep]
+           ; return (fun',hd,fun_ty,addFloat floats (FloatTick tickish),ss) }
 
         -- N-variable fun, better let-bind it
     collect_args fun depth
@@ -814,10 +824,6 @@ of the scope of a `seq`, or dropped the `seq` altogether.
 %************************************************************************
 
 \begin{code}
--- we don't ignore any Tickishes at the moment.
-ignoreTickish :: Tickish Id -> Bool
-ignoreTickish _ = False
-
 cpe_ExprIsTrivial :: CoreExpr -> Bool
 -- Version that doesn't consider an scc annotation to be trivial.
 cpe_ExprIsTrivial (Var _)        = True
@@ -921,6 +927,9 @@ tryEtaReducePrep bndrs (Let bind@(NonRec _ r) body)
   where
     fvs = exprFreeVars r
 
+tryEtaReducePrep bndrs (Tick tickish e)
+  = fmap (Tick tickish) $ tryEtaReducePrep bndrs e
+
 tryEtaReducePrep _ _ = Nothing
 \end{code}
 
@@ -945,11 +954,14 @@ data FloatingBind
       Id CpeBody
       Bool              -- The bool indicates "ok-for-speculation"
 
+ | FloatTick (Tickish Id)
+
 data Floats = Floats OkToSpec (OrdList FloatingBind)
 
 instance Outputable FloatingBind where
   ppr (FloatLet b) = ppr b
   ppr (FloatCase b r ok) = brackets (ppr ok) <+> ppr b <+> equals <+> ppr r
+  ppr (FloatTick t) = ppr t
 
 instance Outputable Floats where
   ppr (Floats flag fs) = ptext (sLit "Floats") <> brackets (ppr flag) <+>
@@ -995,6 +1007,7 @@ wrapBinds (Floats _ binds) body
   where
     mk_bind (FloatCase bndr rhs _) body = Case rhs bndr (exprType body) [(DEFAULT, [], body)]
     mk_bind (FloatLet bind)        body = Let bind body
+    mk_bind (FloatTick tickish)    body = Tick tickish body
 
 addFloat :: Floats -> FloatingBind -> Floats
 addFloat (Floats ok_to_spec floats) new_float
@@ -1004,6 +1017,7 @@ addFloat (Floats ok_to_spec floats) new_float
     check (FloatCase _ _ ok_for_spec)
         | ok_for_spec  =  IfUnboxedOk
         | otherwise    =  NotOkToSpec
+    check FloatTick{}  = OkToSpec
         -- The ok-for-speculation flag says that it's safe to
         -- float this Case out of a let, and thereby do it more eagerly
         -- We need the top-level flag because it's never ok to float
@@ -1032,6 +1046,7 @@ deFloatTop (Floats _ floats)
   = foldrOL get [] floats
   where
     get (FloatLet b) bs = occurAnalyseRHSs b : bs
+    get FloatTick{}  bs = bs
     get b            _  = pprPanic "corePrepPgm" (ppr b)
 
     -- See Note [Dead code in CorePrep]
@@ -1204,4 +1219,47 @@ newVar ty
  = seqType ty `seq` do
      uniq <- getUniqueM
      return (mkSysLocal (fsLit "sat") uniq ty)
+
+
+------------------------------------------------------------------------------
+-- Floating ticks
+-- ---------------------------------------------------------------------------
+--
+-- Note [Floating Ticks in CorePrep]
+--
+-- It might seem counter-intuitive to float ticks by default, given
+-- that we don't actually want to move them if we can help it. On the
+-- other hand, nothing gets very far in CorePrep anyway, and we want
+-- to preserve the order of let bindings and tick annotations in
+-- relation to each other. For example, if we just wrapped let floats
+-- when they pass through ticks, we might end up performing the
+-- following transformation:
+--
+--   src<...> let foo = bar in baz
+--   ==>  let foo = src<...> bar in src<...> baz
+--
+-- Because the let-binding would float through the tick, and then
+-- immediately materialize, achieving nothing but decreasing tick
+-- accuracy. The only special case is the following scenario:
+--
+--   let foo = src<...> (let a = b in bar) in baz
+--   ==>  let foo = src<...> bar; a = src <...> b in baz
+--
+-- Here we would not want the source tick to end up covering "baz" and
+-- therefore refrain from pushing ticks outside. Instead, we copy them
+-- into the floating binds (here "a") in cpePair. This is implemented
+-- in @wrapTicks@.
+
+-- | Like wrapFloats, but only wraps tick floats
+wrapTicks :: Floats -> CoreExpr -> (Floats, CoreExpr)
+wrapTicks (Floats flag floats0) expr = (Floats flag floats1, expr')
+  where (floats1, expr') = foldrOL go (nilOL, expr) floats0
+        go (FloatTick t) (fs, e) = (mapOL (wrap t) fs, Tick t e)
+        go other         (fs, e) = (other `consOL` fs, e)
+        wrap t (FloatLet bind)    = FloatLet (wrapBind t bind)
+        wrap t (FloatCase b r ok) = FloatCase b (Tick t r) ok
+        wrap _ other              = pprPanic "wrapTicks: unexpected float!" (ppr other)
+        wrapBind t (NonRec binder rhs) = NonRec binder (Tick t rhs)
+        wrapBind t (Rec pairs)         = Rec (mapSnd (Tick t) pairs)
+
 \end{code}
