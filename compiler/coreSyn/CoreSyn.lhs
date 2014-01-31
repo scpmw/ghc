@@ -16,7 +16,7 @@
 module CoreSyn (
 	-- * Main data types
         Expr(..), Alt, Bind(..), AltCon(..), Arg,
-        Tickish(..), TickishScoping(..), TickishPlacement(..), ExprPtr(..),
+        Tickish(..), RawTickish, TickishScoping(..), TickishPlacement(..), ExprPtr(..),
         CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
         TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..), deTagExpr,
 
@@ -508,6 +508,9 @@ data Tickish id =
     }
 
   deriving (Eq, Ord, Data, Typeable)
+
+-- | Tickish out of Core context
+type RawTickish = Tickish ()
 
 -- | Pointer to a Core expression or case alternative. Ignored for the
 -- purpose of equality checks.
