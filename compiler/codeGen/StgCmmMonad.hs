@@ -19,6 +19,7 @@ module StgCmmMonad (
         emit, emitDecl, emitProc,
         emitProcWithConvention, emitProcWithStackFrame,
         emitOutOfLine, emitAssign, emitStore, emitComment,
+        emitTick,
 
         getCmm, aGraphToGraph,
         getCodeR, getCode, getHeapUsage,
@@ -73,6 +74,7 @@ import Unique
 import UniqSupply
 import FastString
 import Outputable
+import CoreSyn (RawTickish)
 
 import qualified Control.Applicative as A
 import Control.Monad
@@ -651,6 +653,9 @@ emitComment s = emitCgStmt (CgStmt (CmmComment s))
 #else
 emitComment _ = return ()
 #endif
+
+emitTick :: RawTickish -> FCode ()
+emitTick = emitCgStmt . CgStmt . CmmTick
 
 emitAssign :: CmmReg  -> CmmExpr -> FCode ()
 emitAssign l r = emitCgStmt (CgStmt (CmmAssign l r))

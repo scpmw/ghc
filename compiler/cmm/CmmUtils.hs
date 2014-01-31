@@ -55,7 +55,10 @@ module CmmUtils(
 
         analFwd, analBwd, analRewFwd, analRewBwd,
         dataflowPassFwd, dataflowPassBwd, dataflowAnalFwd, dataflowAnalBwd,
-        dataflowAnalFwdBlocks
+        dataflowAnalFwdBlocks,
+
+        -- * Ticks
+        blockTicks, annotateBlock
   ) where
 
 #include "HsVersions.h"
@@ -72,6 +75,7 @@ import Unique
 import UniqSupply
 import DynFlags
 import Util
+import CoreSyn  ( RawTickish )
 
 import Data.Word
 import Data.Maybe
@@ -566,3 +570,17 @@ dataflowPassBwd :: NonLocal n =>
 dataflowPassBwd (CmmGraph {g_entry=entry, g_graph=graph}) facts bwd = do
   (graph, facts, NothingO) <- analyzeAndRewriteBwd bwd (JustC [entry]) graph (mkFactBase (bp_lattice bwd) facts)
   return (CmmGraph {g_entry=entry, g_graph=graph}, facts)
+
+-------------------------------------------------
+-- Tick utilities
+
+blockTicks :: Block CmmNode C C -> [RawTickish]
+blockTicks b = reverse $ foldBlockNodesF goStmt b []
+  where goStmt :: CmmNode e x -> [RawTickish] -> [RawTickish]
+        goStmt  (CmmTick t) ts = t:ts
+        goStmt  _other      ts = ts
+
+annotateBlock :: [RawTickish] -> Block CmmNode C C -> Block CmmNode C C
+annotateBlock ts b = blockJoin hd (tstmts `blockAppend` mid) tl
+  where (hd, mid, tl) = blockSplit b
+        tstmts = foldr blockCons emptyBlock $ map CmmTick ts
