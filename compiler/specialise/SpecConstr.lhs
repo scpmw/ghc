@@ -880,7 +880,8 @@ extendCaseBndrs env scrut case_bndr con alt_bndrs
    = (env2, alt_bndrs')
  where
    live_case_bndr = not (isDeadBinder case_bndr)
-   env1 | Var v <- scrut = extendValEnv env v cval
+   env1 | Var v <- snd $ stripTicksTop (const True) scrut
+                         = extendValEnv env v cval
         | otherwise      = env  -- See Note [Add scrutinee to ValueEnv too]
    env2 | live_case_bndr = extendValEnv env1 case_bndr cval
         | otherwise      = env1
@@ -1905,6 +1906,10 @@ isValue env (Lam b e)
                   Just _  -> Just LambdaVal
                   Nothing -> Nothing
   | otherwise = Just LambdaVal
+
+isValue env (Tick t e)
+  | not (tickishIsCode t)
+  = isValue env e
 
 isValue _env expr       -- Maybe it's a constructor application
   | (Var fun, args) <- collectArgs expr

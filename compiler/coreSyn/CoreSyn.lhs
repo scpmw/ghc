@@ -44,8 +44,10 @@ module CoreSyn (
         isValArg, isTypeArg, isTyCoArg, valArgCount, valBndrCount,
         isRuntimeArg, isRuntimeVar,
 
-        tickishCounts, tickishScoped, tickishIsCode, mkNoCount, mkNoScope,
-        tickishCanSplit,
+        tickishCounts, tickishScoped, tickishSoftScope, tickishFloatable,
+        tickishCanSplit, mkNoCount, mkNoScope,
+        tickishIsCode, tickishIgnoreCheap,
+        tickishContains,
 
         -- * Unfolding data types
         Unfolding(..),  UnfoldingGuidance(..), UnfoldingSource(..),
@@ -105,6 +107,7 @@ import DynFlags
 import FastString
 import Outputable
 import Util
+import SrcLoc     ( RealSrcSpan, containsSpan )
 
 import Data.Data hiding (TyCon)
 import Data.Int
@@ -472,6 +475,30 @@ data Tickish id =
                                 -- Note [substTickish] in CoreSubst.
     }
 
+  -- | A source note.
+  --
+  -- In contrast to other ticks, source notes are pure annotations:
+  -- Their presence should neither influence compilation nor
+  -- execution.
+  --
+  -- The semantics are given by causality: The presence of a source
+  -- note means that a local change in the referenced source code span
+  -- *might* provoke the meaning of generated code to change. On the
+  -- flip-side, results of annotated code *must* be invariant against
+  -- changes to all source code *except* the spans referenced in the
+  -- source notes.
+  --
+  -- Therefore extending the scope of any given source note is always
+  -- valid. Note that it is still undesirable though, as this reduces
+  -- their usefulness for debugging and profiling. Therefore we will
+  -- generally try only to make use of this property where it is
+  -- neccessary to enable optimizations.
+  | SourceNote
+    { sourceSpan :: RealSrcSpan -- ^ Source covered
+    , sourceName :: String      -- ^ Name for source location
+                                --   (uses same names as CCs)
+    }
+
   deriving (Eq, Ord, Data, Typeable)
 
 
@@ -488,7 +515,19 @@ tickishCounts :: Tickish id -> Bool
 tickishCounts n@ProfNote{} = profNoteCount n
 tickishCounts HpcTick{}    = True
 tickishCounts Breakpoint{} = True
+tickishCounts _            = False
 
+-- | Returns @True@ if code covered by this tick should be guaranteed to
+-- stay covered. Note that this still allows code transformations
+-- inside the tick scope, as long as the result of these
+-- transformations are still covered by this tick. For example
+--
+--   let x = tick<...> (let y = foo in bar) in baz
+--     ===>
+--   let x = tick<...> bar; y = tick<...> foo in baz
+--
+-- Is a valid transformation as far as "bar" and "foo" is concerned,
+-- because both still are scoped over by the tick.
 tickishScoped :: Tickish id -> Bool
 tickishScoped n@ProfNote{} = profNoteScope n
 tickishScoped HpcTick{}    = False
@@ -496,28 +535,104 @@ tickishScoped Breakpoint{} = True
    -- Breakpoints are scoped: eventually we're going to do call
    -- stacks, but also this helps prevent the simplifier from moving
    -- breakpoints around and changing their result type (see #1531).
+tickishScoped SourceNote{} = True
+
+-- | Returns @True@ for a scoped tick (@tickishScoped@) that allows
+-- inserting new cost into its execution scope. For example, this
+-- allows floating ticks up in a number of cases:
+--
+--   case foo of x -> tick<...> bar
+--     ==>
+--   tick<...> case foo of x -> bar
+--
+-- This can be important in order to expose optimization
+-- opportunities. Note that in constrast to @tickishScoped@, we
+-- consider execution scope and costs (cost-centre semantics), so the
+-- following unfolding is allowed regardless of this flag:
+--
+--   let x = foo in tick<...> x
+--     ==>
+--   tick<...> foo
+--
+-- This is because even though new code was inserted into the lexical
+-- scope of the tick, the execution cost covered has actually been
+-- reduced (by the need to call through "x" to get to "foo").
+tickishSoftScope :: Tickish id -> Bool
+tickishSoftScope SourceNote{} = True
+tickishSoftScope HpcTick{}    = True
+tickishSoftScope _tickish     = False  -- all the rest for now
+
+-- | Returns @True@ for ticks that can be floated upwards easily even
+-- where it might change execution counts, such as:
+--
+--   Just (tick<...> foo)
+--     ==>
+--   tick<...> (Just foo)
+--
+-- This is a combination of @tickishSoftScope@ and
+-- @tickishCounts@. Note that in principle splittable ticks can become
+-- floatable using @mkNoTick@ -- even though there's currently no
+-- tickish for which that is the case.
+tickishFloatable :: Tickish id -> Bool
+tickishFloatable t = tickishSoftScope t && not (tickishCounts t)
+
+-- | For a tick that is both counting /and/ scoping, this function
+-- returns @True@ if it can be split into its (tick, scope) parts
+-- using 'mkNoScope' and 'mkNoTick' respectively.
+tickishCanSplit :: Tickish id -> Bool
+tickishCanSplit t | not (tickishCounts t) || not (tickishScoped t)
+                           = panic "tickishCanSplit: Split undefined!"
+tickishCanSplit ProfNote{} = True
+tickishCanSplit _          = False
 
 mkNoCount :: Tickish id -> Tickish id
-mkNoCount n@ProfNote{} = n {profNoteCount = False}
-mkNoCount Breakpoint{} = panic "mkNoCount: Breakpoint" -- cannot split a BP
-mkNoCount HpcTick{}    = panic "mkNoCount: HpcTick"
+mkNoCount n | not (tickishCounts n)   = n
+            | not (tickishCanSplit n) = panic "mkNoCount: Cannot split!"
+mkNoCount n@ProfNote{}   = n {profNoteCount = False}
+mkNoCount _                           = panic "mkNoCount: Undefined split!"
 
 mkNoScope :: Tickish id -> Tickish id
+mkNoScope n | not (tickishScoped n)   = n
+            | not (tickishCanSplit n) = panic "mkNoScope: Cannot split!"
 mkNoScope n@ProfNote{} = n {profNoteScope = False}
-mkNoScope Breakpoint{} = panic "mkNoScope: Breakpoint" -- cannot split a BP
-mkNoScope HpcTick{}    = panic "mkNoScope: HpcTick"
+mkNoScope _                           = panic "mkNoScope: Undefined split!"
 
--- | Return True if this source annotation compiles to some code, or will
--- disappear before the backend.
+-- | Return @True@ if this source annotation compiles to some backend
+-- code. Without this flag, the tickish is seen as a simple annotation
+-- that does not have any associated execution cost.
 tickishIsCode :: Tickish id -> Bool
-tickishIsCode _tickish = True  -- all of them for now
+tickishIsCode SourceNote{} = False
+tickishIsCode _tickish     = True  -- all the rest for now
 
--- | Return True if this Tick can be split into (tick,scope) parts with
--- 'mkNoScope' and 'mkNoCount' respectively.
-tickishCanSplit :: Tickish Id -> Bool
-tickishCanSplit Breakpoint{} = False
-tickishCanSplit HpcTick{}    = False
-tickishCanSplit _ = True
+-- | Whether the ticks should be removed on expressions that are cheap
+-- to the point of having no associated runtime costs whatsoever. For
+-- example in the following examples, the tick could be eliminated
+-- completely:
+--
+--   f (tick<...> 1)
+--   f (tick<...> e)
+--
+-- as literals or variables don't carry any cost on their own (even
+-- though their usage might well cause cost). Along the same lines, we
+-- can do the following for our ticks:
+--
+--   let a = tick<...> A e0 e1 in foo
+--     ==>
+--   let a = A (tick<...> e0) (tick<...> e1) in foo
+--
+-- As we see the actual allocation cost coming from the usage site
+-- (the let) rather then the constructor itself.
+tickishIgnoreCheap :: Tickish id -> Bool
+tickishIgnoreCheap ProfNote{}          = True
+tickishIgnoreCheap _other              = False
+
+-- | Returns whether one tick "contains" the other one, therefore
+-- making the second tick redundant.
+tickishContains :: Tickish Id -> Tickish Id -> Bool
+tickishContains (SourceNote sp1 n1) (SourceNote sp2 n2)
+  = n1 == n2 && containsSpan sp1 sp2
+tickishContains t1 t2
+  = t1 == t2
 \end{code}
 
 
@@ -1375,8 +1490,8 @@ seqExpr (Lam b e)       = seqBndr b `seq` seqExpr e
 seqExpr (Let b e)       = seqBind b `seq` seqExpr e
 seqExpr (Case e b t as) = seqExpr e `seq` seqBndr b `seq` seqType t `seq` seqAlts as
 seqExpr (Cast e co)     = seqExpr e `seq` seqCo co
-seqExpr (Tick n e)    = seqTickish n `seq` seqExpr e
-seqExpr (Type t)       = seqType t
+seqExpr (Tick n e)      = seqTickish n `seq` seqExpr e
+seqExpr (Type t)        = seqType t
 seqExpr (Coercion co)   = seqCo co
 
 seqExprs :: [CoreExpr] -> ()
@@ -1387,6 +1502,7 @@ seqTickish :: Tickish Id -> ()
 seqTickish ProfNote{ profNoteCC = cc } = cc `seq` ()
 seqTickish HpcTick{} = ()
 seqTickish Breakpoint{ breakpointFVs = ids } = seqBndrs ids
+seqTickish SourceNote{} = ()
 
 seqBndr :: CoreBndr -> ()
 seqBndr b = b `seq` ()

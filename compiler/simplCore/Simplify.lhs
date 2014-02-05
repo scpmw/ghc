@@ -330,8 +330,10 @@ simplLazyBind env top_lvl is_rec bndr bndr1 rhs rhs_se
                 (tvs, body) = case collectTyBinders rhs of
                                 (tvs, body) | not_lam body -> (tvs,body)
                                             | otherwise    -> ([], rhs)
-                not_lam (Lam _ _) = False
-                not_lam _         = True
+                not_lam (Lam _ _)  = False
+                not_lam (Tick t e) | not (tickishFloatable t)
+                                   = not_lam e
+                not_lam _          = True
                         -- Do not do the "abstract tyyvar" thing if there's
                         -- a lambda inside, because it defeats eta-reduction
                         --    f = /\a. \x. g a x
@@ -482,6 +484,12 @@ prepareRhs top_lvl env0 _ rhs0
                         -- See Note [CONLIKE pragma] in BasicTypes
                         -- The definition of is_exp should match that in
                         -- OccurAnal.occAnalApp
+
+    go n_val_args env (Tick t rhs)
+        | not (tickishCounts t) || (tickishScoped t && tickishCanSplit t)
+        = do { (is_exp, env', rhs') <- go n_val_args env rhs
+             ; let tickIt (id, expr) = (id, mkTick (mkNoCount t) expr)
+             ; return (is_exp, mapFloats env' tickIt, Tick t rhs') }
 
     go _ env other
         = return (False, env, other)
@@ -1024,26 +1032,29 @@ simplTick env tickish expr cont
 --  | tickishScoped tickish && not (tickishCounts tickish)
 --  = simplExprF env expr (TickIt tickish cont)
 
-  -- For non-scoped ticks, we push the continuation inside the
-  -- tick.  This has the effect of moving the tick to the outside of a
-  -- case or application context, allowing the normal case and
-  -- application optimisations to fire.
-  | not (tickishScoped tickish)
+  -- For unscoped or soft-scoped ticks, we are allowed to float in new
+  -- cost, so we simply push the continuation inside the tick.  This
+  -- has the effect of moving the tick to the outside of a case or
+  -- application context, allowing the normal case and application
+  -- optimisations to fire.
+  | not (tickishScoped tickish) || tickishSoftScope tickish
   = do { (env', expr') <- simplExprF env expr cont
        ; return (env', mkTick tickish expr')
        }
 
-  -- For breakpoints, we cannot do any floating of bindings around the
-  -- tick, because breakpoints cannot be split into tick/scope pairs.
-  | not (tickishCanSplit tickish)
-  = no_floating_past_tick
-
+  -- Push tick inside if the context looks like this will allow us to
+  -- do a case-of-case - see Note [case-of-scc-of-case]
   | interesting_cont, Just expr' <- push_tick_inside tickish expr
-    -- see Note [case-of-scc-of-case]
   = simplExprF env expr' cont
 
+  -- So we won't move the tick, but we might still want to allow
+  -- floats to pass through with appropriate wrapping (or not, see
+  -- wrap_floats below)
+  --- | not (tickishCounts tickish) || tickishCanSplit tickish
+  -- = wrap_floats
+
   | otherwise
-  = no_floating_past_tick -- was: wrap_floats, see below
+  = no_floating_past_tick
 
  where
   interesting_cont = case cont of
@@ -1051,8 +1062,10 @@ simplTick env tickish expr cont
                         _ -> False
 
   push_tick_inside t expr0
-       = ASSERT(tickishScoped t)
-         case expr0 of
+     | not (tickishScoped t)                      = panic "push_tick_inside"
+     | tickishCounts t && not (tickishCanSplit t) = Nothing
+     | otherwise
+       = case expr0 of
            Tick t' expr
               -- scc t (tick t' E)
               --   Pull the tick to the outside
@@ -1069,8 +1082,7 @@ simplTick env tickish expr cont
               | otherwise -> Nothing
 
            Case scrut bndr ty alts
-              | not (tickishCanSplit t) -> Nothing
-              | otherwise -> Just (Case (mkTick t scrut) bndr ty alts')
+              -> Just (Case (mkTick t scrut) bndr ty alts')
              where t_scope = mkNoCount t -- drop the tick on the dup'd ones
                    alts'   = [ (c,bs, mkTick t_scope e) | (c,bs,e) <- alts]
 
