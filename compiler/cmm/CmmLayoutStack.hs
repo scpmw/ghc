@@ -503,7 +503,7 @@ handleLastNode dflags procpoints liveness cont_info stackmaps
                  (stack2, assigs) =
                       setupStackFrame dflags l liveness (sm_ret_off stack0)
                                                         cont_args stack0
-            (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 tscope assigs
+             (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 tscope assigs
              return (l, tmp_lbl, stack2, block)
 
         --   (c) otherwise, the current StackMap is the StackMap for
@@ -789,8 +789,14 @@ manifestSp dflags stackmaps stack0 sp0 sp_high
     adj_pre_sp  = mapExpDeep (areaToSp dflags sp0            sp_high area_off)
     adj_post_sp = mapExpDeep (areaToSp dflags (sp0 - sp_off) sp_high area_off)
 
+    add_unwind_info | gopt Opt_Debug dflags
+                    = (:) $ CmmUnwind Sp $ CmmRegOff (CmmGlobal Sp) (sp0 - wORD_SIZE dflags)
+                    | otherwise
+                    = id
+
     final_middle = maybeAddSpAdj dflags sp_off $
                    blockFromList $
+                   add_unwind_info $
                    map adj_pre_sp $
                    elimStackStores stack0 stackmaps area_off $
                    middle_pre

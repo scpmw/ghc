@@ -45,6 +45,7 @@ data CmmNode e x where
   CmmComment :: FastString -> CmmNode O O
 
   CmmTick :: !RawTickish -> CmmNode O O
+  CmmUnwind :: !GlobalReg -> !CmmExpr -> CmmNode O O
 
   CmmAssign :: !CmmReg -> !CmmExpr -> CmmNode O O
     -- Assign to register
@@ -445,6 +446,7 @@ mapExp :: (CmmExpr -> CmmExpr) -> CmmNode e x -> CmmNode e x
 mapExp _ f@(CmmEntry{})                          = f
 mapExp _ m@(CmmComment _)                        = m
 mapExp _ m@(CmmTick _)                           = m
+mapExp _ m@(CmmUnwind _ _)                       = m
 mapExp f   (CmmAssign r e)                       = CmmAssign r (f e)
 mapExp f   (CmmStore addr e)                     = CmmStore (f addr) (f e)
 mapExp f   (CmmUnsafeForeignCall tgt fs as)      = CmmUnsafeForeignCall (mapForeignTarget f tgt) fs (map f as)
@@ -475,6 +477,7 @@ mapExpM :: (CmmExpr -> Maybe CmmExpr) -> CmmNode e x -> Maybe (CmmNode e x)
 mapExpM _ (CmmEntry{})              = Nothing
 mapExpM _ (CmmComment _)            = Nothing
 mapExpM _ (CmmTick _)               = Nothing
+mapExpM _ (CmmUnwind _ _)           = Nothing
 mapExpM f (CmmAssign r e)           = CmmAssign r `fmap` f e
 mapExpM f (CmmStore addr e)         = (\[addr', e'] -> CmmStore addr' e') `fmap` mapListM f [addr, e]
 mapExpM _ (CmmBranch _)             = Nothing
@@ -527,6 +530,7 @@ foldExp :: (CmmExpr -> z -> z) -> CmmNode e x -> z -> z
 foldExp _ (CmmEntry {}) z                         = z
 foldExp _ (CmmComment {}) z                       = z
 foldExp _ (CmmTick {}) z                          = z
+foldExp _ (CmmUnwind {}) z                        = z
 foldExp f (CmmAssign _ e) z                       = f e z
 foldExp f (CmmStore addr e) z                     = f addr $ f e z
 foldExp f (CmmUnsafeForeignCall t _ as) z         = foldr f (foldExpForeignTarget f t z) as
