@@ -245,7 +245,7 @@ layout dflags procpoints liveness entry entry_args final_stackmaps final_sp_high
 
     go (b0 : bs) acc_stackmaps acc_hwm acc_blocks
       = do
-       let (entry0@(CmmEntry entry_lbl), middle0, last0) = blockSplit b0
+       let (entry0@(CmmEntry entry_lbl tscope), middle0, last0) = blockSplit b0
 
        let stack0@StackMap { sm_sp = sp0 }
                = mapFindWithDefault
@@ -271,7 +271,7 @@ layout dflags procpoints liveness entry entry_args final_stackmaps final_sp_high
        --     details.
        (middle2, sp_off, last1, fixup_blocks, out)
            <- handleLastNode dflags procpoints liveness cont_info
-                             acc_stackmaps stack1 middle0 last0
+                             acc_stackmaps stack1 tscope middle0 last0
 
        -- pprTrace "layout(out)" (ppr out) $ return ()
 
@@ -395,7 +395,7 @@ getStackLoc (Young l) n stackmaps =
 
 handleLastNode
    :: DynFlags -> ProcPointSet -> BlockEnv CmmLocalLive -> BlockEnv ByteOff
-   -> BlockEnv StackMap -> StackMap
+   -> BlockEnv StackMap -> StackMap -> [CmmTickScope]
    -> Block CmmNode O O
    -> CmmNode O C
    -> UniqSM
@@ -407,7 +407,7 @@ handleLastNode
       )
 
 handleLastNode dflags procpoints liveness cont_info stackmaps
-               stack0@StackMap { sm_sp = sp0 } middle last
+               stack0@StackMap { sm_sp = sp0 } tscope middle last
  = case last of
     --  At each return / tail call,
     --  adjust Sp to point to the last argument pushed, which
@@ -505,7 +505,7 @@ handleLastNode dflags procpoints liveness cont_info stackmaps
         | Just stack2 <- mapLookup l stackmaps
         = do
              let assigs = fixupStack stack0 stack2
-             (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 assigs
+             (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 tscope assigs
              return (l, tmp_lbl, stack2, block)
 
         --   (b) if the successor is a proc point, save everything
@@ -519,7 +519,7 @@ handleLastNode dflags procpoints liveness cont_info stackmaps
                       setupStackFrame dflags l liveness (sm_ret_off stack0)
                                                        cont_args stack0
              --
-             (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 assigs
+             (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 tscope assigs
              return (l, tmp_lbl, stack2, block)
 
         --   (c) otherwise, the current StackMap is the StackMap for
@@ -533,14 +533,14 @@ handleLastNode dflags procpoints liveness cont_info stackmaps
               is_live (r,_) = r `elemRegSet` live
 
 
-makeFixupBlock :: DynFlags -> ByteOff -> Label -> StackMap -> [CmmNode O O]
+makeFixupBlock :: DynFlags -> ByteOff -> Label -> StackMap -> [CmmTickScope] -> [CmmNode O O]
                -> UniqSM (Label, [CmmBlock])
-makeFixupBlock dflags sp0 l stack assigs
+makeFixupBlock dflags sp0 l stack tscope assigs
   | null assigs && sp0 == sm_sp stack = return (l, [])
   | otherwise = do
     tmp_lbl <- liftM mkBlockId $ getUniqueM
     let sp_off = sp0 - sm_sp stack
-        block = blockJoin (CmmEntry tmp_lbl)
+        block = blockJoin (CmmEntry tmp_lbl tscope)
                           (maybeAddSpAdj dflags sp_off (blockFromList assigs))
                           (CmmBranch l)
     return (tmp_lbl, [block])
@@ -1000,7 +1000,7 @@ that safe foreign call is replace by an unsafe one in the Cmm graph.
 
 lowerSafeForeignCall :: DynFlags -> CmmBlock -> UniqSM CmmBlock
 lowerSafeForeignCall dflags block
-  | (entry, middle, CmmForeignCall { .. }) <- blockSplit block
+  | (entry@(CmmEntry _ tscope), middle, CmmForeignCall { .. }) <- blockSplit block
   = do
     -- Both 'id' and 'new_base' are KindNonPtr because they're
     -- RTS-only objects and are not subject to garbage collection
@@ -1038,11 +1038,11 @@ lowerSafeForeignCall dflags block
                        , cml_ret_args  = ret_args
                        , cml_ret_off   = ret_off }
 
-    graph' <- lgraphOfAGraph $ suspend <*>
+    graph' <- lgraphOfAGraph ( suspend <*>
                                midCall <*>
                                resume  <*>
                                copyout <*>
-                               mkLast jump
+                               mkLast jump, tscope)
 
     case toBlockList graph' of
       [one] -> let (_, middle', last) = blockSplit one

@@ -45,6 +45,7 @@ import FastString
 import Outputable
 
 import Control.Monad (when,void)
+import Control.Arrow (first)
 
 ------------------------------------------------------------------------
 --              cgExpr: the main function
@@ -124,8 +125,8 @@ cgLetNoEscapeRhs
 cgLetNoEscapeRhs join_id local_cc bndr rhs =
   do { (info, rhs_code) <- cgLetNoEscapeRhsBody local_cc bndr rhs
      ; let (bid, _) = expectJust "cgLetNoEscapeRhs" $ maybeLetNoEscape info
-     ; let code = do { body <- getCode rhs_code
-                     ; emitOutOfLine bid (body <*> mkBranch join_id) }
+     ; let code = do { (_, body) <- getCodeScoped rhs_code
+                     ; emitOutOfLine bid (first (<*> mkBranch join_id) body) }
      ; return (info, code)
      }
 
@@ -571,8 +572,8 @@ cgAlts _ _ _ _ = panic "cgAlts"
 
 -------------------
 cgAlgAltRhss :: (GcPlan,ReturnKind) -> NonVoid Id -> [StgAlt]
-             -> FCode ( Maybe CmmAGraph
-                      , [(ConTagZ, CmmAGraph)] )
+             -> FCode ( Maybe CmmAGraphScoped
+                      , [(ConTagZ, CmmAGraphScoped)] )
 cgAlgAltRhss gc_plan bndr alts
   = do { tagged_cmms <- cgAltRhss gc_plan bndr alts
 
@@ -591,14 +592,14 @@ cgAlgAltRhss gc_plan bndr alts
 
 -------------------
 cgAltRhss :: (GcPlan,ReturnKind) -> NonVoid Id -> [StgAlt]
-          -> FCode [(AltCon, CmmAGraph)]
+          -> FCode [(AltCon, CmmAGraphScoped)]
 cgAltRhss gc_plan bndr alts = do
   dflags <- getDynFlags
   let
     base_reg = idToReg dflags bndr
-    cg_alt :: StgAlt -> FCode (AltCon, CmmAGraph)
+    cg_alt :: StgAlt -> FCode (AltCon, CmmAGraphScoped)
     cg_alt (con, bndrs, _uses, rhs)
-      = getCodeR                  $
+      = getCodeScoped             $
         maybeAltHeapCheck gc_plan $
         do { _ <- bindConArgs con base_reg bndrs
            ; _ <- cgExpr rhs
@@ -817,11 +818,12 @@ emitEnter fun = do
          -- inlined in the RHS of the R1 assignment.
        ; let entry = entryCode dflags (closureInfoPtr dflags (CmmReg nodeReg))
              the_call = toCall entry (Just lret) updfr_off off outArgs regs
+       ; tscope <- getTickScope
        ; emit $
            copyout <*>
            mkCbranch (cmmIsTagged dflags (CmmReg nodeReg)) lret lcall <*>
-           outOfLine lcall the_call <*>
-           mkLabel lret <*>
+           outOfLine lcall (the_call,tscope) <*>
+           mkLabel lret tscope <*>
            copyin
        ; return (ReturnedTo lret off)
        }
