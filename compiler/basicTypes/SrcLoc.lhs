@@ -56,6 +56,7 @@ module SrcLoc (
         -- ** Predicates on SrcSpan
         isGoodSrcSpan, isOneLineSpan,
         containsSpan,
+        isDumpSrcSpan,
 
         -- * Located
         Located,
@@ -357,6 +358,10 @@ containsSpan s1 s2
        <= (srcSpanStartLine s2, srcSpanStartCol s2)
     && (srcSpanEndLine s1, srcSpanEndCol s1)
        >= (srcSpanEndLine s2, srcSpanEndCol s2)
+
+-- | Tests whether the source span refers to a generated dump file
+isDumpSrcSpan :: RealSrcSpan -> Bool
+isDumpSrcSpan = isPrefixOf ".dump" . takeExtension . unpackFS . srcSpanFile
 
 \end{code}
 
