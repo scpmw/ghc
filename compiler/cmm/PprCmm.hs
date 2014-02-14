@@ -43,6 +43,7 @@ import BlockId ()
 import CLabel
 import Cmm
 import CmmUtils
+import DynFlags
 import FastString
 import Outputable
 import PprCmmDecl
@@ -182,7 +183,9 @@ pprNode node = pp_node <+> pp_debug
     pp_node :: SDoc
     pp_node = sdocWithDynFlags $ \dflags -> case node of
       -- label:
-      CmmEntry id -> ppr id <> colon
+      CmmEntry id tscope -> ppr id <> colon <+>
+         (sdocWithDynFlags $ \dflags ->
+           ppWhen (gopt Opt_PprShowTicks dflags) (text "//" <+> ppr tscope))
 
       -- // text
       CmmComment s -> text "//" <+> ftext s

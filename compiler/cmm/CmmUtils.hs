@@ -58,7 +58,7 @@ module CmmUtils(
         dataflowAnalFwdBlocks,
 
         -- * Ticks
-        blockTicks, annotateBlock
+        blockTicks
   ) where
 
 #include "HsVersions.h"
@@ -497,7 +497,7 @@ mapGraphNodes :: ( CmmNode C O -> CmmNode C O
                  , CmmNode O C -> CmmNode O C)
               -> CmmGraph -> CmmGraph
 mapGraphNodes funs@(mf,_,_) g =
-  ofBlockMap (entryLabel $ mf $ CmmEntry $ g_entry g) $ mapMap (mapBlock3' funs) $ toBlockMap g
+  ofBlockMap (entryLabel $ mf $ CmmEntry (g_entry g) []) $ mapMap (mapBlock3' funs) $ toBlockMap g
 
 mapGraphNodes1 :: (forall e x. CmmNode e x -> CmmNode e x) -> CmmGraph -> CmmGraph
 mapGraphNodes1 f = modifyGraph (mapGraph f)
@@ -581,7 +581,3 @@ blockTicks b = reverse $ foldBlockNodesF goStmt b []
         goStmt  (CmmTick t) ts = t:ts
         goStmt  _other      ts = ts
 
-annotateBlock :: [RawTickish] -> Block CmmNode C C -> Block CmmNode C C
-annotateBlock ts b = blockJoin hd (tstmts `blockAppend` mid) tl
-  where (hd, mid, tl) = blockSplit b
-        tstmts = foldr blockCons emptyBlock $ map CmmTick ts

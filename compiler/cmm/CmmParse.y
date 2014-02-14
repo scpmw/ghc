@@ -209,7 +209,7 @@ import StgCmmExtCode
 import CmmCallConv
 import StgCmmProf
 import StgCmmHeap
-import StgCmmMonad hiding ( getCode, getCodeR, emitLabel, emit, emitStore
+import StgCmmMonad hiding ( getCode, getCodeR, getCodeScoped, emitLabel, emit, emitStore
                           , emitAssign, emitOutOfLine, withUpdFrameOff
                           , getUpdFrameOff )
 import qualified StgCmmMonad as F
@@ -429,7 +429,7 @@ lits    :: { [CmmParse CmmExpr] }
 cmmproc :: { CmmParse () }
         : info maybe_conv maybe_formals maybe_body
                 { do ((entry_ret_label, info, stk_formals, formals), agraph) <-
-                       getCodeR $ loopDecls $ do {
+                       getCodeScoped $ loopDecls $ do {
                          (entry_ret_label, info, stk_formals) <- $1;
                          dflags <- getDynFlags;
                          formals <- sequence (fromMaybe [] $3);
@@ -1285,7 +1285,7 @@ withSourceNote :: Located a -> Located b -> CmmParse c -> CmmParse c
 withSourceNote a b parse = do
   name <- getName
   case combineSrcSpans (getLoc a) (getLoc b) of
-    RealSrcSpan span -> code (emitTick (SourceNote span name 0)) >> parse
+    RealSrcSpan span -> code (emitTick (SourceNote span name)) >> parse
     _other           -> parse
 
 -- -----------------------------------------------------------------------------
@@ -1333,7 +1333,7 @@ doSwitch mb_range scrut arms deflt
 
 forkLabelledCode :: CmmParse () -> CmmParse BlockId
 forkLabelledCode p = do
-  ag <- getCode p
+  (_,ag) <- getCodeScoped p
   l <- newBlockId
   emitOutOfLine l ag
   return l

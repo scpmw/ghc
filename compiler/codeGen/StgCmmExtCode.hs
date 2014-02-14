@@ -29,7 +29,7 @@ module StgCmmExtCode (
 
         code,
         emit, emitLabel, emitAssign, emitStore,
-        getCode, getCodeR,
+        getCode, getCodeR, getCodeScoped,
         emitOutOfLine,
         withUpdFrameOff, getUpdFrameOff
 )
@@ -216,7 +216,7 @@ emit :: CmmAGraph -> CmmParse ()
 emit = code . F.emit
 
 emitLabel :: BlockId -> CmmParse ()
-emitLabel = code. F.emitLabel
+emitLabel = code . F.emitLabel
 
 emitAssign :: CmmReg  -> CmmExpr -> CmmParse ()
 emitAssign l r = code (F.emitAssign l r)
@@ -234,7 +234,12 @@ getCodeR (EC ec) = EC $ \c e s -> do
   ((s', r), gr) <- F.getCodeR (ec c e s)
   return (s', (r,gr))
 
-emitOutOfLine :: BlockId -> CmmAGraph -> CmmParse ()
+getCodeScoped :: CmmParse a -> CmmParse (a, CmmAGraphScoped)
+getCodeScoped (EC ec) = EC $ \c e s -> do
+  ((s', r), gr) <- F.getCodeScoped (ec c e s)
+  return (s', (r,gr))
+
+emitOutOfLine :: BlockId -> CmmAGraphScoped -> CmmParse ()
 emitOutOfLine l g = code (F.emitOutOfLine l g)
 
 withUpdFrameOff :: UpdFrameOffset -> CmmParse () -> CmmParse ()
