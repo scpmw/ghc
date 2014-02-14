@@ -7,11 +7,8 @@ Requirements
 * A [Linux](http://kernel.org) distribution - preferably new enough to have perf-event, for getting nice
   low-level profiles.
 
-* [LLVM](http://llvm.org) installed - because that's currently the
-  only way to write debug meta data.
-
 * `libelf-dev` and `libdwarf-dev` (or similar) installed - because
-  that's the only way we can currently read debug data. Note that
+  that's how the runtime data reads DWARF. Note that
   if you compile GHC using dynamic linking (the default) you need
   a version of `libdwarf` that was compiled with `--enable-shared`.
   Getting there might involve compiling `libdwarf` manually. As a
@@ -27,9 +24,9 @@ Getting GHC
 First get a GHC source tree and a set of libraries compatible to GHC
 7.6:
 
-     $ git clone http://github.com/scpmw/ghc ghc-git 
+     $ git clone -b profiling-ncg http://github.com/scpmw/ghc ghc-git 
      $ cd ghc-git
-     $ ./sync-all -r git://git.haskell.org get
+     $ ./sync-all -r http://git.haskell.org/ get
 
 Make a configuration:
 
@@ -60,8 +57,8 @@ After installation, you should be able to put `$GHC_INSTALL_PREFIX`
 into the path and use the freshly compiled GHC to compile your program
 with profiling enabled:
 
-      $ ghc myProgram.hs -O2 -fllvm -rtsopts -eventlog
-      $ ./myProgram +RTS -ls -E -RTS
+      $ ghc myProgram.hs -O2 -rtsopts -eventlog
+      $ ./myProgram +RTS -ls -E
 
 Where `-ls` enables the eventlog output, and `-E` enables
 `perf_event`-based instruction profiling.
@@ -113,12 +110,6 @@ Hints and Known Problems
 
   Check the installation and that `GhcRtsWithDwarf = YES` is set in
   `mk/config.mk`.
-
-* If you see a lot of code that looks like `abcd_info` or similar
-  listed under the `(no Haskell)` pseudo module, this means that you
-  did not compile the module in question with `-fllvm`. Only the LLVM
-  backend can currently generate the DWARF debug information required
-  for the profiling framework to work.
 
 Feedback
 --------
