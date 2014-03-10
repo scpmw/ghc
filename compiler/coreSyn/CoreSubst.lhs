@@ -966,6 +966,10 @@ simple_app subst (Lam b e) (a:as)
   where
     (subst', b') = subst_opt_bndr subst b
     b2 = add_info subst' b b'
+simple_app subst (Tick t e) as
+  -- Okay to do "(Tick t e) x ==> Tick t (e x)"?
+  | tickishScoped t <= SoftScope
+  = mkTick t $ simple_app subst e as
 simple_app subst e as
   = foldl App (simple_opt_expr subst e) as
 

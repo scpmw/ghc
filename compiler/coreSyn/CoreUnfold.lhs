@@ -234,7 +234,8 @@ calcUnfoldingGuidance
         -> CoreExpr    -- Expression to look at
         -> (Arity, UnfoldingGuidance)
 calcUnfoldingGuidance dflags expr
-  = case collectBinders expr of { (bndrs, body) ->
+  = case stripTicksTop (not . tickishIsCode) expr of { (_, expr') ->
+    case collectBinders expr' of { (bndrs, body) ->
     let
         bOMB_OUT_SIZE = ufCreationThreshold dflags
                -- Bomb out if size gets bigger than this
@@ -264,7 +265,7 @@ calcUnfoldingGuidance dflags expr
                        | otherwise             = (+)
              -- See Note [Function and non-function discounts]
     in
-    (n_val_bndrs, guidance) }
+    (n_val_bndrs, guidance) } }
 \end{code}
 
 Note [Computing the size of an expression]

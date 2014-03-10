@@ -60,6 +60,7 @@ import FastString
 import Pair
 
 import Control.Monad    ( when )
+import Data.List        ( partition )
 \end{code}
 
 
@@ -894,6 +895,7 @@ preInlineUnconditionally dflags env top_lvl bndr rhs
         -- Sadly, not quite the same as exprIsHNF.
     canInlineInLam (Lit _)              = True
     canInlineInLam (Lam b e)            = isRuntimeVar b || canInlineInLam e
+    canInlineInLam (Tick t e)           = not (tickishIsCode t) && canInlineInLam e
     canInlineInLam _                    = False
       -- not ticks.  Counting ticks cannot be duplicated, and non-counting
       -- ticks around a Lam will disappear anyway.
@@ -1553,10 +1555,12 @@ combineIdenticalAlts case_bndr ((_con1,bndrs1,rhs1) : con_alts)
   | all isDeadBinder bndrs1                     -- Remember the default
   , length filtered_alts < length con_alts      -- alternative comes first
   = do  { tick (AltMerge case_bndr)
-        ; return ((DEFAULT, [], rhs1) : filtered_alts) }
+        ; return ((DEFAULT, [], mkTicks (concat tickss) rhs1) : filtered_alts) }
   where
-    filtered_alts = filterOut identical_to_alt1 con_alts
-    identical_to_alt1 (_con,bndrs,rhs) = all isDeadBinder bndrs && rhs `cheapEqExpr` rhs1
+    (eliminated_alts, filtered_alts) = partition identical_to_alt1 con_alts
+    cheapEqTicked = cheapEqExpr' tickishFloatable
+    identical_to_alt1 (_con,bndrs,rhs) = all isDeadBinder bndrs && rhs `cheapEqTicked` rhs1
+    tickss = map (fst . stripTicks tickishFloatable . thirdOf3) eliminated_alts
 
 combineIdenticalAlts _ alts = return alts
 \end{code}
@@ -1610,7 +1614,8 @@ mkCase, mkCase1, mkCase2
 
 mkCase dflags scrut outer_bndr alts_ty ((DEFAULT, _, deflt_rhs) : outer_alts)
   | gopt Opt_CaseMerge dflags
-  , Case (Var inner_scrut_var) inner_bndr _ inner_alts <- deflt_rhs
+  , (ticks, Case (Var inner_scrut_var) inner_bndr _ inner_alts)
+       <- stripTicksTop tickishFloatable deflt_rhs
   , inner_scrut_var == outer_bndr
   = do  { tick (CaseMerge outer_bndr)
 
@@ -1634,7 +1639,8 @@ mkCase dflags scrut outer_bndr alts_ty ((DEFAULT, _, deflt_rhs) : outer_alts)
                 -- When we merge, we must ensure that e1 takes
                 -- precedence over e2 as the value for A!
 
-        ; mkCase1 dflags scrut outer_bndr alts_ty merged_alts
+        ; fmap (mkTicks ticks) $
+          mkCase1 dflags scrut outer_bndr alts_ty merged_alts
         }
         -- Warning: don't call mkCase recursively!
         -- Firstly, there's no point, because inner alts have already had
@@ -1649,10 +1655,13 @@ mkCase dflags scrut bndr alts_ty alts = mkCase1 dflags scrut bndr alts_ty alts
 --------------------------------------------------
 
 mkCase1 _dflags scrut case_bndr _ alts@((_,_,rhs1) : _)      -- Identity case
-  | all identity_alt alts
+  | all identity_alt alts'
   = do { tick (CaseIdentity case_bndr)
-       ; return (re_cast scrut rhs1) }
+       ; return (mkTicks (concat tickss) $
+                 re_cast scrut rhs1) }
   where
+    tickss = map (fst . stripTicksTop tickishFloatable . thirdOf3) alts
+    alts' = map (third3 (snd . stripTicksTop tickishFloatable)) alts
     identity_alt (con, args, rhs) = check_eq rhs con args
 
     check_eq (Cast rhs co) con args         = not (any (`elemVarSet` tyCoVarsOfCo co) args)

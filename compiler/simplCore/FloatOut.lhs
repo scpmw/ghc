@@ -285,7 +285,7 @@ floatExpr lam@(Lam (TB _ lam_spec) _)
     (add_to_stats fs floats, floats, mkLams bndrs body') }
 
 floatExpr (Tick tickish expr)
-  | tickishScoped tickish
+  | tickishScoped tickish >= SoftScope
   = case (floatExpr expr)    of { (fs, floating_defns, expr') ->
     let
 	-- Annotate bindings floated outwards past an scc expression

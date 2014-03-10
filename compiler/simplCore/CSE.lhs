@@ -12,7 +12,8 @@ import CoreSubst
 import Var              ( Var )
 import Id               ( Id, idType, idInlineActivation, zapIdOccInfo )
 import CoreUtils        ( mkAltExpr
-                        , exprIsTrivial)
+                        , exprIsTrivial
+                        , stripTicks, mkTick)
 import Type             ( tyConAppArgs )
 import CoreSyn
 import Outputable
@@ -185,9 +186,9 @@ cseBind env (Rec pairs)
 
 cseRhs :: CSEnv -> (OutBndr, InExpr) -> (CSEnv, OutExpr)
 cseRhs env (id',rhs)
-  = case lookupCSEnv env rhs' of
+  = case lookupCSEnv env rhs'' of
         Nothing -> (extendCSEnv env rhs' id', rhs')
-        Just id -> (extendCSSubst env id' id, Var id)
+        Just id -> (extendCSSubst env id' id, foldr mkTick (Var id) ticks)
           -- In the Just case, we have
           --        x = rhs
           --        ...
@@ -200,14 +201,17 @@ cseRhs env (id',rhs)
     rhs' | isAlwaysActive (idInlineActivation id') = cseExpr env rhs
          | otherwise                               = rhs
                 -- See Note [CSE for INLINE and NOINLINE]
+    (ticks, rhs'') = stripTicks tickishFloatable rhs'
+
 
 tryForCSE :: CSEnv -> InExpr -> OutExpr
 tryForCSE env expr
-  | exprIsTrivial expr'                   = expr'       -- No point
-  | Just smaller <- lookupCSEnv env expr' = Var smaller
-  | otherwise                             = expr'
+  | exprIsTrivial expr'                    = expr'       -- No point
+  | Just smaller <- lookupCSEnv env expr'' = foldr mkTick (Var smaller) ticks
+  | otherwise                              = expr'
   where
     expr' = cseExpr env expr
+    (ticks, expr'') = stripTicks tickishFloatable expr'
 
 cseExpr :: CSEnv -> InExpr -> OutExpr
 cseExpr env (Type t)               = Type (substTy (csEnvSubst env) t)
@@ -293,10 +297,15 @@ lookupCSEnv (CS { cs_map = csmap }) expr
   = case lookupCoreMap csmap expr of
       Just (_,e) -> Just e
       Nothing    -> Nothing
+    -- We don't want to lose the source notes when a common sub
+    -- expression gets eliminated. Hence we push all (!) of them on
+    -- top of the replaced sub-expression. This is probably not too
+    -- useful in practice, but upholds our semantics.
 
 extendCSEnv :: CSEnv -> OutExpr -> Id -> CSEnv
 extendCSEnv cse expr id
-  = cse { cs_map = extendCoreMap (cs_map cse) expr (expr,id) }
+  = cse { cs_map = extendCoreMap (cs_map cse) sexpr (sexpr,id) }
+  where (_, sexpr) = stripTicks tickishFloatable expr
 
 csEnvSubst :: CSEnv -> Subst
 csEnvSubst = cs_subst

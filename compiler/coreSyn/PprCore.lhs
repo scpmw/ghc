@@ -29,6 +29,7 @@ import BasicTypes
 import Util
 import Outputable
 import FastString
+import SrcLoc      ( showUserRealSpan )
 \end{code}
 
 %************************************************************************
@@ -223,7 +224,10 @@ ppr_expr add_par (Let bind expr)
                 NonRec _ _ -> (sLit "let {")
 
 ppr_expr add_par (Tick tickish expr)
-  = add_par (sep [ppr tickish, pprCoreExpr expr])
+  = sdocWithDynFlags $ \dflags ->
+  if gopt Opt_PprShowTicks dflags
+  then add_par (sep [ppr tickish, pprCoreExpr expr])
+  else ppr_expr add_par expr
 
 pprCoreAlt :: OutputableBndr a => (AltCon, [a] , Expr a) -> SDoc
 pprCoreAlt (con, args, rhs)
@@ -510,6 +514,8 @@ instance Outputable id => Outputable (Tickish id) where
          (True,True)  -> hcat [ptext (sLit "scctick<"), ppr cc, char '>']
          (True,False) -> hcat [ptext (sLit "tick<"),    ppr cc, char '>']
          _            -> hcat [ptext (sLit "scc<"),     ppr cc, char '>']
+  ppr (SourceNote span _) =
+      hcat [ ptext (sLit "src<"), text (showUserRealSpan True span), char '>']
 \end{code}
 
 -----------------------------------------------------
