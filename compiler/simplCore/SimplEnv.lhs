@@ -31,7 +31,7 @@ module SimplEnv (
 
         -- Floats
         Floats, emptyFloats, isEmptyFloats, addNonRec, addFloats, extendFloats,
-        wrapFloats, setFloats, zapFloats, addRecFloats,
+        wrapFloats, setFloats, zapFloats, addRecFloats, mapFloats,
         doFloatFromRhs, getFloatBinds
     ) where
 
@@ -489,18 +489,18 @@ getFloatBinds (SimplEnv {seFloats = Floats bs _})
 isEmptyFloats :: SimplEnv -> Bool
 isEmptyFloats (SimplEnv {seFloats = Floats bs _})
   = isNilOL bs
-\end{code}
 
 -- mapFloats commented out: used only in a commented-out bit of Simplify,
 -- concerning ticks
 --
--- mapFloats :: SimplEnv -> ((Id,CoreExpr) -> (Id,CoreExpr)) -> SimplEnv
--- mapFloats env@SimplEnv { seFloats = Floats fs ff } fun
---    = env { seFloats = Floats (mapOL app fs) ff }
---    where
---     app (NonRec b e) = case fun (b,e) of (b',e') -> NonRec b' e'
---     app (Rec bs)     = Rec (map fun bs)
+mapFloats :: SimplEnv -> ((Id,CoreExpr) -> (Id,CoreExpr)) -> SimplEnv
+mapFloats env@SimplEnv { seFloats = Floats fs ff } fun
+   = env { seFloats = Floats (mapOL app fs) ff }
+   where
+    app (NonRec b e) = case fun (b,e) of (b',e') -> NonRec b' e'
+    app (Rec bs)     = Rec (map fun bs)
 
+\end{code}
 
 %************************************************************************
 %*                                                                      *

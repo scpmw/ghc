@@ -391,6 +391,7 @@ data GeneralFlag
    | Opt_ErrorSpans -- Include full span info in error messages,
                     -- instead of just the start position.
    | Opt_PprCaseAsLet
+   | Opt_PprShowTicks
 
    -- Suppress all coercions, them replacing with '...'
    | Opt_SuppressCoercions
@@ -426,6 +427,9 @@ data GeneralFlag
    -- safe haskell flags
    | Opt_DistrustAllPackages
    | Opt_PackageTrust
+
+   -- debugging flags
+   | Opt_Debug
 
    deriving (Eq, Show, Enum)
 
@@ -2501,6 +2505,10 @@ dynamic_flags = [
   , Flag "fno-safe-infer"   (noArg (\d -> d { safeInfer = False  } ))
   , Flag "fPIC"             (NoArg (setGeneralFlag Opt_PIC))
   , Flag "fno-PIC"          (NoArg (unSetGeneralFlag Opt_PIC))
+
+        ------ Debugging flags ----------------------------------------------
+  , Flag "g"                (NoArg (setGeneralFlag Opt_Debug))
+
  ]
  ++ map (mkFlag turnOn  ""     setGeneralFlag  ) negatableFlags
  ++ map (mkFlag turnOff "no-"  unSetGeneralFlag) negatableFlags
@@ -2652,7 +2660,8 @@ dFlags = [
   ( "suppress-idinfo",                  Opt_SuppressIdInfo,             nop),
   ( "suppress-type-signatures",         Opt_SuppressTypeSignatures,     nop),
   ( "suppress-uniques",                 Opt_SuppressUniques,            nop),
-  ( "ppr-case-as-let",                  Opt_PprCaseAsLet,               nop)]
+  ( "ppr-case-as-let",                  Opt_PprCaseAsLet,               nop),
+  ( "ppr-ticks",                        Opt_PprShowTicks,               nop)]
 
 -- | These @-f\<blah\>@ flags can all be reversed with @-fno-\<blah\>@
 fFlags :: [FlagSpec GeneralFlag]

@@ -13,7 +13,7 @@ import Prelude hiding (iterate, succ, unzip, zip)
 
 import Hoopl hiding (ChangeFlag)
 import Data.Bits
-import Data.Maybe (fromJust, fromMaybe)
+import Data.Maybe (fromMaybe)
 import qualified Data.List as List
 import Data.Word
 import Outputable

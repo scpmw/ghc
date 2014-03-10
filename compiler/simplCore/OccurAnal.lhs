@@ -22,7 +22,8 @@ module OccurAnal (
 
 import CoreSyn
 import CoreFVs
-import CoreUtils        ( exprIsTrivial, isDefaultAlt, isExpandableApp )
+import CoreUtils        ( exprIsTrivial, isDefaultAlt, isExpandableApp,
+                          stripTicksTop )
 import Id
 import Name( localiseName )
 import BasicTypes
@@ -41,6 +42,7 @@ import Util
 import Outputable
 import FastString
 import Data.List
+import Control.Arrow    ( second )
 \end{code}
 
 
@@ -1182,18 +1184,19 @@ we can sort them into the right place when doing dependency analysis.
 
 \begin{code}
 occAnal env (Tick tickish body)
+  | tickish `tickishScopesLike` SoftScope
+  = (usage, Tick tickish body')
+
   | Breakpoint _ ids <- tickish
-  = (mapVarEnv markInsideSCC usage
-         +++ mkVarEnv (zip ids (repeat NoOccInfo)), Tick tickish body')
+  = (usage_lam +++ mkVarEnv (zip ids (repeat NoOccInfo)), Tick tickish body')
     -- never substitute for any of the Ids in a Breakpoint
 
-  | tickishScoped tickish
-  = (mapVarEnv markInsideSCC usage, Tick tickish body')
-
   | otherwise
-  = (usage, Tick tickish body')
+  = (usage_lam, Tick tickish body')
   where
     !(usage,body') = occAnal env body
+    -- for a non-soft tick scope, we can inline lambdas only
+    usage_lam = mapVarEnv markInsideLam usage
 
 occAnal env (Cast expr co)
   = case occAnal env expr of { (usage, expr') ->
@@ -1205,6 +1208,7 @@ occAnal env (Cast expr co)
         -- then mark y as 'Many' so that we don't
         -- immediately inline y again.
     }
+
 \end{code}
 
 \begin{code}
@@ -1276,6 +1280,13 @@ occAnal env (Case scrut bndr ty alts)
         = (mkOneOcc env v True, Var v)  -- The 'True' says that the variable occurs
                                         -- in an interesting context; the case has
                                         -- at least one non-default alternative
+    occ_anal_scrut (Tick t e) alts
+        | t `tickishScopesLike` SoftScope
+          -- No reason to not look through all ticks here, but only
+          -- for soft-scoped ticks we can do so without having to
+          -- update returned occurance info (see occAnal)
+        = second (Tick t) $ occ_anal_scrut e alts
+
     occ_anal_scrut scrut _alts
         = occAnal (vanillaCtxt env) scrut    -- No need for rhsCtxt
 
@@ -1730,7 +1741,7 @@ mkAltEnv :: OccEnv -> CoreExpr -> Id -> (OccEnv, Maybe (Id, CoreExpr))
 --                  c) returns a proxy mapping, binding the scrutinee
 --                     to the case binder, if possible
 mkAltEnv env@(OccEnv { occ_gbl_scrut = pe }) scrut case_bndr
-  = case scrut of
+  = case snd (stripTicksTop (const True) scrut) of
       Var v           -> add_scrut v case_bndr'
       Cast (Var v) co -> add_scrut v (Cast case_bndr' (mkSymCo co))
                           -- See Note [Case of cast]
@@ -1844,12 +1855,9 @@ mkOneOcc env id int_cxt
   | otherwise
   = emptyDetails
 
-markMany, markInsideLam, markInsideSCC :: OccInfo -> OccInfo
+markMany, markInsideLam :: OccInfo -> OccInfo
 
 markMany _  = NoOccInfo
-
-markInsideSCC occ = markInsideLam occ
-  -- inside an SCC, we can inline lambdas only.
 
 markInsideLam (OneOcc _ one_br int_cxt) = OneOcc True one_br int_cxt
 markInsideLam occ                       = occ

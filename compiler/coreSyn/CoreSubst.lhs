@@ -971,6 +971,10 @@ simple_app subst (Var v) as
   | isCompulsoryUnfolding (idUnfolding v)
   -- See Note [Unfold compulsory unfoldings in LHSs]
   =  simple_app subst (unfoldingTemplate (idUnfolding v)) as
+simple_app subst (Tick t e) as
+  -- Okay to do "(Tick t e) x ==> Tick t (e x)"?
+  | t `tickishScopesLike` SoftScope
+  = mkTick t $ simple_app subst e as
 simple_app subst e as
   = foldl App (simple_opt_expr subst e) as
 

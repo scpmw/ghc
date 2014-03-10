@@ -53,6 +53,8 @@ import Outputable
 import Platform
 import FastString
 import Config
+import Name             ( NamedThing(..), nameSrcSpan )
+import SrcLoc           ( SrcSpan(..), realSrcLocSpan, mkRealSrcLoc )
 import Data.Bits
 import Data.List        ( mapAccumL )
 import Control.Monad
@@ -157,13 +159,14 @@ type CpeRhs  = CoreExpr    -- Non-terminal 'rhs'
 %************************************************************************
 
 \begin{code}
-corePrepPgm :: DynFlags -> HscEnv -> CoreProgram -> [TyCon] -> IO CoreProgram
-corePrepPgm dflags hsc_env binds data_tycons = do
+corePrepPgm :: HscEnv -> ModLocation -> CoreProgram -> [TyCon] -> IO CoreProgram
+corePrepPgm hsc_env mod_loc binds data_tycons = do
+    let dflags = hsc_dflags hsc_env
     showPass dflags "CorePrep"
     us <- mkSplitUniqSupply 's'
     initialCorePrepEnv <- mkInitialCorePrepEnv dflags hsc_env
 
-    let implicit_binds = mkDataConWorkers data_tycons
+    let implicit_binds = mkDataConWorkers dflags mod_loc data_tycons
             -- NB: we must feed mkImplicitBinds through corePrep too
             -- so that they are suitably cloned and eta-expanded
 
@@ -194,14 +197,27 @@ corePrepTopBinds initialCorePrepEnv binds
                                binds' <- go env' binds
                                return (bind' `appendFloats` binds')
 
-mkDataConWorkers :: [TyCon] -> [CoreBind]
+mkDataConWorkers :: DynFlags -> ModLocation -> [TyCon] -> [CoreBind]
 -- See Note [Data constructor workers]
 -- c.f. Note [Injecting implicit bindings] in TidyPgm
-mkDataConWorkers data_tycons
-  = [ NonRec id (Var id)        -- The ice is thin here, but it works
+mkDataConWorkers dflags mod_loc data_tycons
+  = [ NonRec id (tick_it (getName data_con) (Var id))
+                                -- The ice is thin here, but it works
     | tycon <- data_tycons,     -- CorePrep will eta-expand it
       data_con <- tyConDataCons tycon,
-      let id = dataConWorkId data_con ]
+      let id = dataConWorkId data_con
+    ]
+ where
+   -- If debugging, we try to put a source note on the worker. This is
+   -- useful especially for heap profiling.
+   tick_it name
+     | not (gopt Opt_Debug dflags)           = id
+     | RealSrcSpan span <- nameSrcSpan name  = Tick (SourceNote span nameStr)
+     | Just file <- ml_hs_file mod_loc       = Tick (SourceNote (dummySpan file) nameStr)
+     | otherwise                             = Tick (SourceNote (dummySpan "???") nameStr)
+     where nameStr = showSDoc dflags (ppr name)
+           dummySpan file = realSrcLocSpan $ mkRealSrcLoc (mkFastString file) 1 1
+
 \end{code}
 
 Note [Floating out of top level bindings]

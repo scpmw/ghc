@@ -35,7 +35,7 @@ import CoreSyn          -- All of it
 import CoreSubst
 import OccurAnal        ( occurAnalyseExpr )
 import CoreFVs          ( exprFreeVars, exprsFreeVars, bindFreeVars, rulesFreeVars )
-import CoreUtils        ( exprType, eqExpr )
+import CoreUtils        ( exprType, eqExpr, mkTick, stripTicksTop )
 import PprCore          ( pprRules )
 import Type             ( Type )
 import TcType           ( tcSplitTyConApp_maybe )
@@ -194,6 +194,8 @@ roughTopName (App f _) = roughTopName f
 roughTopName (Var f)   | isGlobalId f   -- Note [Care with roughTopName]
                        , isDataConWorkId f || idArity f > 0
                        = Just (idName f)
+roughTopName (Tick t e) | tickishFloatable t
+                        = roughTopName e
 roughTopName _ = Nothing
 
 ruleCantMatch :: [Maybe Name] -> [Maybe Name] -> Bool
@@ -476,8 +478,10 @@ matchRule :: DynFlags -> InScopeEnv -> (Activation -> Bool)
 matchRule dflags rule_env _is_active fn args _rough_args
           (BuiltinRule { ru_try = match_fn })
 -- Built-in rules can't be switched off, it seems
-  = case match_fn dflags rule_env fn args of
-        Just expr -> Just expr
+  = let -- See Note [Tick annotations in RULE matching]
+        (tickss, args') = unzip $ map (stripTicksTop tickishFloatable) args
+    in case match_fn dflags rule_env fn args' of
+        Just expr -> Just $ foldr mkTick expr (concat tickss)
         Nothing   -> Nothing
 
 matchRule _ in_scope is_active _ args rough_args
@@ -611,6 +615,12 @@ match :: RuleMatchEnv
       -> CoreExpr               -- Template
       -> CoreExpr               -- Target
       -> Maybe RuleSubst
+
+-- We look through certain ticks. See note [Tick annotations in RULE matching]
+match renv subst e1 (Tick t e2)
+  | tickishFloatable t
+  = match renv subst' e1 e2
+  where subst' = subst { rs_binds = rs_binds subst . mkTick t }
 
 -- See the notes with Unify.match, which matches types
 -- Everything is very similar for terms
@@ -893,10 +903,17 @@ Hence, (a) the guard (not (isLocallyBoundR v2))
 
 Note [Tick annotations in RULE matching]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We used to look through Notes in both template and expression being
-matched.  This would be incorrect for ticks, which we cannot discard,
-so we do not look through Ticks at all.  cf Note [Notes in call
-patterns] in SpecConstr
+
+We used to unconditionally look through Notes in both template and
+expression being matched. This is actually illegal for counting or
+cost-centre-scoped ticks, because we have no place to put them without
+changing entry counts and/or costs. So now we just fail the match in
+these cases.
+
+On the other hand, where we are allowed to insert new cost into the
+tick scope, we can float them upwards to the rule application site.
+
+cf Note [Notes in call patterns] in SpecConstr
 
 Note [Matching lets]
 ~~~~~~~~~~~~~~~~~~~~
