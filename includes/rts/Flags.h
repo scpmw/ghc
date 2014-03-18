@@ -100,6 +100,10 @@ struct PROFILING_FLAGS {
 
 # define HEAP_BY_CLOSURE_TYPE   8
 
+/* trace heap profiling */
+# define TRACE_HEAP_START       256
+# define TRACE_HEAP_BY_CODE_PTR (TRACE_HEAP_START+0)
+
     Time                heapProfileInterval; /* time between samples */
     nat                 heapProfileIntervalTicks; /* ticks between samples (derived) */
     rtsBool             includeTSOs;

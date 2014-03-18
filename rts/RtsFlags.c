@@ -300,6 +300,10 @@ usage_text[] = {
 "",
 "  -xt            Include threads (TSOs) in a heap profile",
 "",
+#if defined(TRACING)
+"  -hE      Heap residency profile to event-log",
+"",
+#endif
 "  -xc      Show current cost centre stack on raising an exception",
 # endif
 #endif /* PROFILING or PAR */
@@ -327,6 +331,9 @@ usage_text[] = {
 #if !defined(PROFILING)
 "",
 "  -h       Heap residency profile (output file <program>.hp)",
+#if defined(TRACING)
+"  -hE      Heap residency profile to event-log",
+#endif
 #endif
 "  -i<sec>  Time between heap profile samples (seconds, default: 0.1)",
 "",
@@ -1021,6 +1028,11 @@ error = rtsTrue;
                   case 'T':
                     RtsFlags.ProfFlags.doHeapProfile = HEAP_BY_CLOSURE_TYPE;
                     break;
+#ifdef TRACING
+                  case 'E':
+                    RtsFlags.ProfFlags.doHeapProfile = TRACE_HEAP_BY_CODE_PTR;
+                    break;
+#endif
                   default:
                     errorBelch("invalid heap profile option: %s",rts_argv[arg]);
                     error = rtsTrue;
