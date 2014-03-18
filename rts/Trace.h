@@ -204,6 +204,28 @@ void traceUserMsg(Capability *cap, char *msg);
 void traceUserMarker(Capability *cap, char *msg);
 
 /*
+ * Profiling
+ */
+
+#define SAMPLE_BY_CYCLE        0
+#define SAMPLE_BY_HEAP_ALLOC   1
+#define SAMPLE_BY_HEAP_LIFE    2
+#define SAMPLE_BY_CACHE        3
+#define SAMPLE_BY_CACHE_MISS   4
+#define SAMPLE_BY_BRANCH       5
+#define SAMPLE_BY_BRANCH_MISS  6
+#define SAMPLE_BY_STALLED_FE   7
+#define SAMPLE_BY_STALLED_BE   8
+
+#define SAMPLE_INSTR_PTR       0
+
+void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
+void traceSampleRange(void *low, void *high);
+void traceSamples(Capability *cap, StgBool own_cap,
+                  StgWord32 sample_by, StgWord32 sample_type,
+                  StgWord32 cnt, void **samples, nat *weights);
+
+/*
  * An event to record a Haskell thread's label/name
  * Used by GHC.Conc.labelThread
  */

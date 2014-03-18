@@ -137,6 +137,17 @@ void postTaskMigrateEvent (EventTaskId taskId,
 
 void postTaskDeleteEvent (EventTaskId taskId);
 
+/*
+ * Sample-based profiling
+ */
+
+void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
+void postSampleRange(void *low, void *high);
+
+void postSamples(Capability *cap, StgBool own_cap,
+                 StgWord32 sample_by, StgWord32 sample_type,
+                 StgWord32 cnt, void **samples, nat *weights);
+
 #else /* !TRACING */
 
 INLINE_HEADER void postSchedEvent (Capability *cap  STG_UNUSED,

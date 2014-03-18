@@ -859,7 +859,9 @@ StgWord16 word16LE(StgWord8 *p) {
 
 void dwarf_associate_debug_data(StgBool trace)
 {
-	(void)(trace); // unused
+#ifndef TRACING
+	(void) trace;
+#endif
 
 	// Go through available debugging data
 	StgWord8 *dbg = (StgWord8 *)dwarf_ghc_debug_data;
@@ -918,12 +920,22 @@ void dwarf_associate_debug_data(StgBool trace)
 		}
 
 		// Post data
+#ifdef TRACING
+		if (trace) {
+			traceDebugData(num, size, dbg);
+		}
+#endif
 		dbg += size;
 
 		// Post debug data of procedure. Note we might have
 		// multiple entries and therefore IP ranges!
 		if (!proc) continue;
 		do {
+#ifdef TRACING
+			if (trace) {
+				traceSampleRange(proc->low_pc, proc->high_pc);
+			}
+#endif
 			proc->id = proc_id;
 			proc->parent_id = proc_parent_id;
 			proc->debug_data = debug_data;
@@ -969,6 +981,11 @@ void dwarf_dump_tables(DwarfUnit *unit)
 		} else {
 			printf("%5lu: (null)\n", i);
 		}
+}
+
+void dwarf_trace_debug_data(void)
+{
+	dwarf_associate_debug_data(1);
 }
 
 void dwarf_init_lookup(void)

@@ -49,6 +49,7 @@ struct DwarfProc_ {
 extern DwarfUnit *dwarf_units;
 
 void dwarf_load(void);
+void dwarf_trace_debug_data(void);
 DwarfUnit *dwarf_get_unit(char *name);
 DwarfProc *dwarf_get_proc(DwarfUnit *unit, char *name);
 void dwarf_free(void);
