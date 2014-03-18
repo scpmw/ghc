@@ -349,6 +349,8 @@ wanteds = concat
           ,structField C    "Capability" "context_switch"
           ,structField C    "Capability" "interrupt"
           ,structField C    "Capability" "sparks"
+          ,structField C    "Capability" "heap_ip_sample_count"
+          ,structField C    "Capability" "heap_ip_samples"
 
           ,structField Both "bdescr" "start"
           ,structField Both "bdescr" "free"

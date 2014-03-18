@@ -93,6 +93,10 @@ struct Capability_ {
     // reset after we have executed the context switch.
     int interrupt;
 
+    // Heap instruction pointer profiling
+    int heap_ip_sample_count;
+    void *heap_ip_samples[4096];
+
 #if defined(THREADED_RTS)
     // Worker Tasks waiting in the wings.  Singly-linked.
     Task *spare_workers;
