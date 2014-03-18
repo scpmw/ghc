@@ -79,7 +79,10 @@ static DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name, Dwarf_Addr low_pc,
 
 StgWord16 word16LE(StgWord8 *p);
 
-void dwarf_associate_debug_data(StgBool trace);
+static void dwarf_associate_debug_data(StgBool trace);
+#ifdef TRACING
+static void dwarf_trace_unaccounted(DwarfUnit *unit, StgBool put_module);
+#endif
 
 #ifndef USE_DL_ITERATE_PHDR
 
@@ -806,6 +809,7 @@ DwarfProc *dwarf_new_proc(DwarfUnit *unit, char *name,
 	proc->high_pc = high_pc_ptr;
 	proc->source = source;
 	proc->debug_data = NULL;
+	proc->copied = 0;
 
 	proc->next = (after ? after->next : unit->procs);
 	*(after ? &after->next : &unit->procs) = proc;
@@ -859,7 +863,9 @@ StgWord16 word16LE(StgWord8 *p) {
 
 void dwarf_associate_debug_data(StgBool trace)
 {
-	(void)(trace); // unused
+#ifndef TRACING
+	(void) trace;
+#endif
 
 	// Go through available debugging data
 	StgWord8 *dbg = (StgWord8 *)dwarf_ghc_debug_data;
@@ -918,12 +924,23 @@ void dwarf_associate_debug_data(StgBool trace)
 		}
 
 		// Post data
+#ifdef TRACING
+		if (trace) {
+			traceDebugData(num, size, dbg);
+		}
+#endif
 		dbg += size;
 
 		// Post debug data of procedure. Note we might have
 		// multiple entries and therefore IP ranges!
 		if (!proc) continue;
 		do {
+#ifdef TRACING
+			if (trace) {
+				traceSampleRange(proc->low_pc, proc->high_pc);
+				proc->copied = 1;
+			}
+#endif
 			proc->id = proc_id;
 			proc->parent_id = proc_parent_id;
 			proc->debug_data = debug_data;
@@ -931,6 +948,14 @@ void dwarf_associate_debug_data(StgBool trace)
 		}
         while (proc && !strcmp(proc_name, proc->name));
 	}
+
+#ifdef TRACING
+	// Add all left-over DWARF/symbol table entries that we did not
+	// find anything about in .ghc_debug
+	if (trace && unit) {
+		dwarf_trace_unaccounted(unit, 0);
+	}
+#endif
 
 }
 
@@ -970,6 +995,43 @@ void dwarf_dump_tables(DwarfUnit *unit)
 			printf("%5lu: (null)\n", i);
 		}
 }
+
+#ifdef TRACING
+void dwarf_trace_debug_data(void)
+{
+
+	// Align as much DWARF data with debug data as possible
+	dwarf_associate_debug_data(1);
+
+	DwarfUnit *unit;
+	for (unit = dwarf_units; unit; unit = unit->next) {
+		dwarf_trace_unaccounted(unit, 1);
+	}
+
+}
+
+void dwarf_trace_unaccounted(DwarfUnit *unit, StgBool put_module)
+{
+	DwarfProc *proc;
+
+	for (proc = unit->procs; proc; proc = proc->next) {
+		if (!proc->debug_data) {
+
+			// Need to put module header?
+			if (put_module) {
+				traceDebugModule(unit->name);
+				put_module = 0;
+			}
+
+			// Print everything we know about the procedure
+			traceDebugBlock(proc->name);
+			traceSampleRange(proc->low_pc, proc->high_pc);
+			proc->copied = 1;
+
+		}
+    }
+}
+#endif
 
 void dwarf_init_lookup(void)
 {
