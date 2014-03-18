@@ -128,6 +128,7 @@ struct PROFILING_FLAGS {
 #define TRACE_STDERR    2
 
 struct TRACE_FLAGS {
+#ifdef TRACING
     int tracing;
     rtsBool timestamp;      /* show timestamp in stderr output */
     rtsBool scheduler;      /* trace scheduler events */
@@ -135,6 +136,9 @@ struct TRACE_FLAGS {
     rtsBool sparks_sampled; /* trace spark events by a sampled method */
     rtsBool sparks_full;    /* trace spark events 100% accurately */
     rtsBool user;           /* trace user events (emitted from Haskell code) */
+
+    rtsBool allocSampling;  /* collect code pointers from allocation sites */
+#endif
 };
 
 struct CONCURRENT_FLAGS {

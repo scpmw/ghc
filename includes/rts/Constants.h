@@ -294,4 +294,11 @@
 
 #define MAX_SPARE_WORKERS 6
 
+/* Maximum number of heap allocation samples to collect per
+ * Cap. Should be more than block count of typical allocation area, so
+ * it is guaranteed to be flushed before we ever fill it.
+ */
+
+#define HEAP_ALLOC_MAX_SAMPLES 4096
+
 #endif /* RTS_CONSTANTS_H */

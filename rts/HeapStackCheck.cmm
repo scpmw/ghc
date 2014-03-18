@@ -72,7 +72,13 @@ import LeaveCriticalSection;
  * will either increase the size of our stack, or raise an exception if
  * the stack is already too big.
  */
- 
+
+#ifdef TRACING
+#define IF_TRACING(x) x
+#else
+#define IF_TRACING(x)
+#endif
+
 #define PRE_RETURN(why,what_next)			\
   StgTSO_what_next(CurrentTSO) = what_next::I16;	\
   StgRegTable_rRet(BaseReg) = why;           	        \
@@ -81,10 +87,13 @@ import LeaveCriticalSection;
 /* Remember that the return address is *removed* when returning to a
  * ThreadRunGHC thread.
  */
-
 stg_gc_noregs
 {
     W_ ret;
+#ifdef TRACING
+    W_ n; W_ sample; sample = R1;
+#define Capability_heap_sample(cap,n) W_[Capability_heap_ip_samples(cap)+WDS(n)]
+#endif
 
     DEBUG_ONLY(foreign "C" heapCheckFail());
     if (Hp > HpLim) {
@@ -93,6 +102,15 @@ stg_gc_noregs
                 ret = ThreadYielding;
                 goto sched;
         }
+
+#ifdef TRACING
+        n = Capability_heap_ip_sample_count(MyCapability());
+        if (n < HEAP_ALLOC_MAX_SAMPLES) {
+            Capability_heap_ip_sample_count(MyCapability()) = n+1;
+            Capability_heap_sample(MyCapability(), n) = sample;
+        }
+#endif
+
         if (HpAlloc <= BLOCK_SIZE
             && bdescr_link(CurrentNursery) != NULL) {
             HpAlloc = 0;
@@ -161,7 +179,8 @@ INFO_TABLE_RET ( stg_enter, RET_SMALL, W_ info_ptr, P_ closure )
 
 __stg_gc_enter_1 (P_ node)
 {
-    jump stg_gc_noregs (stg_enter_info, node) ();
+    jump stg_gc_noregs (stg_enter_info, node)
+        (IF_TRACING(%ENTRY_CODE(%INFO_PTR(UNTAG(node)))));
 }
 
 /* -----------------------------------------------------------------------------
@@ -174,25 +193,25 @@ __stg_gc_enter_1 (P_ node)
 
 stg_gc_prim (W_ fun)
 {
-    call stg_gc_noregs ();
+    call stg_gc_noregs (IF_TRACING(fun));
     jump fun();
 }
 
 stg_gc_prim_p (P_ arg, W_ fun)
 {
-    call stg_gc_noregs ();
+    call stg_gc_noregs (IF_TRACING(fun));
     jump fun(arg);
 }
 
 stg_gc_prim_pp (P_ arg1, P_ arg2, W_ fun)
 {
-    call stg_gc_noregs ();
+    call stg_gc_noregs (IF_TRACING(fun));
     jump fun(arg1,arg2);
 }
 
 stg_gc_prim_n (W_ arg, W_ fun)
 {
-    call stg_gc_noregs ();
+    call stg_gc_noregs (IF_TRACING(fun));
     jump fun(arg);
 }
 
@@ -218,7 +237,8 @@ stg_gc_prim_p_ll
     Sp(2) = fun;
     Sp(1) = arg;
     Sp(0) = stg_gc_prim_p_ll_info;
-    jump stg_gc_noregs [];
+    IF_TRACING(R1 = fun;)
+    jump stg_gc_noregs [IF_TRACING(R1)];
 }
 
 /* -----------------------------------------------------------------------------
@@ -300,28 +320,32 @@ INFO_TABLE_RET ( stg_ret_l, RET_SMALL, W_ info_ptr, L_ l )
 
 stg_gc_unpt_r1 return (P_ ptr) /* NB. return convention */
 {
-    jump stg_gc_noregs (stg_ret_p_info, ptr) ();
+    jump stg_gc_noregs (stg_ret_p_info, ptr)
+        (IF_TRACING(%ENTRY_CODE(Sp(0))));
 }
 
 /*-- R1 is unboxed -------------------------------------------------- */
 
 stg_gc_unbx_r1 return (W_ nptr) /* NB. return convention */
 {
-    jump stg_gc_noregs (stg_ret_n_info, nptr) ();
+    jump stg_gc_noregs (stg_ret_n_info, nptr)
+        (IF_TRACING(%ENTRY_CODE(Sp(0))));
 }
 
 /*-- F1 contains a float ------------------------------------------------- */
 
 stg_gc_f1 return (F_ f)
 {
-    jump stg_gc_noregs (stg_ret_f_info, f) ();
+    jump stg_gc_noregs (stg_ret_f_info, f)
+        (IF_TRACING(%ENTRY_CODE(Sp(0))));
 }
 
 /*-- D1 contains a double ------------------------------------------------- */
 
 stg_gc_d1 return (D_ d)
 {
-    jump stg_gc_noregs (stg_ret_d_info, d) ();
+    jump stg_gc_noregs (stg_ret_d_info, d)
+        (IF_TRACING(%ENTRY_CODE(Sp(0))));
 }
 
 
@@ -329,26 +353,27 @@ stg_gc_d1 return (D_ d)
 
 stg_gc_l1 return (L_ l)
 {
-    jump stg_gc_noregs (stg_ret_l_info, l) ();
+    jump stg_gc_noregs (stg_ret_l_info, l)
+        (IF_TRACING(%ENTRY_CODE(Sp(0))));
 }
 
 /*-- Unboxed tuples with multiple pointers -------------------------------- */
 
 stg_gc_pp return (P_ arg1, P_ arg2)
 {
-    call stg_gc_noregs();
+    call stg_gc_noregs(IF_TRACING(%ENTRY_CODE(Sp(0))));
     return (arg1,arg2);
 }
 
 stg_gc_ppp return (P_ arg1, P_ arg2, P_ arg3)
 {
-    call stg_gc_noregs();
+    call stg_gc_noregs(IF_TRACING(%ENTRY_CODE(Sp(0))));
     return (arg1,arg2,arg3);
 }
 
 stg_gc_pppp return (P_ arg1, P_ arg2, P_ arg3, P_ arg4)
 {
-    call stg_gc_noregs();
+    call stg_gc_noregs(IF_TRACING(%ENTRY_CODE(Sp(0))));
     return (arg1,arg2,arg3,arg4);
 }
 
@@ -414,7 +439,8 @@ __stg_gc_fun /* explicit stack */
     Sp(2) = R1;
     Sp(1) = size;
     Sp(0) = stg_gc_fun_info;
-    jump stg_gc_noregs [];
+    IF_TRACING(R1 = %GET_ENTRY(UNTAG(R1));)
+    jump stg_gc_noregs [IF_TRACING(R1)];
 #else
     W_ type;
     type = TO_W_(StgFunInfoExtra_fun_type(info));
@@ -426,7 +452,8 @@ __stg_gc_fun /* explicit stack */
         Sp(1) = size;
         Sp(0) = stg_gc_fun_info;
         // DEBUG_ONLY(foreign "C" debugBelch("stg_fun_gc_gen(ARG_GEN)"););
-        jump stg_gc_noregs [];
+        IF_TRACING(R1 = %GET_ENTRY(UNTAG(R1));)
+        jump stg_gc_noregs [IF_TRACING(R1)];
     } else { 
         jump W_[stg_stack_save_entries + WDS(type)] [*]; // all regs live
 	    // jumps to stg_gc_noregs after saving stuff

@@ -400,6 +400,14 @@ run_thread:
 
     startHeapProfTimer();
 
+#ifdef TRACING
+    if (cap->heap_ip_sample_count) {
+        traceSamples(cap, 1, SAMPLE_BY_HEAP_ALLOC, SAMPLE_INSTR_PTR,
+                     cap->heap_ip_sample_count, cap->heap_ip_samples, NULL);
+        cap->heap_ip_sample_count = 0;
+    }
+#endif
+
     // ----------------------------------------------------------------------
     // Run the current thread 
 

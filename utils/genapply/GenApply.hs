@@ -893,7 +893,12 @@ genStackSave regstatus args =
                 text "Sp(2) = R1;",
                 text "Sp(1) =" <+> int stk_args <> semi,
                 text "Sp(0) = stg_gc_fun_info;",
-                text "jump stg_gc_noregs [];"
+                text "#ifdef TRACING",
+                text "R1 = %GET_ENTRY(UNTAG(R1));",
+                text "jump stg_gc_noregs [R1];",
+                text "#else",
+                text "jump stg_gc_noregs [];",
+                text "#endif"
                 ]
 
    std_frame_size = 3 -- the std bits of the frame. See StgRetFun in Closures.h,

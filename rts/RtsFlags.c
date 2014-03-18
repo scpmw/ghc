@@ -29,6 +29,10 @@
 #include <sys/types.h>
 #endif
 
+#ifdef TRACING
+#include "Trace.h"
+#endif
+
 // Flag Structure
 RTS_FLAGS RtsFlags;
 
@@ -185,6 +189,8 @@ void initRtsFlagsDefaults(void)
     RtsFlags.TraceFlags.sparks_sampled= rtsFalse;
     RtsFlags.TraceFlags.sparks_full   = rtsFalse;
     RtsFlags.TraceFlags.user          = rtsFalse;
+
+    RtsFlags.TraceFlags.allocSampling = rtsFalse;
 #endif
 
 #ifdef PROFILING
@@ -402,6 +408,11 @@ usage_text[] = {
 "            e - cache miss and branch misprediction events",
 "            +PAPI_EVENT   - collect papi preset event PAPI_EVENT",
 "            #NATIVE_EVENT - collect native event NATIVE_EVENT (in hex)",
+#endif
+#ifdef TRACING
+"  -E[<x>]   Sample instruction pointers for profiling (use with -l)",
+"            Samples are taken at intervals of <p> by <x>:",
+"             a   - heap allocation",
 #endif
 "",
 "RTS options may also be specified using the GHCRTS environment variable.",
@@ -772,6 +783,23 @@ error = rtsTrue;
                   break;
                 default:
                   bad_option( rts_argv[arg] );
+                }
+                break;
+#endif
+
+#ifdef TRACING
+            case 'E':
+                OPTION_UNSAFE;
+                {
+                    char *p = rts_argv[arg] + 2;
+                    switch(*p) {
+                    case 0:
+                    case 'a':
+                        RtsFlags.TraceFlags.allocSampling = SAMPLE_BY_HEAP_ALLOC;
+                        break;
+                    default:
+                        bad_option(rts_argv[arg]);
+                    }
                 }
                 break;
 #endif

@@ -290,6 +290,21 @@ initCapability( Capability *cap, nat i )
     cap->r.rCCCS = NULL;
 #endif
 
+#ifdef TRACING
+    if (RtsFlags.TraceFlags.allocSampling) {
+        switch(RtsFlags.TraceFlags.allocSampling) {
+        case SAMPLE_BY_HEAP_ALLOC: cap->heap_ip_sample_count = 0; break;
+        default: barf("Unknown allocation sampling method %d", RtsFlags.TraceFlags.allocSampling);
+        }
+        cap->heap_ip_samples = stgMallocBytes(
+            sizeof(void *) * HEAP_ALLOC_MAX_SAMPLES,
+            "initCapability");
+    } else {
+        cap->heap_ip_sample_count = HEAP_ALLOC_MAX_SAMPLES; // "full"
+        cap->heap_ip_samples = NULL;
+    }
+#endif
+
     traceCapCreate(cap);
     traceCapsetAssignCap(CAPSET_OSPROCESS_DEFAULT, i);
     traceCapsetAssignCap(CAPSET_CLOCKDOMAIN_DEFAULT, i);
