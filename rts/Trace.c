@@ -709,6 +709,47 @@ void traceUserMsg(Capability *cap, char *msg)
     traceFormatUserMsg(cap, "%s", msg);
 }
 
+StgWord nextTaskId;
+
+StgWord traceCreateTask(Capability *cap)
+{
+    StgWord taskId = atomic_inc(&nextTaskId,1);
+    if (eventlog_enabled)
+        postCreateTask(cap, taskId);
+    return taskId;
+}
+
+void traceStartTask(Capability *cap, StgWord taskId)
+{
+    if (cap->currentTask)
+        postStopTask(cap, cap->currentTask);
+    cap->currentTask = taskId;
+    if (eventlog_enabled)
+        postStartTask(cap, taskId);
+}
+
+void traceStopTask(Capability *cap, StgWord taskId)
+{
+    if (cap->currentTask == taskId) {
+        if (eventlog_enabled)
+            postStopTask(cap, taskId);
+        cap->currentTask = 0;
+    } else {
+        errorBelch("Atempted to stop task id %d without having been started!", taskId);
+    }
+}
+
+StgWord traceGetTaskId(Capability *cap)
+{
+    return cap->currentTask;
+}
+
+void traceDependTask(Capability *cap, StgWord taskId1, StgWord taskId2)
+{
+    if (eventlog_enabled)
+        postDependTask(cap, taskId1, taskId2);
+}
+
 void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)
 {
     if (eventlog_enabled) {

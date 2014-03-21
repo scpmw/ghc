@@ -1364,6 +1364,11 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(stg_traceCcszh)                                     \
       SymI_HasProto(stg_traceEventzh)                                   \
       SymI_HasProto(stg_traceMarkerzh)                                  \
+      SymI_HasProto(stg_createTaskzh)                                   \
+      SymI_HasProto(stg_startTaskzh)                                    \
+      SymI_HasProto(stg_stopTaskzh)                                     \
+      SymI_HasProto(stg_dependOnTaskzh)                                 \
+      SymI_HasProto(stg_getTaskIdzh)                                    \
       SymI_HasProto(getMonotonicNSec)                                   \
       SymI_HasProto(lockFile)                                           \
       SymI_HasProto(unlockFile)                                         \

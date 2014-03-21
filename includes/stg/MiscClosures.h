@@ -423,6 +423,12 @@ RTS_FUN_DECL(stg_traceCcszh);
 RTS_FUN_DECL(stg_traceEventzh);
 RTS_FUN_DECL(stg_traceMarkerzh);
 
+RTS_FUN_DECL(stg_createTaskzh);
+RTS_FUN_DECL(stg_startTaskzh);
+RTS_FUN_DECL(stg_stopTaskzh);
+RTS_FUN_DECL(stg_dependOnTaskzh);
+RTS_FUN_DECL(stg_getTaskIdzh);
+
 /* Other misc stuff */
 // See wiki:Commentary/Compiler/Backends/PprC#Prototypes
 

@@ -112,6 +112,10 @@ char *EventDesc[] = {
   [EVENT_DEBUG_CORE]          = "Debug Core",
   [EVENT_DEBUG_SAMPLE_RANGE]  = "Debug Pointer Range",
   [EVENT_DEBUG_SAMPLES]       = "Debug samples",
+  [EVENT_TASK_NEW]            = "Task creation",
+  [EVENT_TASK_START]          = "Task start",
+  [EVENT_TASK_STOP]           = "Task suspension",
+  [EVENT_TASK_DEPEND]         = "Task dependency",
 };
 
 // Event type. 
@@ -348,6 +352,12 @@ static StgWord16 getEventSize(EventTypeNum t)
 
     case EVENT_WALL_CLOCK_TIME: // (capset, unix_epoch_seconds, nanoseconds)
         return sizeof(EventCapsetID) + sizeof(StgWord64) + sizeof(StgWord32);
+
+    case EVENT_TASK_NEW: case EVENT_TASK_START: case EVENT_TASK_STOP:
+        return sizeof(StgWord32);
+
+    case EVENT_TASK_DEPEND:
+        return sizeof(StgWord32) + sizeof(StgWord32);
 
     default:
         return EVENT_SIZE_DEPRECATED; /* ignore deprecated events */
@@ -1064,6 +1074,43 @@ void postCapMsg(Capability *cap, char *msg, va_list ap)
 void postUserMsg(Capability *cap, char *msg, va_list ap)
 {
     postLogMsg(&capEventBuf[cap->no], EVENT_USER_MSG, msg, ap);
+}
+
+void postCreateTask(Capability *cap, StgWord taskId)
+{
+    EventsBuf *eb = &capEventBuf[cap->no];
+    if (!ensureRoomForEvent(eb, EVENT_TASK_NEW))
+        return;
+    postEventHeader(eb, EVENT_TASK_NEW);
+    postWord32(eb, taskId);
+}
+
+void postStartTask(Capability *cap, StgWord taskId)
+{
+    EventsBuf *eb = &capEventBuf[cap->no];
+    if (!ensureRoomForEvent(eb, EVENT_TASK_START))
+        return;
+    postEventHeader(eb, EVENT_TASK_START);
+    postWord32(eb, taskId);
+}
+
+void postStopTask(Capability *cap, StgWord taskId)
+{
+    EventsBuf *eb = &capEventBuf[cap->no];
+    if (!ensureRoomForEvent(eb, EVENT_TASK_STOP))
+        return;
+    postEventHeader(eb, EVENT_TASK_STOP);
+    postWord32(eb, taskId);
+}
+
+void postDependTask(Capability *cap, StgWord taskId1, StgWord taskId2)
+{
+    EventsBuf *eb = &capEventBuf[cap->no];
+    if (!ensureRoomForEvent(eb, EVENT_TASK_DEPEND))
+        return;
+    postEventHeader(eb, EVENT_TASK_DEPEND);
+    postWord32(eb, taskId1);
+    postWord32(eb, taskId2);
 }
 
 void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)

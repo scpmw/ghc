@@ -135,6 +135,12 @@ struct Capability_ {
     StgTRecChunk *free_trec_chunks;
     StgTRecHeader *free_trec_headers;
     nat transaction_tokens;
+
+#ifdef TRACING
+    // Currently run task. 0 for no task run.
+    StgWord currentTask;
+#endif // TRACING
+
 } // typedef Capability is defined in RtsAPI.h
   // We never want a Capability to overlap a cache line with anything
   // else, so round it up to a cache line size:

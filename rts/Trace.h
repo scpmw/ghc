@@ -191,7 +191,7 @@ void traceCap_(Capability *cap, char *msg, ...);
 
 void trace_(char *msg, ...);
 
-/* 
+/*
  * A message or event emitted by the program
  * Used by Debug.Trace.{traceEvent, traceEventIO}
  */
@@ -202,6 +202,16 @@ void traceUserMsg(Capability *cap, char *msg);
  * Used by Debug.Trace.{traceMarker, traceMarkerIO}
  */
 void traceUserMarker(Capability *cap, char *msg);
+
+/*
+ * Tasks
+ */
+
+StgWord traceCreateTask(Capability *cap);
+void traceStartTask(Capability *cap, StgWord taskId);
+void traceStopTask(Capability *cap, StgWord taskId);
+void traceDependTask(Capability *cap, StgWord taskId1, StgWord taskId2);
+StgWord traceGetTaskId(Capability *cap);
 
 /*
  * Profiling

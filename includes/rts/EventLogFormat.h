@@ -182,12 +182,17 @@
 #define EVENT_DEBUG_SAMPLE_RANGE  204
 #define EVENT_DEBUG_SAMPLES       205
 
+#define EVENT_TASK_NEW            210
+#define EVENT_TASK_START          211
+#define EVENT_TASK_STOP           212
+#define EVENT_TASK_DEPEND         213
+
 /*
  * The highest event code +1 that ghc itself emits. Note that some event
  * ranges higher than this are reserved but not currently emitted by ghc.
  * This must match the size of the EventDesc[] array in EventLog.c
  */
-#define NUM_GHC_EVENT_TAGS        206
+#define NUM_GHC_EVENT_TAGS        214
 
 #if 0  /* DEPRECATED EVENTS: */
 /* we don't actually need to record the thread, it's implicit */

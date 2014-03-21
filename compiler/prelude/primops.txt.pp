@@ -2716,6 +2716,38 @@ primop PrefetchAddrOp0 "prefetchAddr0#" GenPrimOp
 
 
 
+#define TaskID Word#
+
+primop  CreateTaskOp "createTask#" GenPrimOp
+   State# s -> (# State# s, TaskID #)
+   with
+   has_side_effects = True
+   out_of_line      = True
+
+primop  StartTaskOp "startTask#" GenPrimOp
+   TaskID -> State# s -> State# s
+   with
+   has_side_effects = True
+   out_of_line      = True
+
+primop  StopTaskOp "stopTask#" GenPrimOp
+   TaskID -> State# s -> State# s
+   with
+   has_side_effects = True
+   out_of_line      = True
+
+primop  DependTaskOp "dependOnTask#" GenPrimOp
+   TaskID -> TaskID -> State# s -> State# s
+   with
+   has_side_effects = True
+   out_of_line      = True
+
+primop  GetTaskIdOp "getTaskId#" GenPrimOp
+   State# s -> (# State# s, TaskID #)
+   with
+   has_side_effects = True
+   out_of_line      = True
+
 ------------------------------------------------------------------------
 ---                                                                  ---
 ------------------------------------------------------------------------

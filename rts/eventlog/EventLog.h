@@ -148,6 +148,15 @@ void postSamples(Capability *cap, StgBool own_cap,
                  StgWord32 sample_by, StgWord32 sample_type,
                  StgWord32 cnt, void **samples, nat *weights);
 
+/*
+ * Tasks
+ */
+
+void postCreateTask(Capability *cap, StgWord taskId);
+void postStartTask(Capability *cap, StgWord taskId);
+void postStopTask(Capability *cap, StgWord taskId);
+void postDependTask(Capability *cap, StgWord taskId1, StgWord taskId2);
+
 #else /* !TRACING */
 
 INLINE_HEADER void postSchedEvent (Capability *cap  STG_UNUSED,

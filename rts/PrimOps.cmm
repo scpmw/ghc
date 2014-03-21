@@ -2219,3 +2219,47 @@ stg_traceMarkerzh ( W_ msg )
    return ();
 }
 
+stg_createTaskzh ()
+{
+#if defined(TRACING)
+   W_ task;
+   (task) = foreign "C" traceCreateTask(MyCapability() "ptr");
+   return (task);
+#else
+   return (0);
+#endif
+}
+
+stg_startTaskzh ( W_ task )
+{
+#if defined(TRACING)
+   foreign "C" traceStartTask(MyCapability() "ptr", task);
+#endif
+   return ();
+}
+
+stg_stopTaskzh ( W_ task )
+{
+#if defined(TRACING)
+   foreign "C" traceStopTask(MyCapability() "ptr", task);
+#endif
+   return ();
+}
+
+stg_dependOnTaskzh ( W_ task1, W_ task2 )
+{
+#if defined(TRACING)
+   foreign "C" traceDependTask(MyCapability() "ptr", task1, task2);
+#endif
+   return ();
+}
+
+stg_getTaskIdzh ( W_ task )
+{
+#if defined(TRACING)
+   (task) = foreign "C" traceGetTaskId(MyCapability() "ptr");
+   return (task);
+#else
+   return (0);
+#endif
+}
