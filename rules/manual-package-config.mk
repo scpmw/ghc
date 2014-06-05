@@ -18,6 +18,7 @@ $(call profStart, manual-package-config($1))
 $1/dist/package.conf.inplace : $1/package.conf.in $$$$(ghc-pkg_INPLACE) | $$$$(dir $$$$@)/.
 	$$(CPP) $$(RAWCPP_FLAGS) -P \
 		-DTOP='"$$(TOP)"' \
+		-DDWARF_LIB_DIR_S='"$$(DwarfLibDir)"' \
 		$$($1_PACKAGE_CPP_OPTS) \
 		-x c $$(addprefix -I,$$(GHC_INCLUDE_DIRS)) $$< -o $$@.raw
 	grep -v '^#pragma GCC' $$@.raw | \
@@ -33,6 +34,7 @@ $1/dist/package.conf.install: | $$$$(dir $$$$@)/.
 		-DINSTALLING \
 		-DLIB_DIR='"$$(if $$(filter YES,$$(RelocatableBuild)),$$$$topdir,$$(ghclibdir))"' \
 		-DINCLUDE_DIR='"$$(if $$(filter YES,$$(RelocatableBuild)),$$$$topdir,$$(ghclibdir))/include"' \
+		-DDWARF_LIB_DIR_S='"$$(DwarfLibDir)"' \
 		$$($1_PACKAGE_CPP_OPTS) \
 		-x c $$(addprefix -I,$$(GHC_INCLUDE_DIRS)) $1/package.conf.in -o $$@.raw
 	grep -v '^#pragma GCC' $$@.raw | \

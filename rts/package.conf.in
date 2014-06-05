@@ -168,6 +168,10 @@ ld-options:
          , "-read_only_relocs", "warning"
 #endif
 
+#if defined(USE_DWARF)
+         , "-Wl,-rpath="DWARF_LIB_DIR_S
+#endif
+
 framework-dirs:
 
 haddock-interfaces:
