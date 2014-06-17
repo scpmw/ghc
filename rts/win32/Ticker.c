@@ -20,7 +20,7 @@ static VOID CALLBACK tick_callback(
   BOOLEAN TimerOrWaitFired STG_UNUSED
   )
 {
-    tick_proc(0);
+    tick_proc(0, NULL);
 }
 
 // We use the CreateTimerQueue() API which has been around since

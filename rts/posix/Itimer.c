@@ -20,11 +20,16 @@
 #include "PosixSource.h"
 #include "Rts.h"
 
+#define __USE_GNU
+#include <xlocale.h>
+
+#include "Task.h"
 #include "Ticker.h"
 #include "Itimer.h"
 #include "Proftimer.h"
 #include "Schedule.h"
 #include "Clock.h"
+#include "RtsUtils.h"
 
 /* As recommended in the autoconf manual */
 # ifdef TIME_WITH_SYS_TIME
@@ -106,27 +111,28 @@ ghc-stage2: timer_create: Not owner
 #endif /* solaris2_HOST_OS */
 
 #if defined(USE_TIMER_CREATE)
-#  define ITIMER_SIGNAL SIGVTALRM
-#elif defined(HAVE_SETITIMER)
-#  define ITIMER_SIGNAL  SIGALRM
-   // Using SIGALRM can leads to problems, see #850.  But we have no
-   // option if timer_create() is not available.
-#else
-#  error No way to set an interval timer.
-#endif
-
-#if defined(USE_TIMER_CREATE)
 static timer_t timer;
 #endif
 
 static Time itimer_interval = DEFAULT_TICK_INTERVAL;
 
+#define USE_SIGACTION
+
+#ifdef USE_SIGACTION
+
+TickProc current_handle_tick = NULL;
+
+static void handle_sigaction(int signum STG_UNUSED, siginfo_t *siginfo, void *ctx) {
+    ucontext_t *uctx = (ucontext_t *) ctx;
+    current_handle_tick(siginfo->si_code != SI_TIMER, (void *)uctx->uc_mcontext.gregs[REG_RIP]);
+}
+
+#endif
+
 #if !defined(USE_PTHREAD_FOR_ITIMER)
 static void install_vtalrm_handler(TickProc handle_tick)
 {
     struct sigaction action;
-
-    action.sa_handler = handle_tick;
 
     sigemptyset(&action.sa_mask);
 
@@ -142,11 +148,42 @@ static void install_vtalrm_handler(TickProc handle_tick)
     action.sa_flags = 0;
 #endif
 
+#ifdef USE_SIGACTION
+    // Redirect using sa_sigaction, to gain more information about the
+    // signal.
+    current_handle_tick = handle_tick;
+    action.sa_flags |= SA_SIGINFO;
+    action.sa_sigaction = handle_sigaction;
+#else
+    action.sa_handler = handle_tick;
+#endif
+
     if (sigaction(ITIMER_SIGNAL, &action, NULL) == -1) {
         sysErrorBelch("sigaction");
         stg_exit(EXIT_FAILURE);
     }
 }
+
+#ifdef TRACING
+void
+initTickerSampling (Task *task)
+{
+    if (!RtsFlags.TraceFlags.timerSampling) { return; }
+
+    // Install the SIGALRM handler
+    install_vtalrm_handler(current_handle_tick);
+
+    // Initialize fields. This marks the task as willing to accept
+    // timer signals as well.
+    if (!task->timer_ip_samples) {
+        task->timer_ip_sample_count = 0;
+        task->timer_ip_samples = stgMallocBytes(
+            sizeof(void *) * TIMER_MAX_SAMPLES,
+            "newTask");
+    }
+}
+#endif
+
 #endif
 
 #if defined(USE_PTHREAD_FOR_ITIMER)

@@ -207,15 +207,17 @@ void traceUserMarker(Capability *cap, char *msg);
  * Profiling
  */
 
-#define SAMPLE_BY_CYCLE        0
-#define SAMPLE_BY_HEAP_ALLOC   1
-#define SAMPLE_BY_HEAP_LIFE    2
-#define SAMPLE_BY_CACHE        3
-#define SAMPLE_BY_CACHE_MISS   4
-#define SAMPLE_BY_BRANCH       5
-#define SAMPLE_BY_BRANCH_MISS  6
-#define SAMPLE_BY_STALLED_FE   7
-#define SAMPLE_BY_STALLED_BE   8
+#define SAMPLE_BY_TIME         0
+#define SAMPLE_BY_CYCLE        1
+#define SAMPLE_BY_STACK_ALLOC  2
+#define SAMPLE_BY_HEAP_ALLOC   3
+#define SAMPLE_BY_HEAP_LIFE    4
+#define SAMPLE_BY_CACHE        5
+#define SAMPLE_BY_CACHE_MISS   6
+#define SAMPLE_BY_BRANCH       7
+#define SAMPLE_BY_BRANCH_MISS  8
+#define SAMPLE_BY_STALLED_FE   9
+#define SAMPLE_BY_STALLED_BE   10
 
 #define SAMPLE_INSTR_PTR       0
 

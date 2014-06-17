@@ -301,4 +301,9 @@
 
 #define HEAP_ALLOC_MAX_SAMPLES 4096
 
+/* Maximum number of timer samples to collect per Task. Lower values
+ * mean that the buffer will be flushed more often.
+ */
+#define TIMER_MAX_SAMPLES 512
+
 #endif /* RTS_CONSTANTS_H */

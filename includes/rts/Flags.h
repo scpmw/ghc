@@ -142,6 +142,7 @@ struct TRACE_FLAGS {
     rtsBool user;           /* trace user events (emitted from Haskell code) */
 
     rtsBool allocSampling;  /* collect code pointers from allocation sites */
+    rtsBool timerSampling;  /* collect instruction pointers from timer signals */
 #endif
 };
 

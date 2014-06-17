@@ -11,12 +11,18 @@
 
 #include "BeginPrivate.h"
 
-typedef void (*TickProc)(int);
+typedef void (*TickProc)(StgBool, void *);
 
 void initTicker  (Time interval, TickProc handle_tick);
 void startTicker (void);
 void stopTicker  (void);
 void exitTicker  (rtsBool wait);
+
+#ifdef TRACING
+void initTickerSampling (Task *task);
+void startTickerSampling (void);
+void stopTickerSampling (void);
+#endif
 
 #include "EndPrivate.h"
 

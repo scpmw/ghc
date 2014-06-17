@@ -170,6 +170,12 @@ typedef struct Task_ {
     StgWord32 perf_event_sample_type;
 #endif
 
+#ifdef TRACING
+    // Timer instruction pointer profiling
+    int timer_ip_sample_count;
+    void **timer_ip_samples;
+#endif
+
 } Task;
 
 INLINE_HEADER rtsBool

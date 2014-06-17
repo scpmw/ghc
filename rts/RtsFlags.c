@@ -191,6 +191,7 @@ void initRtsFlagsDefaults(void)
     RtsFlags.TraceFlags.user          = rtsFalse;
 
     RtsFlags.TraceFlags.allocSampling = rtsFalse;
+    RtsFlags.TraceFlags.timerSampling = rtsFalse;
 #endif
 
 #ifdef PROFILING
@@ -420,6 +421,7 @@ usage_text[] = {
 "  -E[<x>][<p>] Sample instruction pointers for profiling (use with -l)",
 "            Samples are taken at intervals of <p> by <x>:",
 #ifdef USE_PERF_EVENT
+"             t   - time",
 "             h   - heap residency",
 "             a   - heap allocation",
 "             s   - stack allocation",
@@ -428,6 +430,7 @@ usage_text[] = {
 "             b/B - branch / branch mispredict",
 "             l/L - stalled in frontend / backend",
 #else
+"             t   - time (default)",
 "             h   - heap residency",
 "             a   - heap allocation (default)",
 "             s   - stack allocation",
@@ -864,6 +867,12 @@ error = rtsTrue;
 #else
                     case 0:
 #endif
+                    case 't':
+                        RtsFlags.TraceFlags.timerSampling = rtsTrue;
+                        if (period != 0) {
+                            errorBelch("Custom periods not supported for timer sampling, try -V!");
+                        }
+                        break;
                     case 'a':
                         RtsFlags.TraceFlags.allocSampling = SAMPLE_BY_HEAP_ALLOC;
                         if (period != 0) {

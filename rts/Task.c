@@ -19,6 +19,7 @@
 #include "Hash.h"
 #include "Trace.h"
 #include "PerfEvent.h"
+#include "Ticker.h"
 
 #if HAVE_SIGNAL_H
 #include <signal.h>
@@ -133,6 +134,9 @@ allocTask (void)
 #if defined(USE_PERF_EVENT)
         perf_event_init(task);
 #endif
+#ifdef TRACING
+        initTickerSampling(task);
+#endif
         setMyTask(task);
         return task;
     }
@@ -222,6 +226,11 @@ newTask (rtsBool worker)
     initCondition(&task->cond);
     initMutex(&task->lock);
     task->wakeup = rtsFalse;
+#endif
+
+#ifdef TRACING
+    task->timer_ip_sample_count = 0;
+    task->timer_ip_samples = NULL;
 #endif
 
     task->next = NULL;
@@ -432,6 +441,10 @@ workerStart(Task *task)
 
 #ifdef USE_PERF_EVENT
     perf_event_init(task);
+#endif
+
+#ifdef TRACING
+    initTickerSampling(task);
 #endif
 
     // set the thread-local pointer to the Task:

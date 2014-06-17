@@ -24,6 +24,10 @@
 #include "Ticker.h"
 #include "Capability.h"
 #include "RtsSignals.h"
+#include "Trace.h"
+
+// TODO...
+#include "posix/Itimer.h"
 
 /* ticks left before next pre-emptive context switch */
 static int ticks_to_ctxt_switch = 0;
@@ -31,16 +35,31 @@ static int ticks_to_ctxt_switch = 0;
 /* idle ticks left before we perform a GC */
 static int ticks_to_gc = 0;
 
+#ifdef TRACING
+static void handleSamplingTick(StgBool isManual, void *pIP);
+#endif
+
 /*
  * Function: handle_tick()
  *
  * At each occurrence of a tick, the OS timer will invoke
- * handle_tick().
+ * handle_tick(). If available, we also get information
+ * about the thread's instruction pointer when the signal
+ * got raised.
  */
 static
 void
-handle_tick(int unused STG_UNUSED)
+handle_tick(StgBool isManual, void *pIP)
 {
+#ifdef TRACING
+  // Manually replicated signals are for being able to sample the
+  // thread state only, ignore them on other threads.
+  handleSamplingTick(isManual, pIP);
+#else
+  (void) pIP;
+#endif
+  if (isManual) { return; }
+
   handleProfTick();
   if (RtsFlags.ConcFlags.ctxtSwitchTicks > 0) {
       ticks_to_ctxt_switch--;
@@ -75,7 +94,13 @@ handle_tick(int unused STG_UNUSED)
               // disable timer signals (see #1623, #5991)
               // but only if we're not profiling
 #ifndef PROFILING
-              stopTimer();
+#ifdef TRACING
+              if (!RtsFlags.TraceFlags.timerSampling) {
+#endif
+                  stopTimer();
+#ifdef TRACING
+              }
+#endif
 #endif
           }
       } else {
@@ -95,6 +120,56 @@ handle_tick(int unused STG_UNUSED)
 #endif
 
 }
+
+#ifdef TRACING
+static StgBool do_ticker_sampling = rtsTrue;
+
+static void
+flushTickerSamples(Task *task, Capability *cap)
+{
+    if (task->timer_ip_sample_count <= 0) { return; }
+    traceSamples(cap, 1, SAMPLE_BY_TIME, SAMPLE_INSTR_PTR,
+                 task->timer_ip_sample_count, task->timer_ip_samples, NULL);
+    task->timer_ip_sample_count = 0;
+}
+
+static void
+handleSamplingTick(StgBool isManual, void *pIP)
+{
+    (void) isManual; (void) pIP;
+    if (!RtsFlags.TraceFlags.timerSampling ||
+        !do_ticker_sampling) { return; }
+
+    // Figure out where we are
+    Task *task = myTask();
+    Capability *cap = (task ? myTask()->cap : NULL);
+    if (RtsFlags.TraceFlags.timerSampling && cap) {
+
+        // Take a sample, handle overflow
+        task->timer_ip_samples[task->timer_ip_sample_count++] = pIP;
+        if (task->timer_ip_sample_count >= TIMER_MAX_SAMPLES) {
+            flushTickerSamples(task, cap);
+        }
+    }
+
+#if defined(THREADED_RTS) && defined(HAVE_PTHREAD_H) && !defined(mingw32_HOST_OS)
+    if (!isManual) {
+        // Replicate the signal to all other capabilities
+        nat i;
+        for (i = 0; i < n_capabilities; i++)
+            if (capabilities[i] != cap) {
+                Task *t = capabilities[i]->running_task;
+                if (t && t->timer_ip_samples) {
+                    pthread_kill(t->id, ITIMER_SIGNAL);
+                }
+            }
+    }
+#else
+    (void) isManual;
+#endif
+}
+#endif
+
 
 // This global counter is used to allow multiple threads to stop the
 // timer temporarily with a stopTimer()/startTimer() pair.  If 
@@ -120,6 +195,9 @@ startTimer(void)
 {
     if (atomic_dec(&timer_disabled) == 0) {
         if (RtsFlags.MiscFlags.tickInterval != 0) {
+#ifdef TRACING
+            do_ticker_sampling = RtsFlags.TraceFlags.timerSampling;
+#endif
             startTicker();
         }
     }
@@ -142,6 +220,25 @@ exitTimer (rtsBool wait)
         exitTicker(wait);
     }
 }
+
+#ifdef TRACING
+void
+stopTickerSampling( void )
+{
+    do_ticker_sampling = rtsFalse;
+    // also flush, if applicable
+    Task *task = myTask();
+    if (RtsFlags.TraceFlags.timerSampling && task && task->cap) {
+        flushTickerSamples(task, task->cap);
+    }
+}
+
+void
+startTickerSampling( void )
+{
+    do_ticker_sampling = rtsTrue;
+}
+#endif
 
 // Local Variables:
 // mode: C

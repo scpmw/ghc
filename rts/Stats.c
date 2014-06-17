@@ -18,6 +18,7 @@
 #include "sm/GC.h" // gc_alloc_block_sync, whitehole_spin
 #include "sm/GCThread.h"
 #include "sm/BlockAlloc.h"
+#include "Ticker.h"
 
 #if USE_PAPI
 #include "Papi.h"
@@ -249,6 +250,10 @@ stat_startExit(void)
 #ifdef USE_PERF_EVENT
     perf_event_stop_mutator_count();
 #endif
+
+#ifdef TRACING
+    stopTickerSampling();
+#endif
 }
 
 void
@@ -287,6 +292,10 @@ stat_startGC (Capability *cap, gc_thread *gct)
 
 #ifdef USE_PERF_EVENT
     perf_event_stop_mutator_count();
+#endif
+
+#ifdef TRACING
+    stopTickerSampling();
 #endif
 
     getProcessTimes(&gct->gc_start_cpu, &gct->gc_start_elapsed);
@@ -454,6 +463,10 @@ stat_endGC (Capability *cap, gc_thread *gct,
 
 #ifdef USE_PERF_EVENT
     perf_event_start_mutator_count();
+#endif
+
+#ifdef TRACING
+    startTickerSampling();
 #endif
 }
 
