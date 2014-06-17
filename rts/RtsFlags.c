@@ -798,6 +798,9 @@ error = rtsTrue;
                     case 'a':
                         RtsFlags.TraceFlags.allocSampling = SAMPLE_BY_HEAP_ALLOC;
                         break;
+                    case 's':
+                        RtsFlags.TraceFlags.allocSampling = SAMPLE_BY_STACK_ALLOC;
+                        break;
                     case 'h':
                         RtsFlags.ProfFlags.doHeapProfile = TRACE_HEAP_BY_CODE_PTR;
                         break;

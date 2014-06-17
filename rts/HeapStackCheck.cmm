@@ -132,6 +132,16 @@ stg_gc_noregs
         if (CHECK_GC()) {
             ret = HeapOverflow;
         } else {
+
+#ifdef TRACING
+            n = Capability_heap_ip_sample_count(MyCapability());
+            if (n > HEAP_ALLOC_MAX_SAMPLES) {
+                Capability_heap_ip_sample_count(MyCapability()) = n-1;
+                n = 2*HEAP_ALLOC_MAX_SAMPLES - n;
+                Capability_heap_sample(MyCapability(), n) = sample;
+            }
+#endif
+
             ret = StackOverflow;
         }
     }

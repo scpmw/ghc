@@ -401,10 +401,22 @@ run_thread:
     startHeapProfTimer();
 
 #ifdef TRACING
-    if (cap->heap_ip_sample_count) {
-        traceSamples(cap, 1, SAMPLE_BY_HEAP_ALLOC, SAMPLE_INSTR_PTR,
+    switch(RtsFlags.TraceFlags.allocSampling) {
+    case 0: break;
+    case SAMPLE_BY_HEAP_ALLOC:
+        if (!cap->heap_ip_sample_count) break;
+        traceSamples(cap, 1, RtsFlags.TraceFlags.allocSampling, SAMPLE_INSTR_PTR,
                      cap->heap_ip_sample_count, cap->heap_ip_samples, NULL);
         cap->heap_ip_sample_count = 0;
+        break;
+    case SAMPLE_BY_STACK_ALLOC:
+        if (cap->heap_ip_sample_count >= 2*HEAP_ALLOC_MAX_SAMPLES) break;
+        traceSamples(cap, 1, RtsFlags.TraceFlags.allocSampling, SAMPLE_INSTR_PTR,
+                     2*HEAP_ALLOC_MAX_SAMPLES-cap->heap_ip_sample_count, cap->heap_ip_samples, NULL);
+        cap->heap_ip_sample_count = 2*HEAP_ALLOC_MAX_SAMPLES;
+        break;
+    default:
+        barf("Unknown allocation sampling method %d", RtsFlags.TraceFlags.allocSampling);
     }
 #endif
 

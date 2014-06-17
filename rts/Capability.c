@@ -294,6 +294,8 @@ initCapability( Capability *cap, nat i )
     if (RtsFlags.TraceFlags.allocSampling) {
         switch(RtsFlags.TraceFlags.allocSampling) {
         case SAMPLE_BY_HEAP_ALLOC: cap->heap_ip_sample_count = 0; break;
+        case SAMPLE_BY_STACK_ALLOC:
+            cap->heap_ip_sample_count = 2*HEAP_ALLOC_MAX_SAMPLES; break;
         default: barf("Unknown allocation sampling method %d", RtsFlags.TraceFlags.allocSampling);
         }
         cap->heap_ip_samples = stgMallocBytes(
