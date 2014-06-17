@@ -102,8 +102,9 @@ struct PROFILING_FLAGS {
 
     Time                heapProfileInterval; /* time between samples */
     nat                 heapProfileIntervalTicks; /* ticks between samples (derived) */
-    rtsBool             includeTSOs;
 
+#ifdef PROFILING
+    rtsBool             includeTSOs;
 
     rtsBool		showCCSOnException;
 
@@ -118,6 +119,7 @@ struct PROFILING_FLAGS {
     char*               ccsSelector;
     char*               retainerSelector;
     char*               bioSelector;
+#endif
 
 };
 
