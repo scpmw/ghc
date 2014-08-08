@@ -85,6 +85,15 @@ handle_tick(int unused STG_UNUSED)
   default:
       break;
   }
+
+#ifdef TRACING
+#ifdef USE_PERF_EVENTS
+  if(RtsFlags.PerfEventFlags.sampleType) {
+      perf_event_timer();
+  }
+#endif
+#endif
+
 }
 
 // This global counter is used to allow multiple threads to stop the

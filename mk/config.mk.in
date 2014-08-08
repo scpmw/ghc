@@ -360,6 +360,9 @@ UseSystemLibFFI=@UseSystemLibFFI@
 FFILibDir=@FFILibDir@
 FFIIncludeDir=@FFIIncludeDir@
 
+# Include support for Linux perf_event?
+GhcRtsWithPerfEvent = @HavePerfEvent@
+
 # Include support for reading DWARF debugging information?
 GhcRtsWithDwarf = @HaveLibDwarf@
 

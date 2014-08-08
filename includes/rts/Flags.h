@@ -220,6 +220,25 @@ struct PAPI_FLAGS {
 
 #endif
 
+#ifdef USE_PERF_EVENT
+
+struct PERF_EVENT_FLAGS {
+#ifdef TRACING
+    nat     sampleType;
+    nat     samplePeriod;
+#endif
+};
+
+#define PERF_EVENT_SAMPLE_BY_CYCLE       1
+#define PERF_EVENT_SAMPLE_BY_CACHE       2
+#define PERF_EVENT_SAMPLE_BY_CACHE_MISS  3
+#define PERF_EVENT_SAMPLE_BY_BRANCH      4
+#define PERF_EVENT_SAMPLE_BY_BRANCH_MISS 5
+#define PERF_EVENT_SAMPLE_BY_STALLED_FE  6
+#define PERF_EVENT_SAMPLE_BY_STALLED_BE  7
+
+#endif
+
 /* Put them together: */
 
 typedef struct _RTS_FLAGS {
@@ -238,6 +257,9 @@ typedef struct _RTS_FLAGS {
 #endif
 #ifdef USE_PAPI
     struct PAPI_FLAGS   PapiFlags;
+#endif
+#ifdef USE_PERF_EVENT
+    struct PERF_EVENT_FLAGS PerfEventFlags;
 #endif
 } RTS_FLAGS;
 

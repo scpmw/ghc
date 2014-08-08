@@ -942,6 +942,10 @@ else
 fi
 AC_SUBST(HavePapi)
 
+# Check for perf_event (only more current Linux)
+AC_CHECK_HEADER([linux/perf_event.h], [HavePerfEvent=YES], [HavePerfEvent=NO])
+AC_SUBST(HavePerfEvent)
+
 # Check for libdwarf
 AC_CHECK_HEADER([libdwarf.h], [HaveDwarfHeader=YES], [HaveLibDwarfHeader=NO])
 AC_CHECK_LIB(dwarf, dwarf_init, [HaveDwarfLib=YES], [HaveDwarfLib=NO])

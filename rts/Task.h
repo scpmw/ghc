@@ -159,6 +159,17 @@ typedef struct Task_ {
     struct Task_ *all_next;
     struct Task_ *all_prev;
 
+#ifdef USE_PERF_EVENT
+    // Associated perf_events memory map for collecting profiling data
+    int perf_event_fd;
+    union {
+        void *perf_event_mmap;
+        struct perf_event_mmap_page *perf_event_data;
+    };
+    StgWord64 perf_event_last_head;
+    StgWord32 perf_event_sample_type;
+#endif
+
 } Task;
 
 INLINE_HEADER rtsBool

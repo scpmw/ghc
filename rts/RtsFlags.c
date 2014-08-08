@@ -230,6 +230,13 @@ void initRtsFlagsDefaults(void)
     RtsFlags.PapiFlags.eventType        = 0;
     RtsFlags.PapiFlags.numUserEvents    = 0;
 #endif
+
+#ifdef USE_PERF_EVENT
+#ifdef TRACING
+    RtsFlags.PerfEventFlags.sampleType   = 0;
+    RtsFlags.PerfEventFlags.samplePeriod = 0;
+#endif
+#endif
 }
 
 static const char *
@@ -410,10 +417,21 @@ usage_text[] = {
 "            #NATIVE_EVENT - collect native event NATIVE_EVENT (in hex)",
 #endif
 #ifdef TRACING
-"  -E[<x>]   Sample instruction pointers for profiling (use with -l)",
+"  -E[<x>][<p>] Sample instruction pointers for profiling (use with -l)",
 "            Samples are taken at intervals of <p> by <x>:",
+#ifdef USE_PERF_EVENT
 "             h   - heap residency",
 "             a   - heap allocation",
+"             s   - stack allocation",
+"             y   - cycles (default)",
+"             c/C - cache access / miss",
+"             b/B - branch / branch mispredict",
+"             l/L - stalled in frontend / backend",
+#else
+"             h   - heap residency",
+"             a   - heap allocation (default)",
+"             s   - stack allocation",
+#endif
 #endif
 "",
 "RTS options may also be specified using the GHCRTS environment variable.",
@@ -793,16 +811,76 @@ error = rtsTrue;
                 OPTION_UNSAFE;
                 {
                     char *p = rts_argv[arg] + 2;
+                    nat period = 0;
+                    if (*p) {
+                        // Get desired period, if any
+                        char *next=p+1;
+                        if (isdigit(*next)) {
+                            period = strtol(next, &next, 10);
+                        }
+                        if (*next) {
+                            bad_option(rts_argv[arg]);
+                            break;
+                        }
+                    }
                     switch(*p) {
+#ifdef USE_PERF_EVENT
+                    case 'c':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_CACHE;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'C':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_CACHE_MISS;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'b':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_BRANCH;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'B':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_BRANCH_MISS;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'l':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_STALLED_FE;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'L':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_STALLED_BE;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
                     case 0:
+                    case 'y':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_CYCLE;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+#else
+                    case 0:
+#endif
                     case 'a':
                         RtsFlags.TraceFlags.allocSampling = SAMPLE_BY_HEAP_ALLOC;
+                        if (period != 0) {
+                            errorBelch("Custom periods not supported for heap allocation sampling, try -A!");
+                        }
                         break;
                     case 's':
                         RtsFlags.TraceFlags.allocSampling = SAMPLE_BY_STACK_ALLOC;
+                        if (period != 0) {
+                            errorBelch("Custom periods not supported for stack allocation sampling, try -kc!");
+                        }
                         break;
                     case 'h':
                         RtsFlags.ProfFlags.doHeapProfile = TRACE_HEAP_BY_CODE_PTR;
+                        if (period != 0) {
+                            errorBelch("Custom periods not supported for heap residency sampling, try -i!");
+                        }
                         break;
                     default:
                         bad_option(rts_argv[arg]);

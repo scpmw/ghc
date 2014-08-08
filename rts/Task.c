@@ -18,6 +18,7 @@
 #include "Schedule.h"
 #include "Hash.h"
 #include "Trace.h"
+#include "PerfEvent.h"
 
 #if HAVE_SIGNAL_H
 #include <signal.h>
@@ -128,6 +129,9 @@ allocTask (void)
         task = newTask(rtsFalse);
 #if defined(THREADED_RTS)
         task->id = osThreadId();
+#endif
+#if defined(USE_PERF_EVENT)
+        perf_event_init(task);
 #endif
         setMyTask(task);
         return task;
@@ -425,6 +429,10 @@ workerStart(Task *task)
     if (RtsFlags.ParFlags.setAffinity) {
         setThreadAffinity(cap->no, n_capabilities);
     }
+
+#ifdef USE_PERF_EVENT
+    perf_event_init(task);
+#endif
 
     // set the thread-local pointer to the Task:
     setMyTask(task);

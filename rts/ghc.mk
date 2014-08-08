@@ -487,6 +487,13 @@ rts_PACKAGE_CPP_OPTS += '-DFFI_LIB="C$(LIBFFI_NAME)"'
 endif
 
 #-----------------------------------------------------------------------------
+# Add perf_event profiling interface, if available
+
+ifeq "$(GhcRtsWithPerfEvent)" "YES"
+rts_CC_OPTS += -DUSE_PERF_EVENT
+endif
+
+#-----------------------------------------------------------------------------
 # Add support for reading DWARF debugging information, if available
 
 ifeq "$(GhcRtsWithDwarf)" "YES"

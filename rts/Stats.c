@@ -23,6 +23,10 @@
 #include "Papi.h"
 #endif
 
+#if USE_PERF_EVENT
+#include "PerfEvent.h"
+#endif
+
 /* huh? */
 #define BIG_STRING_LEN              512
 
@@ -241,6 +245,10 @@ stat_startExit(void)
     /* This flag is needed, because GC is run once more after this function */
     papi_is_reporting = 0;
 #endif
+
+#ifdef USE_PERF_EVENT
+    perf_event_stop_mutator_count();
+#endif
 }
 
 void
@@ -275,6 +283,10 @@ stat_startGC (Capability *cap, gc_thread *gct)
       papi_stop_mutator_count();
       papi_start_gc_count();
     }
+#endif
+
+#ifdef USE_PERF_EVENT
+    perf_event_stop_mutator_count();
 #endif
 
     getProcessTimes(&gct->gc_start_cpu, &gct->gc_start_elapsed);
@@ -438,6 +450,10 @@ stat_endGC (Capability *cap, gc_thread *gct,
       }
       papi_start_mutator_count();
     }
+#endif
+
+#ifdef USE_PERF_EVENT
+    perf_event_start_mutator_count();
 #endif
 }
 
