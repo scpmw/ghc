@@ -412,6 +412,7 @@ usage_text[] = {
 #ifdef TRACING
 "  -E[<x>]   Sample instruction pointers for profiling (use with -l)",
 "            Samples are taken at intervals of <p> by <x>:",
+"             h   - heap residency",
 "             a   - heap allocation",
 #endif
 "",
@@ -796,6 +797,9 @@ error = rtsTrue;
                     case 0:
                     case 'a':
                         RtsFlags.TraceFlags.allocSampling = SAMPLE_BY_HEAP_ALLOC;
+                        break;
+                    case 'h':
+                        RtsFlags.ProfFlags.doHeapProfile = TRACE_HEAP_BY_CODE_PTR;
                         break;
                     default:
                         bad_option(rts_argv[arg]);
