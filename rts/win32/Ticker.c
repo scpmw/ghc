@@ -20,7 +20,7 @@ static VOID CALLBACK tick_callback(
   BOOLEAN TimerOrWaitFired STG_UNUSED
   )
 {
-    tick_proc(0);
+    tick_proc(0, NULL);
 }
 
 // We use the CreateTimerQueue() API which has been around since
@@ -79,3 +79,11 @@ exitTicker (rtsBool wait)
         timer_queue = NULL;
     }
 }
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

@@ -68,6 +68,10 @@ processHeapClosureForDead( StgClosure *c )
     case MUT_ARR_PTRS_DIRTY:
     case MUT_ARR_PTRS_FROZEN:
     case MUT_ARR_PTRS_FROZEN0:
+    case SMALL_MUT_ARR_PTRS_CLEAN:
+    case SMALL_MUT_ARR_PTRS_DIRTY:
+    case SMALL_MUT_ARR_PTRS_FROZEN:
+    case SMALL_MUT_ARR_PTRS_FROZEN0:
     case ARR_WORDS:
     case WEAK:
     case MUT_VAR_CLEAN:
@@ -245,3 +249,11 @@ LdvCensusKillAll( void )
 }
 
 #endif /* PROFILING */
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

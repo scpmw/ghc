@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns, CPP, NondecreasingIndentation, ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-warn-warnings-deprecations #-}
 -- NB: we specifically ignore deprecations. GHC 7.6 marks the .QSem module as
 -- deprecated, although it became un-deprecated later. As a result, using 7.6
@@ -46,7 +46,7 @@ import BasicTypes
 import Digraph
 import Exception        ( tryIO, gbracket, gfinally )
 import FastString
-import Maybes           ( expectJust, mapCatMaybes )
+import Maybes           ( expectJust )
 import MonadUtils       ( allM, MonadIO )
 import Outputable
 import Panic
@@ -63,6 +63,7 @@ import qualified Data.Set as Set
 import qualified FiniteMap as Map ( insertListWith )
 
 import Control.Concurrent ( forkIOWithUnmask, killThread )
+import qualified GHC.Conc as CC
 import Control.Concurrent.MVar
 import Control.Concurrent.QSem
 import Control.Exception
@@ -79,6 +80,11 @@ import System.IO        ( fixIO )
 import System.IO.Error  ( isDoesNotExistError )
 
 import GHC.Conc ( getNumProcessors, getNumCapabilities, setNumCapabilities )
+
+label_self :: String -> IO ()
+label_self thread_name = do
+    self_tid <- CC.myThreadId
+    CC.labelThread self_tid thread_name
 
 -- -----------------------------------------------------------------------------
 -- Loading the program
@@ -744,10 +750,18 @@ parUpsweep n_jobs old_hpt stable_mods cleanup sccs = do
                          | ((ms,mvar,_),idx) <- comp_graph_w_idx ]
 
 
+    liftIO $ label_self "main --make thread"
     -- For each module in the module graph, spawn a worker thread that will
     -- compile this module.
     let { spawnWorkers = forM comp_graph_w_idx $ \((mod,!mvar,!log_queue),!mod_idx) ->
             forkIOWithUnmask $ \unmask -> do
+                liftIO $ label_self $ unwords
+                    [ "worker --make thread"
+                    , "for module"
+                    , show (moduleNameString (ms_mod_name mod))
+                    , "number"
+                    , show mod_idx
+                    ]
                 -- Replace the default log_action with one that writes each
                 -- message to the module's log_queue. The main thread will
                 -- deal with synchronously printing these messages.
@@ -1443,7 +1457,7 @@ moduleGraphNodes drop_hs_boot_nodes summaries = (graphFromEdgedVertices nodes, l
                 | otherwise          = HsBootFile
 
     out_edge_keys :: HscSource -> [ModuleName] -> [Int]
-    out_edge_keys hi_boot ms = mapCatMaybes (lookup_key hi_boot) ms
+    out_edge_keys hi_boot ms = mapMaybe (lookup_key hi_boot) ms
         -- If we want keep_hi_boot_nodes, then we do lookup_key with
         -- the IsBootInterface parameter True; else False
 
@@ -1786,7 +1800,7 @@ summariseModule hsc_env old_summary_map is_boot (L loc wanted_mod)
                          just_found location mod
                 | otherwise ->
                         -- Drop external-pkg
-                        ASSERT(modulePackageId mod /= thisPackage dflags)
+                        ASSERT(modulePackageKey mod /= thisPackage dflags)
                         return Nothing
 
              err -> return $ Just $ Left $ noModError dflags loc wanted_mod err

@@ -5,6 +5,8 @@ c%
 \section[TcExpr]{Typecheck an expression}
 
 \begin{code}
+{-# LANGUAGE CPP #-}
+
 module TcExpr ( tcPolyExpr, tcPolyExprNC, tcMonoExpr, tcMonoExprNC,
                 tcInferRho, tcInferRhoNC,
                 tcSyntaxOp, tcCheckId,
@@ -74,7 +76,7 @@ import qualified Data.Set as Set
 \begin{code}
 tcPolyExpr, tcPolyExprNC
          :: LHsExpr Name        -- Expression to type check
-         -> TcSigmaType         -- Expected type (could be a polytpye)
+         -> TcSigmaType         -- Expected type (could be a polytype)
          -> TcM (LHsExpr TcId)  -- Generalised expr with expected type
 
 -- tcPolyExpr is a convenient place (frequent but not too frequent)
@@ -200,7 +202,7 @@ tcExpr (HsIPVar x) res_ty
        ; ip_var <- emitWanted origin (mkClassPred ipClass [ip_name, ip_ty])
        ; tcWrapResult (fromDict ipClass ip_name ip_ty (HsVar ip_var)) ip_ty res_ty }
   where
-  -- Coerces a dictionry for `IP "x" t` into `t`.
+  -- Coerces a dictionary for `IP "x" t` into `t`.
   fromDict ipClass x ty =
     case unwrapNewTyCon_maybe (classTyCon ipClass) of
       Just (_,_,ax) -> HsWrap $ mkWpCast $ mkTcUnbranchedAxInstCo Representational ax [x,ty]
@@ -221,11 +223,14 @@ tcExpr e@(HsLamCase _ matches) res_ty
 tcExpr (ExprWithTySig expr sig_ty) res_ty
  = do { sig_tc_ty <- tcHsSigType ExprSigCtxt sig_ty
 
-      -- Remember to extend the lexical type-variable environment
       ; (gen_fn, expr')
             <- tcGen ExprSigCtxt sig_tc_ty $ \ skol_tvs res_ty ->
-               tcExtendTyVarEnv2 (hsExplicitTvs sig_ty `zip` skol_tvs) $
-                                -- See Note [More instantiated than scoped] in TcBinds
+
+                  -- Remember to extend the lexical type-variable environment
+                  -- See Note [More instantiated than scoped] in TcBinds
+               tcExtendTyVarEnv2 
+                  [(n,tv) | (Just n, tv) <- findScopedTyVars sig_ty sig_tc_ty skol_tvs] $
+
                tcMonoExprNC expr res_ty
 
       ; let inner_expr = ExprWithTySigOut (mkLHsWrap gen_fn expr') sig_ty
@@ -318,24 +323,25 @@ tcExpr (OpApp arg1 op fix arg2) res_ty
          -- arg1_ty = arg2_ty -> op_res_ty
          -- And arg2_ty maybe polymorphic; that's the point
 
-       -- Make sure that the argument and result types have kind '*'
+       -- Make sure that the argument type has kind '*'
        -- Eg we do not want to allow  (D#  $  4.0#)   Trac #5570
        --    (which gives a seg fault)
        -- We do this by unifying with a MetaTv; but of course
        -- it must allow foralls in the type it unifies with (hence PolyTv)!
+       --
+       -- The result type can have any kind (Trac #8739),
+       -- so we can just use res_ty
 
-       -- ($) :: forall ab. (a->b) -> a -> b
+       -- ($) :: forall (a:*) (b:Open). (a->b) -> a -> b
        ; a_ty <- newPolyFlexiTyVarTy
-       ; b_ty <- newPolyFlexiTyVarTy
        ; arg2' <- tcArg op (arg2, arg2_ty, 2)
 
-       ; co_res <- unifyType b_ty res_ty        -- b ~ res
-       ; co_a   <- unifyType arg2_ty   a_ty     -- arg2 ~ a
-       ; co_b   <- unifyType op_res_ty b_ty     -- op_res ~ b
+       ; co_a   <- unifyType arg2_ty   a_ty      -- arg2 ~ a
+       ; co_b   <- unifyType op_res_ty res_ty    -- op_res ~ res
        ; op_id  <- tcLookupId op_name
 
-       ; let op' = L loc (HsWrap (mkWpTyApps [a_ty, b_ty]) (HsVar op_id))
-       ; return $ mkHsWrapCo (co_res) $
+       ; let op' = L loc (HsWrap (mkWpTyApps [a_ty, res_ty]) (HsVar op_id))
+       ; return $
          OpApp (mkLHsWrapCo (mkTcFunCo Nominal co_a co_b) $
                 mkLHsWrapCo co_arg1 arg1')
                op' fix
@@ -494,7 +500,8 @@ for conditionals:
 to support expressions like this:
 
  ifThenElse :: Maybe a -> (a -> b) -> b -> b
- ifThenElse (Just a) f _ = f a  ifThenElse Nothing  _ e = e
+ ifThenElse (Just a) f _ = f a
+ ifThenElse Nothing  _ e = e
 
  example :: String
  example = if Just 2
@@ -558,7 +565,7 @@ Note that because MkT3 doesn't contain all the fields being updated,
 its RHS is simply an error, so it doesn't impose any type constraints.
 Hence the use of 'relevant_cont'.
 
-Note [Implict type sharing]
+Note [Implicit type sharing]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We also take into account any "implicit" non-update fields.  For example
         data T a b where { MkT { f::a } :: T a a; ... }
@@ -744,7 +751,7 @@ tcExpr (RecordUpd record_expr rbinds _ _ _) res_ty
                                     -- Universally-quantified tyvars that
                                     -- appear in any of the *implicit*
                                     -- arguments to the constructor are fixed
-                                    -- See Note [Implict type sharing]
+                                    -- See Note [Implicit type sharing]
 
                             fixed_tys = [ty | (fld,ty) <- zip flds arg_tys
                                             , not (fld `elem` upd_fld_names)]
@@ -800,7 +807,7 @@ tcExpr (PArrSeq _ _) _
 
 \begin{code}
 tcExpr (HsSpliceE is_ty splice)  res_ty
-  = ASSERT( is_ty )   -- Untyped splices are expanced by the renamer
+  = ASSERT( is_ty )   -- Untyped splices are expanded by the renamer
    tcSpliceExpr splice res_ty
 
 tcExpr (HsBracket brack)         res_ty = tcTypedBracket   brack res_ty
@@ -959,7 +966,7 @@ tcInferFun fun
 
          -- Zonk the function type carefully, to expose any polymorphism
          -- E.g. (( \(x::forall a. a->a). blah ) e)
-         -- We can see the rank-2 type of the lambda in time to genrealise e
+         -- We can see the rank-2 type of the lambda in time to generalise e
        ; fun_ty' <- zonkTcType fun_ty
 
        ; (wrap, rho) <- deeplyInstantiate AppOrigin fun_ty'

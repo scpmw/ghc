@@ -7,8 +7,9 @@ TcSplice: Template Haskell splices
 
 
 \begin{code}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE CPP, FlexibleInstances, MagicHash, ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
+
 module TcSplice(
      -- These functions are defined in stage1 and stage2
      -- The raise civilised errors in stage1
@@ -70,6 +71,7 @@ import Class
 import Inst
 import TyCon
 import CoAxiom
+import PatSyn ( patSynName )
 import ConLike
 import DataCon
 import TcEvidence( TcEvBinds(..) )
@@ -342,7 +344,7 @@ tcTypedBracket brack@(TExpBr expr) res_ty
        -- Throw away the typechecked expression but return its type.
        -- We'll typecheck it again when we splice it in somewhere
        ; (_tc_expr, expr_ty) <- setStage (Brack cur_stage (TcPending ps_ref lie_var)) $
-                                tcInferRhoNC expr 
+                                tcInferRhoNC expr
                                 -- NC for no context; tcBracket does that
 
        ; meta_ty <- tcTExpTy expr_ty
@@ -844,6 +846,12 @@ like that.  Here's how it's processed:
     (qReport True s) by using addErr to add an error message to the bag of errors.
     The 'fail' in TcM raises an IOEnvFailure exception
 
+ * 'qReport' forces the message to ensure any exception hidden in unevaluated
+   thunk doesn't get into the bag of errors. Otherwise the following splice
+   will triger panic (Trac #8987):
+        $(fail undefined)
+   See also Note [Concealed TH exceptions]
+
   * So, when running a splice, we catch all exceptions; then for
         - an IOEnvFailure exception, we assume the error is already
                 in the error-bag (above)
@@ -874,8 +882,10 @@ instance TH.Quasi (IOEnv (Env TcGblEnv TcLclEnv)) where
                   ; let i = getKey u
                   ; return (TH.mkNameU s i) }
 
-  qReport True msg  = addErr  (text msg)
-  qReport False msg = addWarn (text msg)
+  -- 'msg' is forced to ensure exceptions don't escape,
+  -- see Note [Exceptions in TH]
+  qReport True msg  = seqList msg $ addErr  (text msg)
+  qReport False msg = seqList msg $ addWarn (text msg)
 
   qLocation = do { m <- getModule
                  ; l <- getSrcSpanM
@@ -885,7 +895,7 @@ instance TH.Quasi (IOEnv (Env TcGblEnv TcLclEnv)) where
                         RealSrcSpan s -> return s
                  ; return (TH.Loc { TH.loc_filename = unpackFS (srcSpanFile r)
                                   , TH.loc_module   = moduleNameString (moduleName m)
-                                  , TH.loc_package  = packageIdString (modulePackageId m)
+                                  , TH.loc_package  = packageKeyString (modulePackageKey m)
                                   , TH.loc_start = (srcSpanStartLine r, srcSpanStartCol r)
                                   , TH.loc_end = (srcSpanEndLine   r, srcSpanEndCol   r) }) }
 
@@ -1015,7 +1025,7 @@ reifyInstances th_nm th_tys
                      ; let matches = lookupFamInstEnv inst_envs tc tys
                      ; traceTc "reifyInstances2" (ppr matches)
                      ; mapM (reifyFamilyInstance . fim_instance) matches }
-            _  -> bale_out (hang (ptext (sLit "reifyInstances:") <+> quotes (ppr ty)) 
+            _  -> bale_out (hang (ptext (sLit "reifyInstances:") <+> quotes (ppr ty))
                                2 (ptext (sLit "is not a class constraint or type family application"))) }
   where
     doc = ClassInstanceCtx
@@ -1173,6 +1183,8 @@ reifyThing (AGlobal (AConLike (RealDataCon dc)))
         ; return (TH.DataConI (reifyName name) ty
                               (reifyName (dataConOrigTyCon dc)) fix)
         }
+reifyThing (AGlobal (AConLike (PatSynCon ps)))
+  = noTH (sLit "pattern synonyms") (ppr $ patSynName ps)
 
 reifyThing (ATcId {tct_id = id})
   = do  { ty1 <- zonkTcType (idType id) -- Make use of all the info we have, even
@@ -1191,7 +1203,8 @@ reifyThing thing = pprPanic "reifyThing" (pprTcTyThingCategory thing)
 -------------------------------------------
 reifyAxBranch :: CoAxBranch -> TcM TH.TySynEqn
 reifyAxBranch (CoAxBranch { cab_lhs = args, cab_rhs = rhs })
-  = do { args' <- mapM reifyType args
+            -- remove kind patterns (#8884)
+  = do { args' <- mapM reifyType (filter (not . isKind) args)
        ; rhs'  <- reifyType rhs
        ; return (TH.TySynEqn args' rhs') }
 
@@ -1207,10 +1220,15 @@ reifyTyCon tc
   = return (TH.PrimTyConI (reifyName tc) (tyConArity tc) (isUnLiftedTyCon tc))
 
   | isFamilyTyCon tc
-  = do { let tvs     = tyConTyVars tc
-             kind    = tyConKind tc
-       ; kind' <- if isLiftedTypeKind kind then return Nothing
-                  else fmap Just (reifyKind kind)
+  = do { let tvs      = tyConTyVars tc
+             kind     = tyConKind tc
+
+             -- we need the *result kind* (see #8884)
+             (kvs, mono_kind) = splitForAllTys kind
+                                -- tyConArity includes *kind* params
+             (_, res_kind)    = splitKindFunTysN (tyConArity tc - length kvs)
+                                                 mono_kind
+       ; kind' <- fmap Just (reifyKind res_kind)
 
        ; tvs' <- reifyTyVars tvs
        ; flav' <- reifyFamFlavour tc
@@ -1306,13 +1324,14 @@ reifyClassInstance i
 
 ------------------------------
 reifyFamilyInstance :: FamInst -> TcM TH.Dec
-reifyFamilyInstance (FamInst { fi_flavor = flavor 
+reifyFamilyInstance (FamInst { fi_flavor = flavor
                              , fi_fam = fam
                              , fi_tys = lhs
                              , fi_rhs = rhs })
   = case flavor of
       SynFamilyInst ->
-        do { th_lhs <- reifyTypes lhs
+               -- remove kind patterns (#8884)
+        do { th_lhs <- reifyTypes (filter (not . isKind) lhs)
            ; th_rhs <- reifyType  rhs
            ; return (TH.TySynInstD (reifyName fam) (TH.TySynEqn th_lhs th_rhs)) }
 
@@ -1396,7 +1415,7 @@ reifyFamFlavour tc
   | Just ax <- isClosedSynFamilyTyCon_maybe tc
   = do { eqns <- brListMapM reifyAxBranch $ coAxiomBranches ax
        ; return $ Right eqns }
-                   
+
   | otherwise
   = panic "TcSplice.reifyFamFlavour: not a type family"
 
@@ -1423,6 +1442,7 @@ reify_tc_app tc tys
          | tc `hasKey` listTyConKey   = TH.ListT
          | tc `hasKey` nilDataConKey  = TH.PromotedNilT
          | tc `hasKey` consDataConKey = TH.PromotedConsT
+         | tc `hasKey` eqTyConKey     = TH.EqualityT
          | otherwise                  = TH.ConT (reifyName tc)
     removeKinds :: Kind -> [TypeRep.Type] -> [TypeRep.Type]
     removeKinds (FunTy k1 k2) (h:t)
@@ -1438,17 +1458,7 @@ reifyPred ty
   -- We could reify the implicit paramter as a class but it seems
   -- nicer to support them properly...
   | isIPPred ty = noTH (sLit "implicit parameters") (ppr ty)
-  | otherwise
-   = case classifyPredType ty of
-  ClassPred cls tys -> do { tys' <- reifyTypes tys 
-                          ; return $ TH.ClassP (reifyName cls) tys' }
-  EqPred ty1 ty2    -> do { ty1' <- reifyType ty1
-                          ; ty2' <- reifyType ty2
-                          ; return $ TH.EqualP ty1' ty2'
-                          }
-  TuplePred _ -> noTH (sLit "tuple predicates") (ppr ty)
-  IrredPred _ -> noTH (sLit "irreducible predicates") (ppr ty)
-
+  | otherwise   = reifyType ty
 
 ------------------------------
 reifyName :: NamedThing n => n -> TH.Name
@@ -1462,7 +1472,7 @@ reifyName thing
   where
     name    = getName thing
     mod     = ASSERT( isExternalName name ) nameModule name
-    pkg_str = packageIdString (modulePackageId mod)
+    pkg_str = packageKeyString (modulePackageKey mod)
     mod_str = moduleNameString (moduleName mod)
     occ_str = occNameString occ
     occ     = nameOccName name
@@ -1495,26 +1505,27 @@ lookupThAnnLookup :: TH.AnnLookup -> TcM CoreAnnTarget
 lookupThAnnLookup (TH.AnnLookupName th_nm) = fmap NamedTarget (lookupThName th_nm)
 lookupThAnnLookup (TH.AnnLookupModule (TH.Module pn mn))
   = return $ ModuleTarget $
-    mkModule (stringToPackageId $ TH.pkgString pn) (mkModuleName $ TH.modString mn)
+    mkModule (stringToPackageKey $ TH.pkgString pn) (mkModuleName $ TH.modString mn)
 
 reifyAnnotations :: Data a => TH.AnnLookup -> TcM [a]
-reifyAnnotations th_nm
-  = do { name <- lookupThAnnLookup th_nm
-       ; eps <- getEps
+reifyAnnotations th_name
+  = do { name <- lookupThAnnLookup th_name
+       ; topEnv <- getTopEnv
+       ; epsHptAnns <- liftIO $ prepareAnnotations topEnv Nothing
        ; tcg <- getGblEnv
-       ; let epsAnns = findAnns deserializeWithData (eps_ann_env eps) name
-       ; let envAnns = findAnns deserializeWithData (tcg_ann_env tcg) name
-       ; return (envAnns ++ epsAnns) }
+       ; let selectedEpsHptAnns = findAnns deserializeWithData epsHptAnns name
+       ; let selectedTcgAnns = findAnns deserializeWithData (tcg_ann_env tcg) name
+       ; return (selectedEpsHptAnns ++ selectedTcgAnns) }
 
 ------------------------------
 modToTHMod :: Module -> TH.Module
-modToTHMod m = TH.Module (TH.PkgName $ packageIdString  $ modulePackageId m)
+modToTHMod m = TH.Module (TH.PkgName $ packageKeyString  $ modulePackageKey m)
                          (TH.ModName $ moduleNameString $ moduleName m)
 
 reifyModule :: TH.Module -> TcM TH.ModuleInfo
 reifyModule (TH.Module (TH.PkgName pkgString) (TH.ModName mString)) = do
   this_mod <- getModule
-  let reifMod = mkModule (stringToPackageId pkgString) (mkModuleName mString)
+  let reifMod = mkModule (stringToPackageKey pkgString) (mkModuleName mString)
   if (reifMod == this_mod) then reifyThisModule else reifyFromIface reifMod
     where
       reifyThisModule = do
@@ -1524,10 +1535,10 @@ reifyModule (TH.Module (TH.PkgName pkgString) (TH.ModName mString)) = do
       reifyFromIface reifMod = do
         iface <- loadInterfaceForModule (ptext (sLit "reifying module from TH for") <+> ppr reifMod) reifMod
         let usages = [modToTHMod m | usage <- mi_usages iface,
-                                     Just m <- [usageToModule (modulePackageId reifMod) usage] ]
+                                     Just m <- [usageToModule (modulePackageKey reifMod) usage] ]
         return $ TH.ModuleInfo usages
 
-      usageToModule :: PackageId -> Usage -> Maybe Module
+      usageToModule :: PackageKey -> Usage -> Maybe Module
       usageToModule _ (UsageFile {}) = Nothing
       usageToModule this_pkg (UsageHomeModule { usg_mod_name = mn }) = Just $ mkModule this_pkg mn
       usageToModule _ (UsagePackageModule { usg_mod = m }) = Just m

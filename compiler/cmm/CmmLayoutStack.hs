@@ -1,4 +1,4 @@
-{-# LANGUAGE RecordWildCards, GADTs #-}
+{-# LANGUAGE CPP, RecordWildCards, GADTs #-}
 module CmmLayoutStack (
        cmmLayoutStack, setInfoTableStackMap
   ) where
@@ -189,16 +189,10 @@ cmmLayoutStack :: DynFlags -> ProcPointSet -> ByteOff -> CmmGraph
 cmmLayoutStack dflags procpoints entry_args
                graph0@(CmmGraph { g_entry = entry })
   = do
-    -- pprTrace "cmmLayoutStack" (ppr entry_args) $ return ()
-
-    -- We need liveness info.  We could do removeDeadAssignments at
-    -- the same time, but it buys nothing over doing cmmSink later,
-    -- and costs a lot more than just cmmLocalLiveness.
-    -- (graph, liveness) <- removeDeadAssignments graph0
+    -- We need liveness info. Dead assignments are removed later
+    -- by the sinking pass.
     let (graph, liveness) = (graph0, cmmLocalLiveness dflags graph0)
-
-    -- pprTrace "liveness" (ppr liveness) $ return ()
-    let blocks = postorderDfs graph
+        blocks = postorderDfs graph
 
     (final_stackmaps, _final_high_sp, new_blocks) <-
           mfix $ \ ~(rec_stackmaps, rec_high_sp, _new_blocks) ->
@@ -206,10 +200,7 @@ cmmLayoutStack dflags procpoints entry_args
                    rec_stackmaps rec_high_sp blocks
 
     new_blocks' <- mapM (lowerSafeForeignCall dflags) new_blocks
-
-    -- pprTrace ("Sp HWM") (ppr _final_high_sp) $ return ()
     return (ofBlockList entry new_blocks', final_stackmaps)
-
 
 
 layout :: DynFlags
@@ -245,14 +236,12 @@ layout dflags procpoints liveness entry entry_args final_stackmaps final_sp_high
 
     go (b0 : bs) acc_stackmaps acc_hwm acc_blocks
       = do
-       let (entry0@(CmmEntry entry_lbl), middle0, last0) = blockSplit b0
+       let (entry0@(CmmEntry entry_lbl tscope), middle0, last0) = blockSplit b0
 
        let stack0@StackMap { sm_sp = sp0 }
                = mapFindWithDefault
                      (pprPanic "no stack map for" (ppr entry_lbl))
                      entry_lbl acc_stackmaps
-
-       -- pprTrace "layout" (ppr entry_lbl <+> ppr stack0) $ return ()
 
        -- (a) Update the stack map to include the effects of
        --     assignments in this block
@@ -271,9 +260,7 @@ layout dflags procpoints liveness entry entry_args final_stackmaps final_sp_high
        --     details.
        (middle2, sp_off, last1, fixup_blocks, out)
            <- handleLastNode dflags procpoints liveness cont_info
-                             acc_stackmaps stack1 middle0 last0
-
-       -- pprTrace "layout(out)" (ppr out) $ return ()
+                             acc_stackmaps stack1 tscope middle0 last0
 
        -- (d) Manifest Sp: run over the nodes in the block and replace
        --     CmmStackSlot with CmmLoad from Sp with a concrete offset.
@@ -395,7 +382,7 @@ getStackLoc (Young l) n stackmaps =
 
 handleLastNode
    :: DynFlags -> ProcPointSet -> BlockEnv CmmLocalLive -> BlockEnv ByteOff
-   -> BlockEnv StackMap -> StackMap
+   -> BlockEnv StackMap -> StackMap -> [CmmTickScope]
    -> Block CmmNode O O
    -> CmmNode O C
    -> UniqSM
@@ -407,7 +394,7 @@ handleLastNode
       )
 
 handleLastNode dflags procpoints liveness cont_info stackmaps
-               stack0@StackMap { sm_sp = sp0 } middle last
+               stack0@StackMap { sm_sp = sp0 } tscope middle last
  = case last of
     --  At each return / tail call,
     --  adjust Sp to point to the last argument pushed, which
@@ -505,7 +492,7 @@ handleLastNode dflags procpoints liveness cont_info stackmaps
         | Just stack2 <- mapLookup l stackmaps
         = do
              let assigs = fixupStack stack0 stack2
-             (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 assigs
+             (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 tscope assigs
              return (l, tmp_lbl, stack2, block)
 
         --   (b) if the successor is a proc point, save everything
@@ -514,12 +501,9 @@ handleLastNode dflags procpoints liveness cont_info stackmaps
         = do
              let cont_args = mapFindWithDefault 0 l cont_info
                  (stack2, assigs) =
-                      --pprTrace "first visit to proc point"
-                      --             (ppr l <+> ppr stack1) $
                       setupStackFrame dflags l liveness (sm_ret_off stack0)
-                                                       cont_args stack0
-             --
-             (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 assigs
+                                                        cont_args stack0
+             (tmp_lbl, block) <- makeFixupBlock dflags sp0 l stack2 tscope assigs
              return (l, tmp_lbl, stack2, block)
 
         --   (c) otherwise, the current StackMap is the StackMap for
@@ -533,14 +517,14 @@ handleLastNode dflags procpoints liveness cont_info stackmaps
               is_live (r,_) = r `elemRegSet` live
 
 
-makeFixupBlock :: DynFlags -> ByteOff -> Label -> StackMap -> [CmmNode O O]
+makeFixupBlock :: DynFlags -> ByteOff -> Label -> StackMap -> [CmmTickScope] -> [CmmNode O O]
                -> UniqSM (Label, [CmmBlock])
-makeFixupBlock dflags sp0 l stack assigs
+makeFixupBlock dflags sp0 l stack tscope assigs
   | null assigs && sp0 == sm_sp stack = return (l, [])
   | otherwise = do
     tmp_lbl <- liftM mkBlockId $ getUniqueM
     let sp_off = sp0 - sm_sp stack
-        block = blockJoin (CmmEntry tmp_lbl)
+        block = blockJoin (CmmEntry tmp_lbl tscope)
                           (maybeAddSpAdj dflags sp_off (blockFromList assigs))
                           (CmmBranch l)
     return (tmp_lbl, [block])
@@ -682,8 +666,6 @@ allocate :: DynFlags -> ByteOff -> LocalRegSet -> StackMap
 allocate dflags ret_off live stackmap@StackMap{ sm_sp = sp0
                                               , sm_regs = regs0 }
  =
-  -- pprTrace "allocate" (ppr live $$ ppr stackmap) $
-
    -- we only have to save regs that are not already in a slot
    let to_save = filter (not . (`elemUFM` regs0)) (Set.elems live)
        regs1   = filterUFM (\(r,_) -> elemRegSet r live) regs0
@@ -807,8 +789,14 @@ manifestSp dflags stackmaps stack0 sp0 sp_high
     adj_pre_sp  = mapExpDeep (areaToSp dflags sp0            sp_high area_off)
     adj_post_sp = mapExpDeep (areaToSp dflags (sp0 - sp_off) sp_high area_off)
 
+    add_unwind_info | gopt Opt_Debug dflags
+                    = (:) $ CmmUnwind Sp $ CmmRegOff (CmmGlobal Sp) (sp0 - wORD_SIZE dflags)
+                    | otherwise
+                    = id
+
     final_middle = maybeAddSpAdj dflags sp_off $
                    blockFromList $
+                   add_unwind_info $
                    map adj_pre_sp $
                    elimStackStores stack0 stackmaps area_off $
                    middle_pre
@@ -888,7 +876,7 @@ areaToSp _ _ _ _ other = other
 -- really the job of the stack layout algorithm, hence we do it now.
 
 optStackCheck :: CmmNode O C -> CmmNode O C
-optStackCheck n = -- Note [null stack check]
+optStackCheck n = -- Note [Always false stack check]
  case n of
    CmmCondBranch (CmmLit (CmmInt 0 _)) _true false -> CmmBranch false
    other -> other
@@ -923,8 +911,7 @@ elimStackStores stackmap stackmaps area_off nodes
          CmmStore (CmmStackSlot area m) (CmmReg (CmmLocal r))
             | Just (_,off) <- lookupUFM (sm_regs stackmap) r
             , area_off area + m == off
-            -> -- pprTrace "eliminated a node!" (ppr r) $
-               go stackmap ns
+            -> go stackmap ns
          _otherwise
             -> n : go (procMiddle stackmaps n stackmap) ns
 
@@ -1000,7 +987,7 @@ that safe foreign call is replace by an unsafe one in the Cmm graph.
 
 lowerSafeForeignCall :: DynFlags -> CmmBlock -> UniqSM CmmBlock
 lowerSafeForeignCall dflags block
-  | (entry, middle, CmmForeignCall { .. }) <- blockSplit block
+  | (entry@(CmmEntry _ tscope), middle, CmmForeignCall { .. }) <- blockSplit block
   = do
     -- Both 'id' and 'new_base' are KindNonPtr because they're
     -- RTS-only objects and are not subject to garbage collection
@@ -1038,11 +1025,11 @@ lowerSafeForeignCall dflags block
                        , cml_ret_args  = ret_args
                        , cml_ret_off   = ret_off }
 
-    graph' <- lgraphOfAGraph $ suspend <*>
+    graph' <- lgraphOfAGraph ( suspend <*>
                                midCall <*>
                                resume  <*>
                                copyout <*>
-                               mkLast jump
+                               mkLast jump, tscope)
 
     case toBlockList graph' of
       [one] -> let (_, middle', last) = blockSplit one

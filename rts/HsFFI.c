@@ -11,6 +11,7 @@
 #include "Rts.h"
 
 #include "Stable.h"
+#include "Task.h"
 
 // hs_init and hs_exit are defined in RtsStartup.c
 
@@ -59,3 +60,17 @@ hs_free_fun_ptr(HsFunPtr fp)
     /* I simply *love* all these similar names... */
     freeHaskellFunctionPtr(fp);
 }
+
+void
+hs_thread_done(void)
+{
+    freeMyTask();
+}
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

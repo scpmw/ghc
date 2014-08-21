@@ -117,7 +117,7 @@ else
 rts/dist/build/lib$(LIBFFI_NAME)$(soext): libffi/build/inst/lib/lib$(LIBFFI_NAME)$(soext)
 	cp libffi/build/inst/lib/lib$(LIBFFI_NAME)$(soext)* rts/dist/build
 ifeq "$(TargetOS_CPP)" "darwin"
-	install_name_tool -id @rpath/rts-$(rts_VERSION)/lib$(LIBFFI_NAME)$(soext) rts/dist/build/lib$(LIBFFI_NAME)$(soext)
+	install_name_tool -id @rpath/lib$(LIBFFI_NAME)$(soext) rts/dist/build/lib$(LIBFFI_NAME)$(soext)
 endif
 endif
 endif
@@ -188,14 +188,19 @@ ifneq "$$(findstring dyn, $1)" ""
 ifeq "$$(HostOS_CPP)" "mingw32" 
 $$(rts_$1_LIB) : $$(rts_$1_OBJS) $$(ALL_RTS_DEF_LIBS) rts/dist/libs.depend rts/dist/build/$$(LIBFFI_DLL)
 	"$$(RM)" $$(RM_OPTS) $$@
-	"$$(rts_dist_HC)" -package-name rts -shared -dynamic -dynload deploy \
+	"$$(rts_dist_HC)" -this-package-key rts -shared -dynamic -dynload deploy \
 	  -no-auto-link-packages -Lrts/dist/build -l$$(LIBFFI_NAME) \
-	  `cat rts/dist/libs.depend` $$(rts_$1_OBJS) $$(ALL_RTS_DEF_LIBS) -o $$@
+         `cat rts/dist/libs.depend` $$(rts_$1_OBJS) $$(ALL_RTS_DEF_LIBS) \
+         $$(rts_dist_$1_GHC_LD_OPTS) \
+         -o $$@
 else
 ifneq "$$(UseSystemLibFFI)" "YES"
 LIBFFI_LIBS = -Lrts/dist/build -l$$(LIBFFI_NAME)
 ifeq "$$(TargetElf)" "YES"
 LIBFFI_LIBS += -optl-Wl,-rpath -optl-Wl,'$$$$ORIGIN' -optl-Wl,-zorigin
+endif
+ifeq "$(TargetOS_CPP)" "darwin"
+LIBFFI_LIBS += -optl-Wl,-rpath -optl-Wl,@loader_path
 endif
 
 else
@@ -204,10 +209,10 @@ LIBFFI_LIBS =
 endif
 $$(rts_$1_LIB) : $$(rts_$1_OBJS) $$(rts_$1_DTRACE_OBJS) rts/dist/libs.depend $$(rts_dist_FFI_SO)
 	"$$(RM)" $$(RM_OPTS) $$@
-	"$$(rts_dist_HC)" -package-name rts -shared -dynamic -dynload deploy \
+	"$$(rts_dist_HC)" -this-package-key rts -shared -dynamic -dynload deploy \
 	  -no-auto-link-packages $$(LIBFFI_LIBS) `cat rts/dist/libs.depend` $$(rts_$1_OBJS) \
+          $$(rts_dist_$1_GHC_LD_OPTS) \
 	  $$(rts_$1_DTRACE_OBJS) -o $$@
-	$(call relative-dynlib-references,rts,dist,1,$1)
 endif
 else
 $$(rts_$1_LIB) : $$(rts_$1_OBJS) $$(rts_$1_DTRACE_OBJS)
@@ -278,7 +283,7 @@ STANDARD_OPTS += -DCOMPILING_RTS
 rts_CC_OPTS += $(WARNING_OPTS)
 rts_CC_OPTS += $(STANDARD_OPTS)
 
-rts_HC_OPTS += $(STANDARD_OPTS) -package-name rts
+rts_HC_OPTS += $(STANDARD_OPTS) -this-package-key rts
 
 ifneq "$(GhcWithSMP)" "YES"
 rts_CC_OPTS += -DNOSMP
@@ -479,6 +484,26 @@ rts_PACKAGE_CPP_OPTS += -DFFI_INCLUDE_DIR=
 rts_PACKAGE_CPP_OPTS += -DFFI_LIB_DIR=
 rts_PACKAGE_CPP_OPTS += '-DFFI_LIB="C$(LIBFFI_NAME)"'
 
+endif
+
+#-----------------------------------------------------------------------------
+# Add perf_event profiling interface, if available
+
+ifeq "$(GhcRtsWithPerfEvent)" "YES"
+rts_CC_OPTS += -DUSE_PERF_EVENT
+endif
+
+#-----------------------------------------------------------------------------
+# Add support for reading DWARF debugging information, if available
+
+ifeq "$(GhcRtsWithDwarf)" "YES"
+rts_CC_OPTS += -DUSE_DWARF
+rts_PACKAGE_CPP_OPTS += -DUSE_DWARF
+rts_PACKAGE_CPP_OPTS += -DDWARF_INCLUDE_DIR=$(DwarfIncludeDir)
+rts_PACKAGE_CPP_OPTS += -DDWARF_LIB_DIR=$(DwarfLibDir)
+else
+rts_PACKAGE_CPP_OPTS += -DDWARF_INCLUDE_DIR=
+rts_PACKAGE_CPP_OPTS += -DDWARF_LIB_DIR=
 endif
 
 # -----------------------------------------------------------------------------

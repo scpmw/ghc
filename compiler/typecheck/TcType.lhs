@@ -15,6 +15,8 @@ The "tc" prefix is for "TypeChecker", because the type checker
 is the principal client.
 
 \begin{code}
+{-# LANGUAGE CPP #-}
+
 module TcType (
   --------------------------------
   -- Types
@@ -93,8 +95,6 @@ module TcType (
   isFFIPrimArgumentTy, -- :: DynFlags -> Type -> Bool
   isFFIPrimResultTy,   -- :: DynFlags -> Type -> Bool
   isFFILabelTy,        -- :: Type -> Bool
-  isFFIDotnetTy,       -- :: DynFlags -> Type -> Bool
-  isFFIDotnetObjTy,    -- :: Type -> Bool
   isFFITy,             -- :: Type -> Bool
   isFunPtrTy,          -- :: Type -> Bool
   tcSplitIOType_maybe, -- :: Type -> Maybe Type
@@ -173,6 +173,7 @@ import Maybes
 import ListSetOps
 import Outputable
 import FastString
+import ErrUtils( Validity(..), isValid )
 
 import Data.IORef
 import Control.Monad (liftM, ap)
@@ -245,34 +246,23 @@ checking.  It's attached to mutable type variables only.
 It's knot-tied back to Var.lhs.  There is no reason in principle
 why Var.lhs shouldn't actually have the definition, but it "belongs" here.
 
-
 Note [Signature skolems]
 ~~~~~~~~~~~~~~~~~~~~~~~~
 Consider this
 
-  x :: [a]
-  y :: b
-  (x,y,z) = ([y,z], z, head x)
+  f :: forall a. [a] -> Int
+  f (x::b : xs) = 3
 
-Here, x and y have type sigs, which go into the environment.  We used to
-instantiate their types with skolem constants, and push those types into
-the RHS, so we'd typecheck the RHS with type
-        ( [a*], b*, c )
-where a*, b* are skolem constants, and c is an ordinary meta type varible.
+Here 'b' is a lexically scoped type variable, but it turns out to be
+the same as the skolem 'a'.  So we have a special kind of skolem
+constant, SigTv, which can unify with other SigTvs. They are used
+*only* for pattern type signatures.
 
-The trouble is that the occurrences of z in the RHS force a* and b* to
-be the *same*, so we can't make them into skolem constants that don't unify
-with each other.  Alas.
-
-One solution would be insist that in the above defn the programmer uses
-the same type variable in both type signatures.  But that takes explanation.
-
-The alternative (currently implemented) is to have a special kind of skolem
-constant, SigTv, which can unify with other SigTvs.  These are *not* treated
-as rigid for the purposes of GADTs.  And they are used *only* for pattern
-bindings and mutually recursive function bindings.  See the function
-TcBinds.tcInstSig, and its use_skols parameter.
-
+Similarly consider
+  data T (a:k1) = MkT (S a)
+  data S (b:k2) = MkS (T b)
+When doing kind inference on {S,T} we don't want *skolems* for k1,k2,
+because they end up unifying; we want those SigTvs again.
 
 \begin{code}
 -- A TyVarDetails is inside a TyVar
@@ -489,7 +479,7 @@ pprTcTyVarDetails (MetaTv { mtv_info = info, mtv_untch = untch })
 pprUserTypeCtxt :: UserTypeCtxt -> SDoc
 pprUserTypeCtxt (InfSigCtxt n)    = ptext (sLit "the inferred type for") <+> quotes (ppr n)
 pprUserTypeCtxt (FunSigCtxt n)    = ptext (sLit "the type signature for") <+> quotes (ppr n)
-pprUserTypeCtxt (RuleSigCtxt n)    = ptext (sLit "a RULE for") <+> quotes (ppr n)
+pprUserTypeCtxt (RuleSigCtxt n)   = ptext (sLit "a RULE for") <+> quotes (ppr n)
 pprUserTypeCtxt ExprSigCtxt       = ptext (sLit "an expression type signature")
 pprUserTypeCtxt (ConArgCtxt c)    = ptext (sLit "the type of the constructor") <+> quotes (ppr c)
 pprUserTypeCtxt (TySynCtxt c)     = ptext (sLit "the RHS of the type synonym") <+> quotes (ppr c)
@@ -745,7 +735,7 @@ mkTcEqPred :: TcType -> TcType -> Type
 mkTcEqPred ty1 ty2
   = mkTyConApp eqTyCon [k, ty1, ty2]
   where
-    k = defaultKind (typeKind ty1)
+    k = typeKind ty1
 \end{code}
 
 @isTauTy@ tests for nested for-alls.  It should not be called on a boxy type.
@@ -945,7 +935,7 @@ tcGetTyVar :: String -> Type -> TyVar
 tcGetTyVar msg ty = expectJust msg (tcGetTyVar_maybe ty)
 
 tcIsTyVarTy :: Type -> Bool
-tcIsTyVarTy ty = maybeToBool (tcGetTyVar_maybe ty)
+tcIsTyVarTy ty = isJust (tcGetTyVar_maybe ty)
 
 -----------------------
 tcSplitDFunTy :: Type -> ([TyVar], [Type], Class, [Type])
@@ -972,7 +962,7 @@ tcInstHeadTyNotSynonym :: Type -> Bool
 -- are transparent, so we need a special function here
 tcInstHeadTyNotSynonym ty
   = case ty of
-        TyConApp tc _ -> not (isSynTyCon tc)
+        TyConApp tc _ -> not (isTypeSynonymTyCon tc)
         _ -> True
 
 tcInstHeadTyAppAllTyVars :: Type -> Bool
@@ -992,7 +982,7 @@ tcInstHeadTyAppAllTyVars ty
         -- and that each is distinct
     ok tys = equalLength tvs tys && hasNoDups tvs
            where
-             tvs = mapCatMaybes get_tv tys
+             tvs = mapMaybe get_tv tys
 
     get_tv (TyVarTy tv)  = Just tv      -- through synonyms
     get_tv _             = Nothing
@@ -1018,7 +1008,8 @@ tcEqType ty1 ty2
                  | Just t2' <- tcView t2 = go env t1 t2'
     go env (TyVarTy tv1)       (TyVarTy tv2)     = rnOccL env tv1 == rnOccR env tv2
     go _   (LitTy lit1)        (LitTy lit2)      = lit1 == lit2
-    go env (ForAllTy tv1 t1)   (ForAllTy tv2 t2) = go (rnBndr2 env tv1 tv2) t1 t2
+    go env (ForAllTy tv1 t1)   (ForAllTy tv2 t2) = go env (tyVarKind tv1) (tyVarKind tv2)
+                                                && go (rnBndr2 env tv1 tv2) t1 t2
     go env (AppTy s1 t1)       (AppTy s2 t2)     = go env s1 s2 && go env t1 t2
     go env (FunTy s1 t1)       (FunTy s2 t2)     = go env s1 s2 && go env t1 t2
     go env (TyConApp tc1 ts1) (TyConApp tc2 ts2) = (tc1 == tc2) && gos env ts1 ts2
@@ -1037,7 +1028,8 @@ pickyEqType ty1 ty2
     init_env = mkRnEnv2 (mkInScopeSet (tyVarsOfType ty1 `unionVarSet` tyVarsOfType ty2))
     go env (TyVarTy tv1)       (TyVarTy tv2)     = rnOccL env tv1 == rnOccR env tv2
     go _   (LitTy lit1)        (LitTy lit2)      = lit1 == lit2
-    go env (ForAllTy tv1 t1)   (ForAllTy tv2 t2) = go (rnBndr2 env tv1 tv2) t1 t2
+    go env (ForAllTy tv1 t1)   (ForAllTy tv2 t2) = go env (tyVarKind tv1) (tyVarKind tv2)
+                                                && go (rnBndr2 env tv1 tv2) t1 t2
     go env (AppTy s1 t1)       (AppTy s2 t2)     = go env s1 s2 && go env t1 t2
     go env (FunTy s1 t1)       (FunTy s2 t2)     = go env s1 s2 && go env t1 t2
     go env (TyConApp tc1 ts1) (TyConApp tc2 ts2) = (tc1 == tc2) && gos env ts1 ts2
@@ -1427,25 +1419,25 @@ tcSplitIOType_maybe ty
 
 isFFITy :: Type -> Bool
 -- True for any TyCon that can possibly be an arg or result of an FFI call
-isFFITy ty = checkRepTyCon legalFFITyCon ty
+isFFITy ty = isValid (checkRepTyCon legalFFITyCon ty empty)
 
-isFFIArgumentTy :: DynFlags -> Safety -> Type -> Bool
+isFFIArgumentTy :: DynFlags -> Safety -> Type -> Validity
 -- Checks for valid argument type for a 'foreign import'
 isFFIArgumentTy dflags safety ty
-   = checkRepTyCon (legalOutgoingTyCon dflags safety) ty
+   = checkRepTyCon (legalOutgoingTyCon dflags safety) ty empty
 
-isFFIExternalTy :: Type -> Bool
+isFFIExternalTy :: Type -> Validity
 -- Types that are allowed as arguments of a 'foreign export'
-isFFIExternalTy ty = checkRepTyCon legalFEArgTyCon ty
+isFFIExternalTy ty = checkRepTyCon legalFEArgTyCon ty empty
 
-isFFIImportResultTy :: DynFlags -> Type -> Bool
+isFFIImportResultTy :: DynFlags -> Type -> Validity
 isFFIImportResultTy dflags ty
-  = checkRepTyCon (legalFIResultTyCon dflags) ty
+  = checkRepTyCon (legalFIResultTyCon dflags) ty empty
 
-isFFIExportResultTy :: Type -> Bool
-isFFIExportResultTy ty = checkRepTyCon legalFEResultTyCon ty
+isFFIExportResultTy :: Type -> Validity
+isFFIExportResultTy ty = checkRepTyCon legalFEResultTyCon ty empty
 
-isFFIDynTy :: Type -> Type -> Bool
+isFFIDynTy :: Type -> Type -> Validity
 -- The type in a foreign import dynamic must be Ptr, FunPtr, or a newtype of
 -- either, and the wrapped function type must be equal to the given type.
 -- We assume that all types have been run through normalizeFfiType, so we don't
@@ -1457,60 +1449,54 @@ isFFIDynTy expected ty
     | Just (tc, [ty']) <- splitTyConApp_maybe ty
     , tyConUnique tc `elem` [ptrTyConKey, funPtrTyConKey]
     , eqType ty' expected
-    = True
+    = IsValid
     | otherwise
-    = False
+    = NotValid (vcat [ ptext (sLit "Expected: Ptr/FunPtr") <+> pprParendType expected <> comma
+                     , ptext (sLit "  Actual:") <+> ppr ty ])
 
-isFFILabelTy :: Type -> Bool
+isFFILabelTy :: Type -> Validity
 -- The type of a foreign label must be Ptr, FunPtr, or a newtype of either.
-isFFILabelTy = checkRepTyConKey [ptrTyConKey, funPtrTyConKey]
+isFFILabelTy ty = checkRepTyCon ok ty extra
+  where
+    ok tc = tc `hasKey` funPtrTyConKey || tc `hasKey` ptrTyConKey 
+    extra = ptext (sLit "A foreign-imported address (via &foo) must have type (Ptr a) or (FunPtr a)")
 
-isFFIPrimArgumentTy :: DynFlags -> Type -> Bool
+isFFIPrimArgumentTy :: DynFlags -> Type -> Validity
 -- Checks for valid argument type for a 'foreign import prim'
 -- Currently they must all be simple unlifted types, or the well-known type
 -- Any, which can be used to pass the address to a Haskell object on the heap to
 -- the foreign function.
 isFFIPrimArgumentTy dflags ty
-   = isAnyTy ty || checkRepTyCon (legalFIPrimArgTyCon dflags) ty
+  | isAnyTy ty = IsValid
+  | otherwise  = checkRepTyCon (legalFIPrimArgTyCon dflags) ty empty
 
-isFFIPrimResultTy :: DynFlags -> Type -> Bool
+isFFIPrimResultTy :: DynFlags -> Type -> Validity
 -- Checks for valid result type for a 'foreign import prim'
 -- Currently it must be an unlifted type, including unboxed tuples.
 isFFIPrimResultTy dflags ty
-   = checkRepTyCon (legalFIPrimResultTyCon dflags) ty
-
-isFFIDotnetTy :: DynFlags -> Type -> Bool
-isFFIDotnetTy dflags ty
-  = checkRepTyCon (\ tc -> (legalFIResultTyCon dflags tc ||
-                           isFFIDotnetObjTy ty || isStringTy ty)) ty
-        -- NB: isStringTy used to look through newtypes, but
-        --     it no longer does so.  May need to adjust isFFIDotNetTy
-        --     if we do want to look through newtypes.
-
-isFFIDotnetObjTy :: Type -> Bool
-isFFIDotnetObjTy ty
-  = checkRepTyCon check_tc t_ty
-  where
-   (_, t_ty) = tcSplitForAllTys ty
-   check_tc tc = getName tc == objectTyConName
+   = checkRepTyCon (legalFIPrimResultTyCon dflags) ty empty
 
 isFunPtrTy :: Type -> Bool
-isFunPtrTy = checkRepTyConKey [funPtrTyConKey]
+isFunPtrTy ty = isValid (checkRepTyCon (`hasKey` funPtrTyConKey) ty empty)
 
 -- normaliseFfiType gets run before checkRepTyCon, so we don't
 -- need to worry about looking through newtypes or type functions
 -- here; that's already been taken care of.
-checkRepTyCon :: (TyCon -> Bool) -> Type -> Bool
-checkRepTyCon check_tc ty
-    | Just (tc, _) <- splitTyConApp_maybe ty
-    = check_tc tc
-    | otherwise
-    = False
-
-checkRepTyConKey :: [Unique] -> Type -> Bool
--- Like checkRepTyCon, but just looks at the TyCon key
-checkRepTyConKey keys
-  = checkRepTyCon (\tc -> tyConUnique tc `elem` keys)
+checkRepTyCon :: (TyCon -> Bool) -> Type -> SDoc -> Validity
+checkRepTyCon check_tc ty extra
+  = case splitTyConApp_maybe ty of
+      Just (tc, tys)
+        | isNewTyCon tc -> NotValid (hang msg 2 (mk_nt_reason tc tys $$ nt_fix))
+        | check_tc tc   -> IsValid
+        | otherwise     -> NotValid (msg $$ extra)
+      Nothing -> NotValid (quotes (ppr ty) <+> ptext (sLit "is not a data type") $$ extra)
+  where
+    msg = quotes (ppr ty) <+> ptext (sLit "cannot be marshalled in a foreign call")
+    mk_nt_reason tc tys
+      | null tys  = ptext (sLit "because its data construtor is not in scope")
+      | otherwise = ptext (sLit "because the data construtor for")
+                    <+> quotes (ppr tc) <+> ptext (sLit "is not in scope")
+    nt_fix = ptext (sLit "Possible fix: import the data constructor to bring it into scope")
 \end{code}
 
 Note [Foreign import dynamic]
@@ -1557,21 +1543,25 @@ legalOutgoingTyCon dflags _ tc
 legalFFITyCon :: TyCon -> Bool
 -- True for any TyCon that can possibly be an arg or result of an FFI call
 legalFFITyCon tc
-  = isUnLiftedTyCon tc || boxedMarshalableTyCon tc || tc == unitTyCon
+  | isUnLiftedTyCon tc = True
+  | tc == unitTyCon    = True
+  | otherwise          = boxedMarshalableTyCon tc
 
 marshalableTyCon :: DynFlags -> TyCon -> Bool
 marshalableTyCon dflags tc
-  =  (xopt Opt_UnliftedFFITypes dflags
+  |  (xopt Opt_UnliftedFFITypes dflags
       && isUnLiftedTyCon tc
       && not (isUnboxedTupleTyCon tc)
       && case tyConPrimRep tc of        -- Note [Marshalling VoidRep]
            VoidRep -> False
            _       -> True)
-  || boxedMarshalableTyCon tc
+  = True
+  | otherwise
+  = boxedMarshalableTyCon tc
 
 boxedMarshalableTyCon :: TyCon -> Bool
 boxedMarshalableTyCon tc
-   = getUnique tc `elem` [ intTyConKey, int8TyConKey, int16TyConKey
+   | getUnique tc `elem` [ intTyConKey, int8TyConKey, int16TyConKey
                          , int32TyConKey, int64TyConKey
                          , wordTyConKey, word8TyConKey, word16TyConKey
                          , word32TyConKey, word64TyConKey
@@ -1581,26 +1571,35 @@ boxedMarshalableTyCon tc
                          , stablePtrTyConKey
                          , boolTyConKey
                          ]
+  = True
+
+  | otherwise = False
 
 legalFIPrimArgTyCon :: DynFlags -> TyCon -> Bool
 -- Check args of 'foreign import prim', only allow simple unlifted types.
 -- Strictly speaking it is unnecessary to ban unboxed tuples here since
 -- currently they're of the wrong kind to use in function args anyway.
 legalFIPrimArgTyCon dflags tc
-  = xopt Opt_UnliftedFFITypes dflags
+  | xopt Opt_UnliftedFFITypes dflags
     && isUnLiftedTyCon tc
     && not (isUnboxedTupleTyCon tc)
+  = True
+  | otherwise
+  = False
 
 legalFIPrimResultTyCon :: DynFlags -> TyCon -> Bool
 -- Check result type of 'foreign import prim'. Allow simple unlifted
 -- types and also unboxed tuple result types '... -> (# , , #)'
 legalFIPrimResultTyCon dflags tc
-  = xopt Opt_UnliftedFFITypes dflags
+  | xopt Opt_UnliftedFFITypes dflags
     && isUnLiftedTyCon tc
     && (isUnboxedTupleTyCon tc
         || case tyConPrimRep tc of      -- Note [Marshalling VoidRep]
            VoidRep -> False
            _       -> True)
+  = True
+  | otherwise
+  = False
 \end{code}
 
 Note [Marshalling VoidRep]

@@ -5,6 +5,7 @@
 \section[Demand]{@Demand@: A decoupled implementation of a demand domain}
 
 \begin{code}
+{-# LANGUAGE CPP, FlexibleInstances, TypeSynonymInstances #-}
 
 module Demand (
         StrDmd, UseDmd(..), Count(..), 
@@ -41,9 +42,10 @@ module Demand (
         deferAfterIO,
         postProcessUnsat, postProcessDmdTypeM,
 
-        splitProdDmd, splitProdDmd_maybe, peelCallDmd, mkCallDmd,
+        splitProdDmd_maybe, peelCallDmd, mkCallDmd,
         dmdTransformSig, dmdTransformDataConSig, dmdTransformDictSelSig,
         argOneShots, argsOneShots,
+        trimToType, TypeShape(..),
 
         isSingleUsed, reuseEnv, zapDemand, zapStrictSig,
 
@@ -64,9 +66,10 @@ import BasicTypes
 import Binary
 import Maybes           ( orElse )
 
-import Type            ( Type )
+import Type            ( Type, isUnLiftedType )
 import TyCon           ( isNewTyCon, isClassTyCon )
 import DataCon         ( splitDataProductType_maybe )
+import FastString
 \end{code}
 
 %************************************************************************
@@ -198,11 +201,13 @@ seqMaybeStr Lazy    = ()
 seqMaybeStr (Str s) = seqStrDmd s
 
 -- Splitting polymorphic demands
-splitStrProdDmd :: Int -> StrDmd -> [MaybeStr]
-splitStrProdDmd n HyperStr     = replicate n strBot
-splitStrProdDmd n HeadStr      = replicate n strTop
-splitStrProdDmd n (SProd ds)   = ASSERT( ds `lengthIs` n) ds
-splitStrProdDmd _ d@(SCall {}) = pprPanic "attempt to prod-split strictness call demand" (ppr d)
+splitStrProdDmd :: Int -> StrDmd -> Maybe [MaybeStr]
+splitStrProdDmd n HyperStr   = Just (replicate n strBot)
+splitStrProdDmd n HeadStr    = Just (replicate n strTop)
+splitStrProdDmd n (SProd ds) = ASSERT( ds `lengthIs` n) Just ds
+splitStrProdDmd _ (SCall {}) = Nothing
+      -- This can happen when the programmer uses unsafeCoerce,
+      -- and we don't then want to crash the compiler (Trac #9208)
 \end{code}
 
 %************************************************************************
@@ -439,13 +444,15 @@ seqMaybeUsed (Use c u)  = c `seq` seqUseDmd u
 seqMaybeUsed _          = ()
 
 -- Splitting polymorphic Maybe-Used demands
-splitUseProdDmd :: Int -> UseDmd -> [MaybeUsed]
-splitUseProdDmd n Used          = replicate n useTop
-splitUseProdDmd n UHead         = replicate n Abs
-splitUseProdDmd n (UProd ds)    = ASSERT2( ds `lengthIs` n, ppr n $$ ppr ds ) ds
-splitUseProdDmd _ d@(UCall _ _) = pprPanic "attempt to prod-split usage call demand" (ppr d)
+splitUseProdDmd :: Int -> UseDmd -> Maybe [MaybeUsed]
+splitUseProdDmd n Used        = Just (replicate n useTop)
+splitUseProdDmd n UHead       = Just (replicate n Abs)
+splitUseProdDmd n (UProd ds)  = ASSERT2( ds `lengthIs` n, text "splitUseProdDmd" $$ ppr n $$ ppr ds ) 
+                                Just ds
+splitUseProdDmd _ (UCall _ _) = Nothing
+      -- This can happen when the programmer uses unsafeCoerce,
+      -- and we don't then want to crash the compiler (Trac #9208)
 \end{code}
-  
 %************************************************************************
 %*                                                                      *
 \subsection{Joint domain for Strictness and Absence}
@@ -638,7 +645,65 @@ isSingleUsed (JD {absd=a}) = is_used_once a
     is_used_once Abs         = True
     is_used_once (Use One _) = True
     is_used_once _           = False
+
+
+data TypeShape = TsFun TypeShape
+               | TsProd [TypeShape]
+               | TsUnk
+
+instance Outputable TypeShape where
+  ppr TsUnk        = ptext (sLit "TsUnk")
+  ppr (TsFun ts)   = ptext (sLit "TsFun") <> parens (ppr ts)
+  ppr (TsProd tss) = parens (hsep $ punctuate comma $ map ppr tss)
+
+trimToType :: JointDmd -> TypeShape -> JointDmd
+-- See Note [Trimming a demand to a type]
+trimToType (JD ms mu) ts
+  = JD (go_ms ms ts) (go_mu mu ts)
+  where
+    go_ms :: MaybeStr -> TypeShape -> MaybeStr
+    go_ms Lazy    _  = Lazy
+    go_ms (Str s) ts = Str (go_s s ts)
+
+    go_s :: StrDmd -> TypeShape -> StrDmd
+    go_s HyperStr    _            = HyperStr
+    go_s (SCall s)   (TsFun ts)   = SCall (go_s s ts)
+    go_s (SProd mss) (TsProd tss)
+      | equalLength mss tss       = SProd (zipWith go_ms mss tss)
+    go_s _           _            = HeadStr
+
+    go_mu :: MaybeUsed -> TypeShape -> MaybeUsed
+    go_mu Abs _ = Abs
+    go_mu (Use c u) ts = Use c (go_u u ts)
+
+    go_u :: UseDmd -> TypeShape -> UseDmd
+    go_u UHead       _          = UHead
+    go_u (UCall c u) (TsFun ts) = UCall c (go_u u ts)
+    go_u (UProd mus) (TsProd tss)
+      | equalLength mus tss      = UProd (zipWith go_mu mus tss)
+    go_u _           _           = Used
 \end{code}
+
+Note [Trimming a demand to a type]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider this:
+
+  f :: a -> Bool
+  f x = case ... of
+          A g1 -> case (x |> g1) of (p,q) -> ...
+          B    -> error "urk"
+
+where A,B are the constructors of a GADT.  We'll get a U(U,U) demand
+on x from the A branch, but that's a stupid demand for x itself, which
+has type 'a'. Indeed we get ASSERTs going off (notably in
+splitUseProdDmd, Trac #8569).
+
+Bottom line: we really don't want to have a binder whose demand is more
+deeply-nested than its type.  There are various ways to tackle this.
+When processing (x |> g1), we could "trim" the incoming demand U(U,U)
+to match x's type.  But I'm currently doing so just at the moment when
+we pin a demand on a binder, in DmdAnal.findBndrDmd.
+
 
 Note [Threshold demands]
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -659,26 +724,18 @@ can be expanded to saturate a callee's arity.
 
 
 \begin{code}
-splitProdDmd :: Arity -> JointDmd -> [JointDmd]
-splitProdDmd n (JD {strd = s, absd = u})
-  = mkJointDmds (split_str s) (split_abs u)
-  where
-    split_str Lazy    = replicate n Lazy
-    split_str (Str s) = splitStrProdDmd n s
-
-    split_abs Abs       = replicate n Abs
-    split_abs (Use _ u) = splitUseProdDmd n u
-
 splitProdDmd_maybe :: JointDmd -> Maybe [JointDmd]
 -- Split a product into its components, iff there is any
 -- useful information to be extracted thereby
 -- The demand is not necessarily strict!
 splitProdDmd_maybe (JD {strd = s, absd = u})
   = case (s,u) of
-      (Str (SProd sx), Use _ u)          -> Just (mkJointDmds sx (splitUseProdDmd (length sx) u))
-      (Str s,          Use _ (UProd ux)) -> Just (mkJointDmds (splitStrProdDmd (length ux) s) ux)
-      (Lazy,           Use _ (UProd ux)) -> Just (mkJointDmds (replicate (length ux) Lazy)    ux)
-      _                                  -> Nothing
+      (Str (SProd sx), Use _ u)          | Just ux <- splitUseProdDmd (length sx) u
+                                         -> Just (mkJointDmds sx ux)
+      (Str s,          Use _ (UProd ux)) | Just sx <- splitStrProdDmd (length ux) s
+                                         -> Just (mkJointDmds sx ux)
+      (Lazy,           Use _ (UProd ux)) -> Just (mkJointDmds (replicate (length ux) Lazy) ux)
+      _ -> Nothing
 \end{code}
 
 %************************************************************************
@@ -960,7 +1017,7 @@ this has a strictness signature of
 meaning that "b2 `seq` ()" and "b2 1 `seq` ()" might well terminate, but
 for "b2 1 2 `seq` ()" we get definite divergence.
 
-For comparision,
+For comparison,
   b1 x = x `seq` error (show x)
 has a strictness signature of
   <S>b
@@ -1144,13 +1201,18 @@ type DeferAndUse   -- Describes how to degrade a result type
 type DeferAndUseM = Maybe DeferAndUse
   -- Nothing <=> absent-ify the result type; it will never be used
 
-toCleanDmd :: Demand -> (CleanDemand, DeferAndUseM)
--- See Note [Analyzing with lazy demand and lambdas]
-toCleanDmd (JD { strd = s, absd = u })
+toCleanDmd :: Demand -> Type -> (CleanDemand, DeferAndUseM)
+toCleanDmd (JD { strd = s, absd = u }) expr_ty
   = case (s,u) of
-      (Str s', Use c u') -> (CD { sd = s',      ud = u' },   Just (False, c))
-      (Lazy,   Use c u') -> (CD { sd = HeadStr, ud = u' },   Just (True,  c))
-      (_,      Abs)      -> (CD { sd = HeadStr, ud = Used }, Nothing)
+      (Str s', Use c u') -> -- The normal case
+                            (CD { sd = s',      ud = u' }, Just (False, c))
+
+      (Lazy,   Use c u') -> -- See Note [Analyzing with lazy demand and lambdas]
+                            (CD { sd = HeadStr, ud = u' }, Just (True,  c))
+
+      (_,      Abs)  -- See Note [Analysing with absent demand]
+         | isUnLiftedType expr_ty -> (CD { sd = HeadStr, ud = Used }, Just (False, One))
+         | otherwise              -> (CD { sd = HeadStr, ud = Used }, Nothing)
 
 -- This is used in dmdAnalStar when post-processing
 -- a function's argument demand. So we only care about what
@@ -1325,13 +1387,13 @@ cardinality analysis of the following example:
 {-# NOINLINE build #-}
 build g = (g (:) [], g (:) [])
 
-h c z = build (\x -> 
-                let z1 = z ++ z 
+h c z = build (\x ->
+                let z1 = z ++ z
                  in if c
                     then \y -> x (y ++ z1)
                     else \y -> x (z1 ++ y))
 
-One can see that `build` assigns to `g` demand <L,C(C1(U))>. 
+One can see that `build` assigns to `g` demand <L,C(C1(U))>.
 Therefore, when analyzing the lambda `(\x -> ...)`, we
 expect each lambda \y -> ... to be annotated as "one-shot"
 one. Therefore (\x -> \y -> x (y ++ z)) should be analyzed with a
@@ -1339,6 +1401,46 @@ demand <C(C(..), C(C1(U))>.
 
 This is achieved by, first, converting the lazy demand L into the
 strict S by the second clause of the analysis.
+
+Note [Analysing with absent demand]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Suppose we analyse an expression with demand <L,A>.  The "A" means
+"absent", so this expression will never be needed.  What should happen?
+There are several wrinkles:
+
+* We *do* want to analyse the expression regardless.
+  Reason: Note [Always analyse in virgin pass]
+
+  But we can post-process the results to ignore all the usage
+  demands coming back. This is done by postProcessDmdTypeM.
+
+* But in the case of an *unlifted type* we must be extra careful,
+  because unlifted values are evaluated even if they are not used.
+  Example (see Trac #9254):
+     f :: (() -> (# Int#, () #)) -> ()
+          -- Strictness signature is
+          --    <C(S(LS)), 1*C1(U(A,1*U()))>
+          -- I.e. calls k, but discards first component of result
+     f k = case k () of (# _, r #) -> r
+
+     g :: Int -> ()
+     g y = f (\n -> (# case y of I# y2 -> y2, n #))
+
+  Here f's strictness signature says (correctly) that it calls its
+  argument function and ignores the first component of its result.
+  This is correct in the sense that it'd be fine to (say) modify the
+  function so that always returned 0# in the first component.
+
+  But in function g, we *will* evaluate the 'case y of ...', because
+  it has type Int#.  So 'y' will be evaluated.  So we must record this
+  usage of 'y', else 'g' will say 'y' is absent, and will w/w so that
+  'y' is bound to an aBSENT_ERROR thunk.
+
+  An alternative would be to replace the 'case y of ...' with (say) 0#,
+  but I have not tried that. It's not a common situation, but it is
+  not theoretical: unsafePerformIO's implementation is very very like
+  'f' above.
+
 
 %************************************************************************
 %*                                                                      *
@@ -1451,7 +1553,7 @@ dmdTransformDataConSig :: Arity -> StrictSig -> CleanDemand -> DmdType
 -- which has a special kind of demand transformer.
 -- If the constructor is saturated, we feed the demand on 
 -- the result into the constructor arguments.
-dmdTransformDataConSig arity (StrictSig (DmdType _ _ con_res)) 
+dmdTransformDataConSig arity (StrictSig (DmdType _ _ con_res))
                              (CD { sd = str, ud = abs })
   | Just str_dmds <- go_str arity str
   , Just abs_dmds <- go_abs arity abs
@@ -1461,12 +1563,12 @@ dmdTransformDataConSig arity (StrictSig (DmdType _ _ con_res))
   | otherwise   -- Not saturated
   = nopDmdType
   where
-    go_str 0 dmd        = Just (splitStrProdDmd arity dmd)
+    go_str 0 dmd        = splitStrProdDmd arity dmd
     go_str n (SCall s') = go_str (n-1) s'
     go_str n HyperStr   = go_str (n-1) HyperStr
     go_str _ _          = Nothing
 
-    go_abs 0 dmd            = Just (splitUseProdDmd arity dmd)
+    go_abs 0 dmd            = splitUseProdDmd arity dmd
     go_abs n (UCall One u') = go_abs (n-1) u'
     go_abs _ _              = Nothing
 

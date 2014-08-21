@@ -709,6 +709,57 @@ void traceUserMsg(Capability *cap, char *msg)
     traceFormatUserMsg(cap, "%s", msg);
 }
 
+void traceDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg)
+{
+    if (eventlog_enabled) {
+        postDebugData(num, size, dbg);
+    }
+}
+
+void traceDebugModule(char *mod_name)
+{
+	if (eventlog_enabled)
+		postDebugModule(mod_name);
+}
+
+void traceDebugBlock(char *label)
+{
+	if (eventlog_enabled)
+		postDebugBlock(label);
+}
+
+void traceSampleRange(void *low, void *high)
+{
+    if (eventlog_enabled) {
+        postSampleRange(low, high);
+    }
+}
+
+void traceSamples(Capability *cap, StgBool own_cap,
+                 StgWord32 sample_by, StgWord32 sample_type,
+                 StgWord32 cnt, void **samples, nat *weights)
+{
+#ifdef DEBUG
+    StgWord32 i;
+    if (RtsFlags.TraceFlags.tracing == TRACE_STDERR) {
+        // Maybe sort this somewhen so it looks more useful...
+        tracePreface();
+        debugBelch("cap %d sample %d by %d:", cap->no, sample_type, sample_by);
+        for (i = 0; i < cnt; i++) {
+            debugBelch((i ? ", %p" : " %p"), samples[i]);
+            if (weights)
+                debugBelch(" (x%d)", weights[i]);
+        }
+        debugBelch("\n");
+    } else
+#endif
+    {
+        if (eventlog_enabled) {
+            postSamples(cap, own_cap, sample_by, sample_type, cnt, samples, weights);
+        }
+    }
+}
+
 void traceUserMarker(Capability *cap, char *markername)
 {
     /* Note: traceUserMarker is special since it has no wrapper (it's called
@@ -805,3 +856,11 @@ void dtraceUserMarkerWrapper(Capability *cap, char *msg)
 }
 
 #endif /* !defined(DEBUG) && !defined(TRACING) && defined(DTRACE) */
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

@@ -4,7 +4,7 @@
 
 \begin{code}
 
-{-# LANGUAGE GADTs, ScopedTypeVariables #-}
+{-# LANGUAGE CPP, DeriveDataTypeable, GADTs, ScopedTypeVariables #-}
 
 -- | Module for coercion axioms, used to represent type family instances
 -- and newtypes
@@ -327,6 +327,7 @@ isImplicitCoAxiom = co_ax_implicit
 coAxBranchIncomps :: CoAxBranch -> [CoAxBranch]
 coAxBranchIncomps = cab_incomps
 
+-- See Note [Compatibility checking] in FamInstEnv
 placeHolderIncomps :: [CoAxBranch]
 placeHolderIncomps = panic "placeHolderIncomps"
 

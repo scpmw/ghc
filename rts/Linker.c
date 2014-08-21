@@ -47,6 +47,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
+#include <libgen.h>
 
 #ifdef HAVE_SYS_STAT_H
 #include <sys/stat.h>
@@ -157,6 +158,7 @@ ObjectCode *unloaded_objects = NULL; /* initially empty */
 /* Type of the initializer */
 typedef void (*init_t) (int argc, char **argv, char **env);
 
+static HsInt isAlreadyLoaded( pathchar *path );
 static HsInt loadOc( ObjectCode* oc );
 static ObjectCode* mkOc( pathchar *path, char *image, int imageSize,
                          char *archiveMemberName
@@ -214,6 +216,18 @@ static int ocResolve_PEi386     ( ObjectCode* oc );
 static int ocRunInit_PEi386     ( ObjectCode* oc );
 static void *lookupSymbolInDLLs ( unsigned char *lbl );
 static void zapTrailingAtSign   ( unsigned char *sym );
+static char *allocateImageAndTrampolines (
+#if defined(x86_64_HOST_ARCH)
+   FILE* f, pathchar* arch_name, char* member_name,
+#endif
+   int size );
+#if defined(x86_64_HOST_ARCH)
+static int ocAllocateSymbolExtras_PEi386 ( ObjectCode* oc );
+static size_t makeSymbolExtra_PEi386( ObjectCode* oc, size_t, char* symbol );
+#define PEi386_IMAGE_OFFSET 4
+#else
+#define PEi386_IMAGE_OFFSET 0
+#endif
 #elif defined(OBJFORMAT_MACHO)
 static int ocVerifyImage_MachO    ( ObjectCode* oc );
 static int ocGetNames_MachO       ( ObjectCode* oc );
@@ -1150,12 +1164,28 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(stg_myThreadIdzh)                                   \
       SymI_HasProto(stg_labelThreadzh)                                  \
       SymI_HasProto(stg_newArrayzh)                                     \
+      SymI_HasProto(stg_copyArrayzh)                                    \
+      SymI_HasProto(stg_copyMutableArrayzh)                             \
+      SymI_HasProto(stg_copyArrayArrayzh)                               \
+      SymI_HasProto(stg_copyMutableArrayArrayzh)                        \
+      SymI_HasProto(stg_cloneArrayzh)                                   \
+      SymI_HasProto(stg_cloneMutableArrayzh)                            \
+      SymI_HasProto(stg_freezzeArrayzh)                                 \
+      SymI_HasProto(stg_thawArrayzh)                                    \
       SymI_HasProto(stg_newArrayArrayzh)                                \
       SymI_HasProto(stg_casArrayzh)                                     \
+      SymI_HasProto(stg_newSmallArrayzh)                                \
+      SymI_HasProto(stg_unsafeThawSmallArrayzh)                         \
+      SymI_HasProto(stg_cloneSmallArrayzh)                              \
+      SymI_HasProto(stg_cloneSmallMutableArrayzh)                       \
+      SymI_HasProto(stg_freezzeSmallArrayzh)                            \
+      SymI_HasProto(stg_thawSmallArrayzh)                               \
+      SymI_HasProto(stg_copySmallArrayzh)                               \
+      SymI_HasProto(stg_copySmallMutableArrayzh)                        \
+      SymI_HasProto(stg_casSmallArrayzh)                                \
       SymI_HasProto(stg_newBCOzh)                                       \
       SymI_HasProto(stg_newByteArrayzh)                                 \
       SymI_HasProto(stg_casIntArrayzh)                                  \
-      SymI_HasProto(stg_fetchAddIntArrayzh)                             \
       SymI_HasProto(stg_newMVarzh)                                      \
       SymI_HasProto(stg_newMutVarzh)                                    \
       SymI_HasProto(stg_newTVarzh)                                      \
@@ -1164,6 +1194,8 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(stg_casMutVarzh)                                    \
       SymI_HasProto(stg_newPinnedByteArrayzh)                           \
       SymI_HasProto(stg_newAlignedPinnedByteArrayzh)                    \
+      SymI_HasProto(stg_shrinkMutableByteArrayzh)                       \
+      SymI_HasProto(stg_resizzeMutableByteArrayzh)                      \
       SymI_HasProto(newSpark)                                           \
       SymI_HasProto(performGC)                                          \
       SymI_HasProto(performMajorGC)                                     \
@@ -1250,6 +1282,9 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(stg_MUT_ARR_PTRS_DIRTY_info)                        \
       SymI_HasProto(stg_MUT_ARR_PTRS_FROZEN_info)                       \
       SymI_HasProto(stg_MUT_ARR_PTRS_FROZEN0_info)                      \
+      SymI_HasProto(stg_SMALL_MUT_ARR_PTRS_DIRTY_info)                  \
+      SymI_HasProto(stg_SMALL_MUT_ARR_PTRS_FROZEN_info)                 \
+      SymI_HasProto(stg_SMALL_MUT_ARR_PTRS_FROZEN0_info)                \
       SymI_HasProto(stg_MUT_VAR_CLEAN_info)                             \
       SymI_HasProto(stg_MUT_VAR_DIRTY_info)                             \
       SymI_HasProto(stg_WEAK_info)                                      \
@@ -1706,6 +1741,18 @@ typedef
 
 /* A list thereof. */
 static OpenedDLL* opened_dlls = NULL;
+
+/* A record for storing indirectly linked functions from DLLs. */
+typedef
+   struct _IndirectAddr {
+      void*                 addr;
+      struct _IndirectAddr* next;
+   }
+   IndirectAddr;
+
+/* A list thereof. */
+static IndirectAddr* indirects = NULL;
+
 #endif
 
 #  if defined(OBJFORMAT_ELF) || defined(OBJFORMAT_MACHO)
@@ -1854,6 +1901,7 @@ addDLL( pathchar *dll_name )
             // success -- try to dlopen the first named file
             IF_DEBUG(linker, debugBelch("match%s\n",""));
             line[match[2].rm_eo] = '\0';
+            stgFree((void*)errmsg); // Free old message before creating new one
             errmsg = internal_dlopen(line+match[2].rm_so);
             break;
          }
@@ -2173,7 +2221,20 @@ void freeObjectCode (ObjectCode *oc)
 
 #else
 
+#ifndef mingw32_HOST_OS
     stgFree(oc->image);
+#else
+    VirtualFree(oc->image - PEi386_IMAGE_OFFSET, 0, MEM_RELEASE);
+
+    IndirectAddr *ia, *ia_next;
+    ia = indirects;
+    while (ia != NULL) {
+      ia_next = ia->next;
+      stgFree(ia);
+      ia = ia_next;
+    }
+
+#endif
 
 #if defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH) || defined(arm_HOST_ARCH)
 #if !defined(x86_64_HOST_ARCH) || !defined(mingw32_HOST_OS)
@@ -2245,6 +2306,23 @@ mkOc( pathchar *path, char *image, int imageSize,
    return oc;
 }
 
+/* -----------------------------------------------------------------------------
+ * Check if an object or archive is already loaded.
+ *
+ * Returns: 1 if the path is already loaded, 0 otherwise.
+ */
+static HsInt
+isAlreadyLoaded( pathchar *path )
+{
+    ObjectCode *o;
+    for (o = objects; o; o = o->next) {
+       if (0 == pathcmp(o->fileName, path)) {
+           return 1; /* already loaded */
+       }
+    }
+    return 0; /* not loaded yet */
+}
+
 HsInt
 loadArchive( pathchar *path )
 {
@@ -2256,7 +2334,7 @@ loadArchive( pathchar *path )
     size_t thisFileNameSize;
     char *fileName;
     size_t fileNameSize;
-    int isObject, isGnuIndex;
+    int isObject, isGnuIndex, isThin;
     char tmp[20];
     char *gnuFileIndex;
     int gnuFileIndexSize;
@@ -2283,14 +2361,26 @@ loadArchive( pathchar *path )
 #endif
 #endif
 
+    initLinker();
+
     IF_DEBUG(linker, debugBelch("loadArchive: start\n"));
     IF_DEBUG(linker, debugBelch("loadArchive: Loading archive `%" PATH_FMT" '\n", path));
+
+    /* Check that we haven't already loaded this archive.
+       Ignore requests to load multiple times */
+    if (isAlreadyLoaded(path)) {
+        IF_DEBUG(linker,
+                 debugBelch("ignoring repeated load of %" PATH_FMT "\n", path));
+        return 1; /* success */
+    }
 
     gnuFileIndex = NULL;
     gnuFileIndexSize = 0;
 
     fileNameSize = 32;
     fileName = stgMallocBytes(fileNameSize, "loadArchive(fileName)");
+
+    isThin = 0;
 
     f = pathopen(path, WSTR("rb"));
     if (!f)
@@ -2318,53 +2408,58 @@ loadArchive( pathchar *path )
     n = fread ( tmp, 1, 8, f );
     if (n != 8)
         barf("loadArchive: Failed reading header from `%s'", path);
-    if (strncmp(tmp, "!<arch>\n", 8) != 0) {
-
+    if (strncmp(tmp, "!<arch>\n", 8) == 0) {}
+#if !defined(mingw32_HOST_OS)
+    /* See Note [thin archives on Windows] */
+    else if (strncmp(tmp, "!<thin>\n", 8) == 0) {
+        isThin = 1;
+    }
+#endif
 #if defined(darwin_HOST_OS)
-        /* Not a standard archive, look for a fat archive magic number: */
-        if (ntohl(*(uint32_t *)tmp) == FAT_MAGIC) {
-            nfat_arch = ntohl(*(uint32_t *)(tmp + 4));
-            IF_DEBUG(linker, debugBelch("loadArchive: found a fat archive containing %d architectures\n", nfat_arch));
-            nfat_offset = 0;
+    /* Not a standard archive, look for a fat archive magic number: */
+    else if (ntohl(*(uint32_t *)tmp) == FAT_MAGIC) {
+        nfat_arch = ntohl(*(uint32_t *)(tmp + 4));
+        IF_DEBUG(linker, debugBelch("loadArchive: found a fat archive containing %d architectures\n", nfat_arch));
+        nfat_offset = 0;
 
-            for (i = 0; i < (int)nfat_arch; i++) {
-                /* search for the right arch */
-                n = fread( tmp, 1, 20, f );
-                if (n != 8)
-                    barf("loadArchive: Failed reading arch from `%s'", path);
-                cputype = ntohl(*(uint32_t *)tmp);
-                cpusubtype = ntohl(*(uint32_t *)(tmp + 4));
+        for (i = 0; i < (int)nfat_arch; i++) {
+            /* search for the right arch */
+            n = fread( tmp, 1, 20, f );
+            if (n != 8)
+                barf("loadArchive: Failed reading arch from `%s'", path);
+            cputype = ntohl(*(uint32_t *)tmp);
+            cpusubtype = ntohl(*(uint32_t *)(tmp + 4));
 
-                if (cputype == mycputype && cpusubtype == mycpusubtype) {
-                    IF_DEBUG(linker, debugBelch("loadArchive: found my archive in a fat archive\n"));
-                    nfat_offset = ntohl(*(uint32_t *)(tmp + 8));
-                    break;
-                }
+            if (cputype == mycputype && cpusubtype == mycpusubtype) {
+                IF_DEBUG(linker, debugBelch("loadArchive: found my archive in a fat archive\n"));
+                nfat_offset = ntohl(*(uint32_t *)(tmp + 8));
+                break;
             }
+        }
 
-            if (nfat_offset == 0) {
-               barf ("loadArchive: searched %d architectures, but no host arch found", (int)nfat_arch);
-            }
-            else {
-                n = fseek( f, nfat_offset, SEEK_SET );
-                if (n != 0)
-                    barf("loadArchive: Failed to seek to arch in `%s'", path);
-                n = fread ( tmp, 1, 8, f );
-                if (n != 8)
-                    barf("loadArchive: Failed reading header from `%s'", path);
-                if (strncmp(tmp, "!<arch>\n", 8) != 0) {
-                    barf("loadArchive: couldn't find archive in `%s' at offset %d", path, nfat_offset);
-                }
-            }
+        if (nfat_offset == 0) {
+           barf ("loadArchive: searched %d architectures, but no host arch found", (int)nfat_arch);
         }
         else {
-            barf("loadArchive: Neither an archive, nor a fat archive: `%s'", path);
+            n = fseek( f, nfat_offset, SEEK_SET );
+            if (n != 0)
+                barf("loadArchive: Failed to seek to arch in `%s'", path);
+            n = fread ( tmp, 1, 8, f );
+            if (n != 8)
+                barf("loadArchive: Failed reading header from `%s'", path);
+            if (strncmp(tmp, "!<arch>\n", 8) != 0) {
+                barf("loadArchive: couldn't find archive in `%s' at offset %d", path, nfat_offset);
+            }
         }
-
-#else
-        barf("loadArchive: Not an archive: `%s'", path);
-#endif
     }
+    else {
+        barf("loadArchive: Neither an archive, nor a fat archive: `%s'", path);
+    }
+#else
+    else {
+        barf("loadArchive: Not an archive: `%s'", path);
+    }
+#endif
 
     IF_DEBUG(linker, debugBelch("loadArchive: loading archive contents\n"));
 
@@ -2470,8 +2565,8 @@ loadArchive( pathchar *path )
                 if (n != 0 && gnuFileIndex[n - 1] != '\n') {
                     barf("loadArchive: GNU-variant filename offset %d invalid (range [0..%d]) while reading filename from `%s'", n, gnuFileIndexSize, path);
                 }
-                for (i = n; gnuFileIndex[i] != '/'; i++);
-                thisFileNameSize = i - n;
+                for (i = n; gnuFileIndex[i] != '\n'; i++);
+                thisFileNameSize = i - n - 1;
                 if (thisFileNameSize >= fileNameSize) {
                     /* Double it to avoid potentially continually
                        increasing it by 1 */
@@ -2546,23 +2641,11 @@ loadArchive( pathchar *path )
 #elif defined(mingw32_HOST_OS)
         // TODO: We would like to use allocateExec here, but allocateExec
         //       cannot currently allocate blocks large enough.
-            {
-                int offset;
+            image = allocateImageAndTrampolines(
 #if defined(x86_64_HOST_ARCH)
-                /* We get back 8-byte aligned memory (is that guaranteed?), but
-                   the offsets to the sections within the file are all 4 mod 8
-                   (is that guaranteed?). We therefore need to offset the image
-                   by 4, so that all the pointers are 8-byte aligned, so that
-                   pointer tagging works. */
-                offset = 4;
-#else
-                offset = 0;
+               f, path, fileName,
 #endif
-                image = VirtualAlloc(NULL, memberSize + offset,
-                                     MEM_RESERVE | MEM_COMMIT,
-                                     PAGE_EXECUTE_READWRITE);
-                image += offset;
-            }
+               memberSize);
 #elif defined(darwin_HOST_OS)
             /* See loadObj() */
             misalignment = machoGetMisalignment(f);
@@ -2571,9 +2654,53 @@ loadArchive( pathchar *path )
 #else
             image = stgMallocBytes(memberSize, "loadArchive(image)");
 #endif
-            n = fread ( image, 1, memberSize, f );
-            if (n != memberSize) {
-                barf("loadArchive: error whilst reading `%s'", path);
+
+#if !defined(mingw32_HOST_OS)
+            /*
+             * Note [thin archives on Windows]
+             * This doesn't compile on Windows because it assumes
+             * char* pathnames, and we use wchar_t* on Windows.  It's
+             * not trivial to fix, so I'm leaving it disabled on
+             * Windows for now --SDM
+             */
+            if (isThin) {
+                FILE *member;
+                char *pathCopy, *dirName, *memberPath;
+
+                /* Allocate and setup the dirname of the archive.  We'll need
+                   this to locate the thin member */
+                pathCopy = stgMallocBytes(strlen(path) + 1, "loadArchive(file)");
+                strcpy(pathCopy, path);
+                dirName = dirname(pathCopy);
+
+                /* Append the relative member name to the dirname.  This should be
+                   be the full path to the actual thin member. */
+                memberPath = stgMallocBytes(
+                    strlen(path) + 1 + strlen(fileName) + 1, "loadArchive(file)");
+                strcpy(memberPath, dirName);
+                memberPath[strlen(dirName)] = '/';
+                strcpy(memberPath + strlen(dirName) + 1, fileName);
+
+                member = pathopen(memberPath, WSTR("rb"));
+                if (!member)
+                    barf("loadObj: can't read `%s'", path);
+
+                n = fread ( image, 1, memberSize, member );
+                if (n != memberSize) {
+                    barf("loadArchive: error whilst reading `%s'", fileName);
+                }
+
+                fclose(member);
+                stgFree(memberPath);
+                stgFree(pathCopy);
+            }
+            else
+#endif
+            {
+                n = fread ( image, 1, memberSize, f );
+                if (n != memberSize) {
+                    barf("loadArchive: error whilst reading `%s'", path);
+                }
             }
 
             archiveMemberName = stgMallocBytes(pathlen(path) + thisFileNameSize + 3,
@@ -2593,6 +2720,7 @@ loadArchive( pathchar *path )
 
             if (0 == loadOc(oc)) {
                 stgFree(fileName);
+                fclose(f);
                 return 0;
             }
         }
@@ -2615,14 +2743,16 @@ loadArchive( pathchar *path )
         }
         else {
             IF_DEBUG(linker, debugBelch("loadArchive: '%s' does not appear to be an object file\n", fileName));
-            n = fseek(f, memberSize, SEEK_CUR);
-            if (n != 0)
-                barf("loadArchive: error whilst seeking by %d in `%s'",
-                     memberSize, path);
+            if (!isThin || thisFileNameSize == 0) {
+                n = fseek(f, memberSize, SEEK_CUR);
+                if (n != 0)
+                    barf("loadArchive: error whilst seeking by %d in `%s'",
+                         memberSize, path);
+            }
         }
 
         /* .ar files are 2-byte aligned */
-        if (memberSize % 2) {
+        if (!(isThin && thisFileNameSize > 0) && memberSize % 2) {
             IF_DEBUG(linker, debugBelch("loadArchive: trying to read one pad byte\n"));
             n = fread ( tmp, 1, 1, f );
             if (n != 1) {
@@ -2683,24 +2813,11 @@ loadObj( pathchar *path )
 
    /* Check that we haven't already loaded this object.
       Ignore requests to load multiple times */
-   {
-       ObjectCode *o;
-       int is_dup = 0;
-       for (o = objects; o; o = o->next) {
-          if (0 == pathcmp(o->fileName, path)) {
-             is_dup = 1;
-             break; /* don't need to search further */
-          }
-       }
-       if (is_dup) {
-          IF_DEBUG(linker, debugBelch(
-            "GHCi runtime linker: warning: looks like you're trying to load the\n"
-            "same object file twice:\n"
-            "   %" PATH_FMT "\n"
-            "GHCi will ignore this, but be warned.\n"
-            , path));
-          return 1; /* success */
-       }
+
+   if (isAlreadyLoaded(path)) {
+       IF_DEBUG(linker,
+                debugBelch("ignoring repeated load of %" PATH_FMT "\n", path));
+       return 1; /* success */
    }
 
    r = pathstat(path, &st);
@@ -2715,8 +2832,10 @@ loadObj( pathchar *path )
    /* On many architectures malloc'd memory isn't executable, so we need to use mmap. */
 
 #if defined(openbsd_HOST_OS)
+   /* coverity[toctou] */
    fd = open(path, O_RDONLY, S_IRUSR);
 #else
+   /* coverity[toctou] */
    fd = open(path, O_RDONLY);
 #endif
    if (fd == -1)
@@ -2728,6 +2847,7 @@ loadObj( pathchar *path )
 
 #else /* !USE_MMAP */
    /* load the image into memory */
+   /* coverity[toctou] */
    f = pathopen(path, WSTR("rb"));
    if (!f)
        barf("loadObj: can't read `%" PATH_FMT "'", path);
@@ -2735,22 +2855,11 @@ loadObj( pathchar *path )
 #   if defined(mingw32_HOST_OS)
         // TODO: We would like to use allocateExec here, but allocateExec
         //       cannot currently allocate blocks large enough.
-    {
-        int offset;
+    image = allocateImageAndTrampolines(
 #if defined(x86_64_HOST_ARCH)
-        /* We get back 8-byte aligned memory (is that guaranteed?), but
-           the offsets to the sections within the file are all 4 mod 8
-           (is that guaranteed?). We therefore need to offset the image
-           by 4, so that all the pointers are 8-byte aligned, so that
-           pointer tagging works. */
-        offset = 4;
-#else
-        offset = 0;
+       f, path, "itself",
 #endif
-      image = VirtualAlloc(NULL, fileSize + offset, MEM_RESERVE | MEM_COMMIT,
-                           PAGE_EXECUTE_READWRITE);
-      image += offset;
-    }
+       fileSize);
 #   elif defined(darwin_HOST_OS)
     // In a Mach-O .o file, all sections can and will be misaligned
     // if the total size of the headers is not a multiple of the
@@ -2806,6 +2915,8 @@ loadOc( ObjectCode* oc ) {
        IF_DEBUG(linker, debugBelch("loadOc: ocAllocateSymbolExtras_ELF failed\n"));
        return r;
    }
+#  elif defined(OBJFORMAT_PEi386) && defined(x86_64_HOST_ARCH)
+   ocAllocateSymbolExtras_PEi386 ( oc );
 #endif
 
    /* verify the in-memory image */
@@ -2912,8 +3023,8 @@ unloadObj( pathchar *path )
     IF_DEBUG(linker, debugBelch("unloadObj: %" PATH_FMT "\n", path));
 
     prev = NULL;
-    for (oc = objects; oc; prev = oc, oc = next) {
-        next = oc->next;
+    for (oc = objects; oc; oc = next) {
+        next = oc->next; // oc might be freed
 
         if (!pathcmp(oc->fileName,path)) {
 
@@ -2971,6 +3082,8 @@ unloadObj( pathchar *path )
             /* This could be a member of an archive so continue
              * unloading other members. */
             unloadedAnyObj = HS_BOOL_TRUE;
+        } else {
+            prev = oc;
         }
     }
 
@@ -3460,6 +3573,46 @@ typedef
 #define MYIMAGE_REL_I386_DIR32           0x0006
 #define MYIMAGE_REL_I386_REL32           0x0014
 
+/* We assume file pointer is right at the
+   beginning of COFF object.
+ */
+static char *
+allocateImageAndTrampolines (
+#if defined(x86_64_HOST_ARCH)
+   FILE* f, pathchar* arch_name, char* member_name,
+#endif
+   int size )
+{
+   char* image;
+#if defined(x86_64_HOST_ARCH)
+   /* PeCoff contains number of symbols right in it's header, so
+      we can reserve the room for symbolExtras right here. */
+   COFF_header hdr;
+   size_t n;
+
+   n = fread ( &hdr, 1, sizeof_COFF_header, f );
+   if (n != sizeof( COFF_header ))
+       barf("getNumberOfSymbols: error whilst reading `%s' header in `%S'",
+             member_name, arch_name);
+   fseek( f, -sizeof_COFF_header, SEEK_CUR );
+   
+   /* We get back 8-byte aligned memory (is that guaranteed?), but
+      the offsets to the sections within the file are all 4 mod 8
+      (is that guaranteed?). We therefore need to offset the image
+      by 4, so that all the pointers are 8-byte aligned, so that
+      pointer tagging works. */
+   /* For 32-bit case we don't need this, hence we use macro PEi386_IMAGE_OFFSET,
+      which equals to 4 for 64-bit case and 0 for 32-bit case. */
+   /* We allocate trampolines area for all symbols right behind
+      image data, aligned on 8. */
+   size = ((PEi386_IMAGE_OFFSET + size + 0x7) & ~0x7)
+              + hdr.NumberOfSymbols * sizeof(SymbolExtra);
+#endif
+   image = VirtualAlloc(NULL, size,
+                        MEM_RESERVE | MEM_COMMIT,
+                        PAGE_EXECUTE_READWRITE);
+   return image + PEi386_IMAGE_OFFSET;
+}
 
 /* We use myindex to calculate array addresses, rather than
    simply doing the normal subscript thing.  That's because
@@ -3568,9 +3721,10 @@ cstring_from_section_name (UChar* name, UChar* strtab)
 
 /* Just compares the short names (first 8 chars) */
 static COFF_section *
-findPEi386SectionCalled ( ObjectCode* oc,  UChar* name )
+findPEi386SectionCalled ( ObjectCode* oc,  UChar* name, UChar* strtab )
 {
    int i;
+   rtsBool long_name = rtsFalse;
    COFF_header* hdr
       = (COFF_header*)(oc->image);
    COFF_section* sectab
@@ -3578,6 +3732,14 @@ findPEi386SectionCalled ( ObjectCode* oc,  UChar* name )
            ((UChar*)(oc->image))
            + sizeof_COFF_header + hdr->SizeOfOptionalHeader
         );
+   // String is longer than 8 bytes, swap in the proper
+   // (NULL-terminated) version, and make a note that this
+   // is a long name.
+   if (name[0]==0 && name[1]==0 && name[2]==0 && name[3]==0) {
+      UInt32 strtab_offset = * (UInt32*)(name+4);
+      name = ((UChar*)strtab) + strtab_offset;
+      long_name = rtsTrue;
+   }
    for (i = 0; i < hdr->NumberOfSections; i++) {
       UChar* n1;
       UChar* n2;
@@ -3586,10 +3748,28 @@ findPEi386SectionCalled ( ObjectCode* oc,  UChar* name )
            myindex ( sizeof_COFF_section, sectab, i );
       n1 = (UChar*) &(section_i->Name);
       n2 = name;
-      if (n1[0]==n2[0] && n1[1]==n2[1] && n1[2]==n2[2] &&
-          n1[3]==n2[3] && n1[4]==n2[4] && n1[5]==n2[5] &&
-          n1[6]==n2[6] && n1[7]==n2[7])
-         return section_i;
+      // Long section names are prefixed with a slash, see
+      // also cstring_from_section_name
+      if (n1[0] == '/' && long_name) {
+         // Long name check
+         // We don't really want to make an assumption that the string
+         // table indexes are the same, so we'll do a proper check.
+         int n1_strtab_offset = strtol((char*)n1+1,NULL,10);
+         n1 = (UChar*) (((char*)strtab) + n1_strtab_offset);
+         if (0==strcmp((const char*)n1, (const char*)n2)) {
+            return section_i;
+         }
+      } else if (n1[0] != '/' && !long_name) {
+         // Short name check
+         if (n1[0]==n2[0] && n1[1]==n2[1] && n1[2]==n2[2] &&
+             n1[3]==n2[3] && n1[4]==n2[4] && n1[5]==n2[5] &&
+             n1[6]==n2[6] && n1[7]==n2[7]) {
+            return section_i;
+         }
+      } else {
+         // guaranteed to mismatch, because we never attempt to link
+         // in an executable where the section name may be truncated
+      }
    }
 
    return NULL;
@@ -3631,6 +3811,28 @@ lookupSymbolInDLLs ( UChar *lbl )
                 return sym;
             }
         }
+
+        /* Ticket #2283.
+           Long description: http://support.microsoft.com/kb/132044
+           tl;dr:
+             If C/C++ compiler sees __declspec(dllimport) ... foo ...
+             it generates call *__imp_foo, and __imp_foo here has exactly
+             the same semantics as in __imp_foo = GetProcAddress(..., "foo")
+         */
+        if (sym == NULL && strncmp ((const char*)lbl, "__imp_", 6) == 0) {
+            sym = GetProcAddress(o_dll->instance, (char*)(lbl+6));
+            if (sym != NULL) {
+                IndirectAddr* ret;
+                ret = stgMallocBytes( sizeof(IndirectAddr), "lookupSymbolInDLLs" );
+                ret->addr = sym;
+                ret->next = indirects;
+                indirects = ret;
+                errorBelch("warning: %s from %S is linked instead of %s",
+                              (char*)(lbl+6), o_dll->name, (char*)lbl);
+                return (void*) & ret->addr;
+               }
+        }
+
         sym = GetProcAddress(o_dll->instance, (char*)lbl);
         if (sym != NULL) {
             /*debugBelch("found %s in %s\n", lbl,o_dll->name);*/
@@ -3944,6 +4146,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 
       if (0==strcmp(".text",(char*)secname) ||
           0==strcmp(".text.startup",(char*)secname) ||
+          0==strcmp(".text.unlikely", (char*)secname) ||
           0==strcmp(".rdata",(char*)secname)||
           0==strcmp(".eh_frame", (char*)secname)||
           0==strcmp(".rodata",(char*)secname))
@@ -3967,8 +4170,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
           && 0 != strcmp(".stab", (char*)secname)
           && 0 != strcmp(".stabstr", (char*)secname)
           /* Ignore sections called which contain exception information. */
-          && 0 != strcmp(".pdata", (char*)secname)
-          && 0 != strcmp(".xdata", (char*)secname)
+          && 0 != strncmp(".pdata", (char*)secname, 6)
+          && 0 != strncmp(".xdata", (char*)secname, 6)
           /* ignore section generated from .ident */
           && 0!= strncmp(".debug", (char*)secname, 6)
           /* ignore unknown section that appeared in gcc 3.4.5(?) */
@@ -3983,8 +4186,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       }
 
       if (kind != SECTIONKIND_OTHER && end >= start) {
-          if ((((size_t)(start)) % sizeof(void *)) != 0) {
-              barf("Misaligned section: %p", start);
+          if ((((size_t)(start)) % 4) != 0) {
+              barf("Misaligned section %s: %p", (char*)secname, start);
           }
 
          addSection(oc, kind, start, end);
@@ -4081,6 +4284,46 @@ ocGetNames_PEi386 ( ObjectCode* oc )
    return 1;
 }
 
+#if defined(x86_64_HOST_ARCH)
+
+/* We've already reserved a room for symbol extras in loadObj,
+ * so simply set correct pointer here.
+ */
+static int
+ocAllocateSymbolExtras_PEi386 ( ObjectCode* oc )
+{
+   oc->symbol_extras = (SymbolExtra*)(oc->image - PEi386_IMAGE_OFFSET
+                                      + ((PEi386_IMAGE_OFFSET + oc->fileSize + 0x7) & ~0x7));
+   oc->first_symbol_extra = 0;
+   oc->n_symbol_extras = ((COFF_header*)oc->image)->NumberOfSymbols;
+
+   return 1;
+}
+
+static size_t
+makeSymbolExtra_PEi386( ObjectCode* oc, size_t s, char* symbol )
+{
+    unsigned int curr_thunk;
+    SymbolExtra *extra;
+
+    curr_thunk = oc->first_symbol_extra;
+    if (curr_thunk >= oc->n_symbol_extras) {
+      barf("Can't allocate thunk for %s", symbol);
+    }
+
+    extra = oc->symbol_extras + curr_thunk;
+
+    // jmp *-14(%rip)
+    static uint8_t jmp[] = { 0xFF, 0x25, 0xF2, 0xFF, 0xFF, 0xFF };
+    extra->addr = (uint64_t)s;
+    memcpy(extra->jumpIsland, jmp, 6);
+
+    oc->first_symbol_extra++;
+
+    return (size_t)extra->jumpIsland;
+}
+
+#endif
 
 static int
 ocResolve_PEi386 ( ObjectCode* oc )
@@ -4130,8 +4373,8 @@ ocResolve_PEi386 ( ObjectCode* oc )
          information. */
       if (0 == strcmp(".stab", (char*)secname)
           || 0 == strcmp(".stabstr", (char*)secname)
-          || 0 == strcmp(".pdata", (char*)secname)
-          || 0 == strcmp(".xdata", (char*)secname)
+          || 0 == strncmp(".pdata", (char*)secname, 6)
+          || 0 == strncmp(".xdata", (char*)secname, 6)
           || 0 == strncmp(".debug", (char*)secname, 6)
           || 0 == strcmp(".rdata$zzz", (char*)secname)) {
           stgFree(secname);
@@ -4199,9 +4442,11 @@ ocResolve_PEi386 ( ObjectCode* oc )
 
          if (sym->StorageClass == MYIMAGE_SYM_CLASS_STATIC) {
             COFF_section* section_sym
-               = findPEi386SectionCalled ( oc, sym->Name );
+               = findPEi386SectionCalled ( oc, sym->Name, strtab );
             if (!section_sym) {
-               errorBelch("%" PATH_FMT ": can't find section `%s'", oc->fileName, sym->Name);
+               errorBelch("%" PATH_FMT ": can't find section named: ", oc->fileName);
+               printName(sym->Name, strtab);
+               errorBelch(" in %s", secname);
                return 0;
             }
             S = ((size_t)(oc->image))
@@ -4258,8 +4503,13 @@ ocResolve_PEi386 ( ObjectCode* oc )
                    v = S + ((size_t)A);
                    if (v >> 32) {
                        copyName ( sym->Name, strtab, symbol, 1000-1 );
-                       barf("R_X86_64_32[S]: High bits are set in %zx for %s",
-                            v, (char *)symbol);
+                       S = makeSymbolExtra_PEi386(oc, S, (char *)symbol);
+                       /* And retry */
+                       v = S + ((size_t)A);
+                       if (v >> 32) {
+                           barf("R_X86_64_32[S]: High bits are set in %zx for %s",
+                                v, (char *)symbol);
+                       }
                    }
                    *(UInt32 *)pP = (UInt32)v;
                    break;
@@ -4269,9 +4519,15 @@ ocResolve_PEi386 ( ObjectCode* oc )
                    intptr_t v;
                    v = ((intptr_t)S) + ((intptr_t)(Int32)A) - ((intptr_t)pP) - 4;
                    if ((v >> 32) && ((-v) >> 32)) {
+                       /* Make the trampoline then */
                        copyName ( sym->Name, strtab, symbol, 1000-1 );
-                       barf("R_X86_64_PC32: High bits are set in %zx for %s",
-                            v, (char *)symbol);
+                       S = makeSymbolExtra_PEi386(oc, S, (char *)symbol);
+                       /* And retry */
+                       v = ((intptr_t)S) + ((intptr_t)(Int32)A) - ((intptr_t)pP) - 4;
+                       if ((v >> 32) && ((-v) >> 32)) {
+                           barf("R_X86_64_PC32: High bits are set in %zx for %s",
+                                v, (char *)symbol);
+                       }
                    }
                    *(UInt32 *)pP = (UInt32)v;
                    break;
@@ -6909,3 +7165,11 @@ machoGetMisalignment( FILE * f )
 #endif
 
 #endif
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

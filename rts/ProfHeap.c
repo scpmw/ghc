@@ -19,6 +19,7 @@
 #include "Arena.h"
 #include "Printer.h"
 #include "sm/GCThread.h"
+#include "Trace.h"
 
 #include <string.h>
 
@@ -142,6 +143,14 @@ closureIdentity( StgClosure *p )
             return closure_type_names[info->type];
         }
     }
+    case TRACE_HEAP_BY_CODE_PTR:
+        // FIXME: This should really not be hard-coded here, but
+        //        GET_ENTRY seems to be unusable?
+#if defined(TABLES_NEXT_TO_CODE)
+        return (void *)GET_INFO(p);
+#else
+        return (void *)GET_INFO(p)->entry;
+#endif
 
 #endif
     default:
@@ -331,16 +340,17 @@ void initProfiling2 (void)
     /* Initialise the log file name */
     hp_filename = stgMallocBytes(strlen(prog) + 6, "hpFileName");
     sprintf(hp_filename, "%s.hp", prog);
-    
+
     /* open the log file */
     if ((hp_file = fopen(hp_filename, "w")) == NULL) {
-      debugBelch("Can't open profiling report file %s\n", 
+      debugBelch("Can't open profiling report file %s\n",
 	      hp_filename);
       RtsFlags.ProfFlags.doHeapProfile = 0;
+      stgFree(prog);
       return;
     }
   }
-  
+
   stgFree(prog);
 
   initHeapProfiling();
@@ -830,6 +840,41 @@ dumpCensus( Census *census )
     printSample(rtsFalse, census->time);
 }
 
+#ifdef TRACING
+
+static void
+traceCensus( Census *census )
+{
+    counter *ctr;
+
+    // Count samples
+    nat count = 0;
+    for (ctr = census->ctrs; ctr != NULL; ctr = ctr->next)
+        count++;
+
+    // Allocate buffer for samples + weights
+    nat size = count * (sizeof(void*) + sizeof(nat));
+    StgWord8 *buf = stgMallocBytes(size, "traceCensus");
+    void **samples = (void **)buf;
+    nat *weights = (nat *)(buf + count * sizeof(void *));
+
+    // Fill
+    nat i = 0;
+    for (ctr = census->ctrs; ctr != NULL; ctr = ctr->next) {
+        samples[i] = ctr->identity;
+        weights[i] = ctr->c.resid;
+        i++;
+    }
+
+    // Trace
+    traceSamples(myTask()->cap, 1, SAMPLE_BY_HEAP_LIFE, SAMPLE_INSTR_PTR,
+                 count, samples, weights);
+
+    // Free
+    stgFree(buf);
+}
+
+#endif
 
 static void heapProfObject(Census *census, StgClosure *p, nat size,
                            rtsBool prim
@@ -1025,6 +1070,14 @@ heapCensusChain( Census *census, bdescr *bd )
 		prim = rtsTrue;
 		size = mut_arr_ptrs_sizeW((StgMutArrPtrs *)p);
 		break;
+
+	    case SMALL_MUT_ARR_PTRS_CLEAN:
+	    case SMALL_MUT_ARR_PTRS_DIRTY:
+	    case SMALL_MUT_ARR_PTRS_FROZEN:
+	    case SMALL_MUT_ARR_PTRS_FROZEN0:
+		prim = rtsTrue;
+		size = small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs *)p);
+		break;
 		
 	    case TSO:
 		prim = rtsTrue;
@@ -1110,6 +1163,7 @@ void heapCensus (Time t)
   }
 
   // dump out the census info
+  if (RtsFlags.ProfFlags.doHeapProfile < TRACE_HEAP_START) {
 #ifdef PROFILING
     // We can't generate any info for LDV profiling until
     // the end of the run...
@@ -1117,6 +1171,12 @@ void heapCensus (Time t)
 	dumpCensus( census );
 #else
     dumpCensus( census );
+#endif
+  }
+#ifdef TRACING
+  else {
+    traceCensus( census) ;
+  }
 #endif
 
 
@@ -1139,3 +1199,11 @@ void heapCensus (Time t)
 #endif
 }    
 
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

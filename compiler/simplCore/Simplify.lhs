@@ -4,6 +4,8 @@
 \section[Simplify]{The main module of the simplifier}
 
 \begin{code}
+{-# LANGUAGE CPP #-}
+
 module Simplify ( simplTopBinds, simplExpr ) where
 
 #include "HsVersions.h"
@@ -28,7 +30,7 @@ import DataCon          ( DataCon, dataConWorkId, dataConRepStrictness
 --import TyCon            ( isEnumerationTyCon ) -- temporalily commented out. See #8326
 import CoreMonad        ( Tick(..), SimplifierMode(..) )
 import CoreSyn
-import Demand           ( StrictSig(..), dmdTypeDepth )
+import Demand           ( StrictSig(..), dmdTypeDepth, isStrictDmd )
 import PprCore          ( pprParendExpr, pprCoreExpr )
 import CoreUnfold
 import CoreUtils
@@ -219,9 +221,7 @@ simplTopBinds env0 binds0
                 -- It's rather as if the top-level binders were imported.
                 -- See note [Glomming] in OccurAnal.
         ; env1 <- simplRecBndrs env0 (bindersOfBinds binds0)
-        ; dflags <- getDynFlags
-        ; let dump_flag = dopt Opt_D_verbose_core2core dflags
-        ; env2 <- simpl_binds dump_flag env1 binds0
+        ; env2 <- simpl_binds env1 binds0
         ; freeTick SimplifierDone
         ; return env2 }
   where
@@ -229,16 +229,10 @@ simplTopBinds env0 binds0
         -- they should have their fragile IdInfo zapped (notably occurrence info)
         -- That's why we run down binds and bndrs' simultaneously.
         --
-        -- The dump-flag emits a trace for each top-level binding, which
-        -- helps to locate the tracing for inlining and rule firing
-    simpl_binds :: Bool -> SimplEnv -> [InBind] -> SimplM SimplEnv
-    simpl_binds _    env []           = return env
-    simpl_binds dump env (bind:binds) = do { env' <- trace_bind dump bind $
-                                                     simpl_bind env bind
-                                           ; simpl_binds dump env' binds }
-
-    trace_bind True  bind = pprTrace "SimplBind" (ppr (bindersOf bind))
-    trace_bind False _    = \x -> x
+    simpl_binds :: SimplEnv -> [InBind] -> SimplM SimplEnv
+    simpl_binds env []           = return env
+    simpl_binds env (bind:binds) = do { env' <- simpl_bind env bind
+                                      ; simpl_binds env' binds }
 
     simpl_bind env (Rec pairs)  = simplRecBind      env  TopLevel pairs
     simpl_bind env (NonRec b r) = simplRecOrTopPair env' TopLevel NonRecursive b b' r
@@ -293,12 +287,21 @@ simplRecOrTopPair :: SimplEnv
                   -> SimplM SimplEnv    -- Returns an env that includes the binding
 
 simplRecOrTopPair env top_lvl is_rec old_bndr new_bndr rhs
-  = do dflags <- getDynFlags
-       -- Check for unconditional inline
-       if preInlineUnconditionally dflags env top_lvl old_bndr rhs
+  = do { dflags <- getDynFlags
+       ; trace_bind dflags $
+           if preInlineUnconditionally dflags env top_lvl old_bndr rhs
+                    -- Check for unconditional inline
            then do tick (PreInlineUnconditionally old_bndr)
                    return (extendIdSubst env old_bndr (mkContEx env rhs))
-           else simplLazyBind env top_lvl is_rec old_bndr new_bndr rhs env
+           else simplLazyBind env top_lvl is_rec old_bndr new_bndr rhs env }
+  where
+    trace_bind dflags thing_inside
+      | not (dopt Opt_D_verbose_core2core dflags)
+      = thing_inside
+      | otherwise
+      = pprTrace "SimplBind" (ppr old_bndr) thing_inside
+        -- trace_bind emits a trace for each top-level binding, which
+        -- helps to locate the tracing for inlining and rule firing
 \end{code}
 
 
@@ -323,19 +326,21 @@ simplLazyBind :: SimplEnv
                                         -- The OutId has IdInfo, except arity, unfolding
               -> InExpr -> SimplEnv     -- The RHS and its environment
               -> SimplM SimplEnv
-
+-- Precondition: rhs obeys the let/app invariant
 simplLazyBind env top_lvl is_rec bndr bndr1 rhs rhs_se
   = -- pprTrace "simplLazyBind" ((ppr bndr <+> ppr bndr1) $$ ppr rhs $$ ppr (seIdSubst rhs_se)) $
     do  { let   rhs_env     = rhs_se `setInScope` env
                 (tvs, body) = case collectTyBinders rhs of
                                 (tvs, body) | not_lam body -> (tvs,body)
                                             | otherwise    -> ([], rhs)
-                not_lam (Lam _ _) = False
-                not_lam _         = True
+                not_lam (Lam _ _)  = False
+                not_lam (Tick t e) | not (tickishFloatable t)
+                                   = not_lam e -- eta-reduction could float: ignore
+                not_lam _          = True
                         -- Do not do the "abstract tyyvar" thing if there's
                         -- a lambda inside, because it defeats eta-reduction
                         --    f = /\a. \x. g a x
-                        -- should eta-reduce
+                        -- should eta-reduce.
 
 
         ; (body_env, tvs') <- simplBinders rhs_env tvs
@@ -375,11 +380,12 @@ simplNonRecX :: SimplEnv
              -> InId            -- Old binder
              -> OutExpr         -- Simplified RHS
              -> SimplM SimplEnv
-
+-- Precondition: rhs satisfies the let/app invariant
 simplNonRecX env bndr new_rhs
   | isDeadBinder bndr   -- Not uncommon; e.g. case (a,b) of c { (p,q) -> p }
-  = return env          --               Here c is dead, and we avoid creating
-                        --               the binding c = (a,b)
+  = return env    --  Here c is dead, and we avoid creating
+                  --   the binding c = (a,b)
+
   | Coercion co <- new_rhs
   = return (extendCvSubst env bndr co)
 
@@ -394,6 +400,8 @@ completeNonRecX :: TopLevelFlag -> SimplEnv
                 -> OutId                -- New binder
                 -> OutExpr              -- Simplified RHS
                 -> SimplM SimplEnv
+-- Precondition: rhs satisfies the let/app invariant
+--               See Note [CoreSyn let/app invariant] in CoreSyn
 
 completeNonRecX top_lvl env is_strict old_bndr new_bndr new_rhs
   = do  { (env1, rhs1) <- prepareRhs top_lvl (zapFloats env) new_bndr new_rhs
@@ -482,6 +490,20 @@ prepareRhs top_lvl env0 _ rhs0
                         -- See Note [CONLIKE pragma] in BasicTypes
                         -- The definition of is_exp should match that in
                         -- OccurAnal.occAnalApp
+
+    go n_val_args env (Tick t rhs)
+        -- We want to be able to float bindings past this
+        -- tick. Non-scoping ticks don't care.
+        | tickishScoped t == NoScope
+        = do { (is_exp, env', rhs') <- go n_val_args env rhs
+             ; return (is_exp, env', Tick t rhs') }
+        -- On the other hand, for scoping ticks we need to be able to
+        -- copy them on the floats, which in turn is only allowed if
+        -- we can obtain non-counting ticks.
+        | not (tickishCounts t) || tickishCanSplit t
+        = do { (is_exp, env', rhs') <- go n_val_args env rhs
+             ; let tickIt (id, expr) = (id, mkTick (mkNoCount t) expr)
+             ; return (is_exp, mapFloats env' tickIt, Tick t rhs') }
 
     go _ env other
         = return (False, env, other)
@@ -641,7 +663,8 @@ completeBind :: SimplEnv
 -- completeBind may choose to do its work
 --      * by extending the substitution (e.g. let x = y in ...)
 --      * or by adding to the floats in the envt
-
+--
+-- Precondition: rhs obeys the let/app invariant
 completeBind env top_lvl old_bndr new_bndr new_rhs
  | isCoVar old_bndr
  = case new_rhs of
@@ -730,53 +753,51 @@ simplUnfolding :: SimplEnv-> TopLevelFlag
                -> OutExpr
                -> Unfolding -> SimplM Unfolding
 -- Note [Setting the new unfolding]
-simplUnfolding env _ _ _ df@(DFunUnfolding { df_bndrs = bndrs, df_args = args })
-  = do { (env', bndrs') <- simplBinders env bndrs
-       ; args' <- mapM (simplExpr env') args
-       ; return (df { df_bndrs = bndrs', df_args  = args' }) }
+simplUnfolding env top_lvl id new_rhs unf
+  = case unf of
+      DFunUnfolding { df_bndrs = bndrs, df_con = con, df_args = args }
+        -> do { (env', bndrs') <- simplBinders rule_env bndrs
+              ; args' <- mapM (simplExpr env') args
+              ; return (mkDFunUnfolding bndrs' con args') }
 
-simplUnfolding env top_lvl id _
-    (CoreUnfolding { uf_tmpl = expr, uf_arity = arity
-                   , uf_src = src, uf_guidance = guide })
-  | isStableSource src
-  = do { expr' <- simplExpr rule_env expr
-       ; let is_top_lvl = isTopLevel top_lvl
-       ; case guide of
-           UnfWhen sat_ok _    -- Happens for INLINE things
-              -> let guide' = UnfWhen sat_ok (inlineBoringOk expr')
-                     -- Refresh the boring-ok flag, in case expr'
-                     -- has got small. This happens, notably in the inlinings
-                     -- for dfuns for single-method classes; see
-                     -- Note [Single-method classes] in TcInstDcls.
-                     -- A test case is Trac #4138
-                 in return (mkCoreUnfolding src is_top_lvl expr' arity guide')
-                 -- See Note [Top-level flag on inline rules] in CoreUnfold
+      CoreUnfolding { uf_tmpl = expr, uf_arity = arity
+                    , uf_src = src, uf_guidance = guide }
+        | isStableSource src
+        -> do { expr' <- simplExpr rule_env expr
+              ; case guide of
+                  UnfWhen sat_ok _    -- Happens for INLINE things
+                     -> let guide' = UnfWhen sat_ok (inlineBoringOk expr')
+                        -- Refresh the boring-ok flag, in case expr'
+                        -- has got small. This happens, notably in the inlinings
+                        -- for dfuns for single-method classes; see
+                        -- Note [Single-method classes] in TcInstDcls.
+                        -- A test case is Trac #4138
+                        in return (mkCoreUnfolding src is_top_lvl expr' arity guide')
+                            -- See Note [Top-level flag on inline rules] in CoreUnfold
 
-           _other              -- Happens for INLINABLE things
-              -> let bottoming = isBottomingId id
-                 in bottoming `seq` -- See Note [Force bottoming field]
-                    do dflags <- getDynFlags
-                       return (mkUnfolding dflags src is_top_lvl bottoming expr')
+                  _other              -- Happens for INLINABLE things
+                     -> bottoming `seq` -- See Note [Force bottoming field]
+                        do { dflags <- getDynFlags
+                           ; return (mkUnfolding dflags src is_top_lvl bottoming expr') } }
                 -- If the guidance is UnfIfGoodArgs, this is an INLINABLE
                 -- unfolding, and we need to make sure the guidance is kept up
                 -- to date with respect to any changes in the unfolding.
-       }
+
+      _other -> bottoming `seq`  -- See Note [Force bottoming field]
+                do { dflags <- getDynFlags
+                   ; return (mkUnfolding dflags InlineRhs is_top_lvl bottoming new_rhs) }
+                     -- We make an  unfolding *even for loop-breakers*.
+                     -- Reason: (a) It might be useful to know that they are WHNF
+                     --         (b) In TidyPgm we currently assume that, if we want to
+                     --             expose the unfolding then indeed we *have* an unfolding
+                     --             to expose.  (We could instead use the RHS, but currently
+                     --             we don't.)  The simple thing is always to have one.
   where
+    bottoming = isBottomingId id
+    is_top_lvl = isTopLevel top_lvl
     act      = idInlineActivation id
     rule_env = updMode (updModeForInlineRules act) env
                -- See Note [Simplifying inside InlineRules] in SimplUtils
-
-simplUnfolding _ top_lvl id new_rhs _
-  = let bottoming = isBottomingId id
-    in bottoming `seq`  -- See Note [Force bottoming field]
-       do dflags <- getDynFlags
-          return (mkUnfolding dflags InlineRhs (isTopLevel top_lvl) bottoming new_rhs)
-          -- We make an  unfolding *even for loop-breakers*.
-          -- Reason: (a) It might be useful to know that they are WHNF
-          --         (b) In TidyPgm we currently assume that, if we want to
-          --             expose the unfolding then indeed we *have* an unfolding
-          --             to expose.  (We could instead use the RHS, but currently
-          --             we don't.)  The simple thing is always to have one.
 \end{code}
 
 Note [Force bottoming field]
@@ -1024,58 +1045,50 @@ simplTick env tickish expr cont
 --  | tickishScoped tickish && not (tickishCounts tickish)
 --  = simplExprF env expr (TickIt tickish cont)
 
-  -- For non-scoped ticks, we push the continuation inside the
-  -- tick.  This has the effect of moving the tick to the outside of a
-  -- case or application context, allowing the normal case and
-  -- application optimisations to fire.
-  | not (tickishScoped tickish)
+  -- For unscoped or soft-scoped ticks, we are allowed to float in new
+  -- cost, so we simply push the continuation inside the tick.  This
+  -- has the effect of moving the tick to the outside of a case or
+  -- application context, allowing the normal case and application
+  -- optimisations to fire.
+  | tickish `tickishScopesLike` SoftScope
   = do { (env', expr') <- simplExprF env expr cont
        ; return (env', mkTick tickish expr')
        }
 
-  -- For breakpoints, we cannot do any floating of bindings around the
-  -- tick, because breakpoints cannot be split into tick/scope pairs.
-  | not (tickishCanSplit tickish)
-  = no_floating_past_tick
-
-  | interesting_cont, Just expr' <- push_tick_inside tickish expr
-    -- see Note [case-of-scc-of-case]
+  -- Push tick inside if the context looks like this will allow us to
+  -- do a case-of-case - see Note [case-of-scc-of-case]
+  | interesting_cont, Just expr' <- push_tick_inside
   = simplExprF env expr' cont
 
+  -- We don't want to move the tick, but we might still want to allow
+  -- floats to pass through with appropriate wrapping (or not, see
+  -- wrap_floats below)
+  --- | not (tickishCounts tickish) || tickishCanSplit tickish
+  -- = wrap_floats
+
   | otherwise
-  = no_floating_past_tick -- was: wrap_floats, see below
+  = no_floating_past_tick
 
  where
   interesting_cont = case cont of
                         Select {} -> True
                         _ -> False
 
-  push_tick_inside t expr0
-       = ASSERT(tickishScoped t)
-         case expr0 of
-           Tick t' expr
-              -- scc t (tick t' E)
-              --   Pull the tick to the outside
-              -- This one is important for #5363
-              | not (tickishScoped t')
-                 -> Just (Tick t' (Tick t expr))
-
-              -- scc t (scc t' E)
-              --   Try to push t' into E first, and if that works,
-              --   try to push t in again
-              | Just expr' <- push_tick_inside t' expr
-                 -> push_tick_inside t expr'
-
-              | otherwise -> Nothing
-
-           Case scrut bndr ty alts
-              | not (tickishCanSplit t) -> Nothing
-              | otherwise -> Just (Case (mkTick t scrut) bndr ty alts')
-             where t_scope = mkNoCount t -- drop the tick on the dup'd ones
-                   alts'   = [ (c,bs, mkTick t_scope e) | (c,bs,e) <- alts]
-
-           _other -> Nothing
-    where
+  -- Try to push tick inside a case, see Note [case-of-scc-of-case].
+  push_tick_inside =
+    case expr0 of
+      Case scrut bndr ty alts
+             -> Just $ Case (tickScrut scrut) bndr ty (map tickAlt alts)
+      _other -> Nothing
+   where (ticks, expr0) = stripTicksTop movable (Tick tickish expr)
+         movable t      = not (tickishCounts t) ||
+                          t `tickishScopesLike` NoScope ||
+                          tickishCanSplit t
+         tickScrut e    = foldr mkTick e ticks
+         -- Alternatives get annotated with all ticks that scope in some way,
+         -- but we don't want to count entries.
+         tickAlt (c,bs,e) = (c,bs, foldr mkTick e ts_scope)
+         ts_scope         = map mkNoCount $ filter (not . (`tickishScopesLike` NoScope)) ticks
 
   no_floating_past_tick =
     do { let (inc,outc) = splitCont cont
@@ -1176,6 +1189,8 @@ rebuild env expr cont
       Select _ bndr alts se cont    -> rebuildCase (se `setFloats` env) expr bndr alts cont
       StrictArg info _ cont         -> rebuildCall env (info `addArgTo` expr) cont
       StrictBind b bs body se cont  -> do { env' <- simplNonRecX (se `setFloats` env) b expr
+                                               -- expr satisfies let/app since it started life
+                                               -- in a call to simplNonRecE
                                           ; simplLam env' bs body cont }
       ApplyTo dup_flag arg se cont  -- See Note [Avoid redundant simplification]
         | isSimplified dup_flag     -> rebuild env (App expr arg) cont
@@ -1326,6 +1341,9 @@ simplNonRecE :: SimplEnv
 -- It deals with strict bindings, via the StrictBind continuation,
 -- which may abort the whole process
 --
+-- Precondition: rhs satisfies the let/app invariant
+--               Note [CoreSyn let/app invariant] in CoreSyn
+--
 -- The "body" of the binding comes as a pair of ([InId],InExpr)
 -- representing a lambda; so we recurse back to simplLam
 -- Why?  Because of the binder-occ-info-zapping done before
@@ -1341,22 +1359,21 @@ simplNonRecE env bndr (Type ty_arg, rhs_se) (bndrs, body) cont
 simplNonRecE env bndr (rhs, rhs_se) (bndrs, body) cont
   = do dflags <- getDynFlags
        case () of
-         _
-          | preInlineUnconditionally dflags env NotTopLevel bndr rhs ->
-            do  { tick (PreInlineUnconditionally bndr)
-                ; -- pprTrace "preInlineUncond" (ppr bndr <+> ppr rhs) $
+         _ | preInlineUnconditionally dflags env NotTopLevel bndr rhs
+           -> do { tick (PreInlineUnconditionally bndr)
+                 ; -- pprTrace "preInlineUncond" (ppr bndr <+> ppr rhs) $
                   simplLam (extendIdSubst env bndr (mkContEx rhs_se rhs)) bndrs body cont }
 
-          | isStrictId bndr ->           -- Includes coercions
-            do  { simplExprF (rhs_se `setFloats` env) rhs
-                             (StrictBind bndr bndrs body env cont) }
+           | isStrictId bndr          -- Includes coercions
+           -> simplExprF (rhs_se `setFloats` env) rhs
+                         (StrictBind bndr bndrs body env cont)
 
-          | otherwise ->
-            ASSERT( not (isTyVar bndr) )
-            do  { (env1, bndr1) <- simplNonRecBndr env bndr
-                ; let (env2, bndr2) = addBndrRules env1 bndr bndr1
-                ; env3 <- simplLazyBind env2 NotTopLevel NonRecursive bndr bndr2 rhs rhs_se
-                ; simplLam env3 bndrs body cont }
+           | otherwise
+           -> ASSERT( not (isTyVar bndr) )
+              do { (env1, bndr1) <- simplNonRecBndr env bndr
+                 ; let (env2, bndr2) = addBndrRules env1 bndr bndr1
+                 ; env3 <- simplLazyBind env2 NotTopLevel NonRecursive bndr bndr2 rhs rhs_se
+                 ; simplLam env3 bndrs body cont }
 \end{code}
 
 %************************************************************************
@@ -1699,26 +1716,36 @@ This includes things like (==# a# b#)::Bool so that we simplify
 to just
       x
 This particular example shows up in default methods for
-comparision operations (e.g. in (>=) for Int.Int32)
+comparison operations (e.g. in (>=) for Int.Int32)
 
 Note [Case elimination: lifted case]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We also make sure that we deal with this very common case,
-where x has a lifted type:
+If a case over a lifted type has a single alternative, and is being used
+as a strict 'let' (all isDeadBinder bndrs), we may want to do this
+transformation:
 
-        case e of
-          x -> ...x...
+    case e of r       ===>   let r = e in ...r...
+      _ -> ...r...
 
-Here we are using the case as a strict let; if x is used only once
-then we want to inline it.  We have to be careful that this doesn't
-make the program terminate when it would have diverged before, so we
-check that
         (a) 'e' is already evaluated (it may so if e is a variable)
-            Specifically we check (exprIsHNF e)
+            Specifically we check (exprIsHNF e).  In this case
+            we can just allocate the WHNF directly with a let.
 or
         (b) 'x' is not used at all and e is ok-for-speculation
+             The ok-for-spec bit checks that we don't lose any
+             exceptions or divergence.
 
-For the (b), consider
+             NB: it'd be *sound* to switch from case to let if the
+             scrutinee was not yet WHNF but was guaranteed to
+             converge; but sticking with case means we won't build a
+             thunk
+
+or
+        (c) 'x' is used strictly in the body, and 'e' is a variable
+            Then we can just substitute 'e' for 'x' in the body.
+            See Note [Eliminating redundant seqs]
+
+For (b), the "not used at all" test is important.  Consider
    case (case a ># b of { True -> (p,q); False -> (q,p) }) of
      r -> blah
 The scrutinee is ok-for-speculation (it looks inside cases), but we do
@@ -1727,33 +1754,42 @@ not want to transform to
    in blah
 because that builds an unnecessary thunk.
 
-Note [Case binder next]
-~~~~~~~~~~~~~~~~~~~~~~~
-If we have
-   case e of f { _ -> f e1 e2 }
-then we can safely do CaseElim.   The main criterion is that the
-case-binder is evaluated *next*.  Previously we just asked that
-the case-binder is used strictly; but that can change
+Note [Eliminating redundant seqs]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+If we have this:
+   case x of r { _ -> ..r.. }
+where 'r' is used strictly in (..r..), the case is effectively a 'seq'
+on 'x', but since 'r' is used strictly anyway, we can safely transform to
+   (...x...)
+
+Note that this can change the error behaviour.  For example, we might
+transform
     case x of { _ -> error "bad" }
     --> error "bad"
-which is very puzzling if 'x' is later bound to (error "good").
-Where the order of evaluation is specified (via seq or case)
-we should respect it.
+which is might be puzzling if 'x' currently lambda-bound, but later gets
+let-bound to (error "good").
+
+Nevertheless, the paper "A semantics for imprecise exceptions" allows
+this transformation. If you want to fix the evaluation order, use
+'pseq'.  See Trac #8900 for an example where the loss of this
+transformation bit us in practice. 
+
 See also Note [Empty case alternatives] in CoreSyn.
 
-So instead we use case_bndr_evald_next to see when f is the *next*
-thing to be eval'd.  This came up when fixing Trac #7542.
-See also Note [Eta reduction of an eval'd function] in CoreUtils.
+Just for reference, the original code (added Jan 13) looked like this:
+     || case_bndr_evald_next rhs
 
-  For reference, the old code was an extra disjunct in elim_lifted
-       || (strict_case_bndr && scrut_is_var scrut)
-      strict_case_bndr = isStrictDmd (idDemandInfo case_bndr)
-      scrut_is_var (Cast s _) = scrut_is_var s
-      scrut_is_var (Var _)    = True
-      scrut_is_var _          = False
+    case_bndr_evald_next :: CoreExpr -> Bool
+      -- See Note [Case binder next]
+    case_bndr_evald_next (Var v)         = v == case_bndr
+    case_bndr_evald_next (Cast e _)      = case_bndr_evald_next e
+    case_bndr_evald_next (App e _)       = case_bndr_evald_next e
+    case_bndr_evald_next (Case e _ _ _)  = case_bndr_evald_next e
+    case_bndr_evald_next _               = False
 
-      -- True if evaluation of the case_bndr is the next
-      -- thing to be eval'd.  Then dropping the case
+(This came up when fixing Trac #7542. See also Note [Eta reduction of
+an eval'd function] in CoreUtils.)
+
 
 Note [Case elimination: unlifted case]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1849,6 +1885,8 @@ rebuildCase env scrut case_bndr alts cont
   where
     simple_rhs bs rhs = ASSERT( null bs )
                         do { env' <- simplNonRecX env case_bndr scrut
+                               -- scrut is a constructor application,
+                               -- hence satisfies let/app invariant
                            ; simplExprF env' rhs cont }
 
 
@@ -1856,58 +1894,41 @@ rebuildCase env scrut case_bndr alts cont
 --      2. Eliminate the case if scrutinee is evaluated
 --------------------------------------------------
 
-rebuildCase env scrut case_bndr [(_, bndrs, rhs)] cont
+rebuildCase env scrut case_bndr alts@[(_, bndrs, rhs)] cont
   -- See if we can get rid of the case altogether
   -- See Note [Case elimination]
   -- mkCase made sure that if all the alternatives are equal,
   -- then there is now only one (DEFAULT) rhs
- | all isDeadBinder bndrs       -- bndrs are [InId]
 
- , if isUnLiftedType (idType case_bndr)
-   then elim_unlifted        -- Satisfy the let-binding invariant
-   else elim_lifted
-  = do  { -- pprTrace "case elim" (vcat [ppr case_bndr, ppr (exprIsHNF scrut),
-          --                            ppr ok_for_spec,
-          --                            ppr scrut]) $
-          tick (CaseElim case_bndr)
-        ; env' <- simplNonRecX env case_bndr scrut
-          -- If case_bndr is dead, simplNonRecX will discard
-        ; simplExprF env' rhs cont }
-  where
-    elim_lifted   -- See Note [Case elimination: lifted case]
-      = exprIsHNF scrut
-     || (is_plain_seq && ok_for_spec)
-              -- Note: not the same as exprIsHNF
-     || case_bndr_evald_next rhs
+  -- 2a.  Dropping the case altogether, if
+  --      a) it binds nothing (so it's really just a 'seq')
+  --      b) evaluating the scrutinee has no side effects
+  | is_plain_seq
+  , exprOkForSideEffects scrut
+          -- The entire case is dead, so we can drop it
+          -- if the scrutinee converges without having imperative
+          -- side effects or raising a Haskell exception
+          -- See Note [PrimOp can_fail and has_side_effects] in PrimOp
+   = simplExprF env rhs cont
 
-    elim_unlifted
-      | is_plain_seq = exprOkForSideEffects scrut
-            -- The entire case is dead, so we can drop it,
-            -- _unless_ the scrutinee has side effects
-      | otherwise    = ok_for_spec
-            -- The case-binder is alive, but we may be able
-            -- turn the case into a let, if the expression is ok-for-spec
-            -- See Note [Case elimination: unlifted case]
+  -- 2b.  Turn the case into a let, if
+  --      a) it binds only the case-binder
+  --      b) unlifted case: the scrutinee is ok-for-speculation
+  --           lifted case: the scrutinee is in HNF (or will later be demanded)
+  | all_dead_bndrs
+  , if is_unlifted
+    then exprOkForSpeculation scrut  -- See Note [Case elimination: unlifted case]
+    else exprIsHNF scrut             -- See Note [Case elimination: lifted case]
+      || scrut_is_demanded_var scrut
+  = do { tick (CaseElim case_bndr)
+       ; env' <- simplNonRecX env case_bndr scrut
+       ; simplExprF env' rhs cont }
 
-    ok_for_spec      = exprOkForSpeculation scrut
-    is_plain_seq     = isDeadBinder case_bndr -- Evaluation *only* for effect
-
-    case_bndr_evald_next :: CoreExpr -> Bool
-      -- See Note [Case binder next]
-    case_bndr_evald_next (Var v)         = v == case_bndr
-    case_bndr_evald_next (Cast e _)      = case_bndr_evald_next e
-    case_bndr_evald_next (App e _)       = case_bndr_evald_next e
-    case_bndr_evald_next (Case e _ _ _)  = case_bndr_evald_next e
-    case_bndr_evald_next _               = False
-      -- Could add a case for Let,
-      -- but I'm worried it could become expensive
-
---------------------------------------------------
---      3. Try seq rules; see Note [User-defined RULES for seq] in MkId
---------------------------------------------------
-
-rebuildCase env scrut case_bndr alts@[(_, bndrs, rhs)] cont
-  | all isDeadBinder (case_bndr : bndrs)  -- So this is just 'seq'
+  -- 2c. Try the seq rules if
+  --     a) it binds only the case binder
+  --     b) a rule for seq applies
+  -- See Note [User-defined RULES for seq] in MkId
+  | is_plain_seq
   = do { let rhs' = substExpr (text "rebuild-case") env rhs
              env' = zapSubstEnv env
              out_args = [Type (substTy env (idType case_bndr)),
@@ -1919,6 +1940,17 @@ rebuildCase env scrut case_bndr alts@[(_, bndrs, rhs)] cont
        ; case mb_rule of
            Just (rule_rhs, cont') -> simplExprF env' rule_rhs cont'
            Nothing                -> reallyRebuildCase env scrut case_bndr alts cont }
+  where
+    is_unlifted        = isUnLiftedType (idType case_bndr)
+    all_dead_bndrs     = all isDeadBinder bndrs       -- bndrs are [InId]
+    is_plain_seq       = all_dead_bndrs && isDeadBinder case_bndr -- Evaluation *only* for effect
+
+    scrut_is_demanded_var :: CoreExpr -> Bool
+            -- See Note [Eliminating redundant seqs]
+    scrut_is_demanded_var (Cast s _) = scrut_is_demanded_var s
+    scrut_is_demanded_var (Var _)    = isStrictDmd (idDemandInfo case_bndr)
+    scrut_is_demanded_var _          = False
+
 
 rebuildCase env scrut case_bndr alts cont
   = reallyRebuildCase env scrut case_bndr alts cont
@@ -2255,7 +2287,7 @@ knownCon env scrut dc dc_ty_args dc_args bndr bs rhs cont
              -- it via postInlineUnconditionally.
              -- Nevertheless we must keep it if the case-binder is alive,
              -- because it may be used in the con_app.  See Note [knownCon occ info]
-           ; env'' <- simplNonRecX env' b' arg
+           ; env'' <- simplNonRecX env' b' arg  -- arg satisfies let/app invariant
            ; bind_args env'' bs' args }
 
     bind_args _ _ _ =

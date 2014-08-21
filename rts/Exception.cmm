@@ -53,6 +53,7 @@ import ghczmprim_GHCziTypes_True_closure;
 INFO_TABLE_RET(stg_unmaskAsyncExceptionszh_ret, RET_SMALL, W_ info_ptr)
     /* explicit stack */
 {
+    unwind Sp = Sp + WDS(1);
     CInt r;
 
     P_ ret;
@@ -157,7 +158,7 @@ stg_maskAsyncExceptionszh /* explicit stack */
 stg_maskUninterruptiblezh /* explicit stack */
 {
     /* Args: R1 :: IO a */
-    STK_CHK_P_LL (WDS(1)/* worst case */, stg_maskAsyncExceptionszh, R1);
+    STK_CHK_P_LL (WDS(1)/* worst case */, stg_maskUninterruptiblezh, R1);
 
     if ((TO_W_(StgTSO_flags(CurrentTSO)) & TSO_BLOCKEX) == 0) {
         /* avoid growing the stack unnecessarily */

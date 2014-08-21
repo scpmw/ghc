@@ -273,6 +273,8 @@ initCapability( Capability *cap, nat i )
 	cap->mut_lists[g] = NULL;
     }
 
+    cap->weak_ptr_list_hd = NULL;
+    cap->weak_ptr_list_tl = NULL;
     cap->free_tvar_watch_queues = END_STM_WATCH_QUEUE;
     cap->free_invariant_check_queues = END_INVARIANT_CHECK_QUEUE;
     cap->free_trec_chunks = END_STM_CHUNK_LIST;
@@ -286,6 +288,23 @@ initCapability( Capability *cap, nat i )
     cap->r.rCCCS = CCS_SYSTEM;
 #else
     cap->r.rCCCS = NULL;
+#endif
+
+#ifdef TRACING
+    if (RtsFlags.TraceFlags.allocSampling) {
+        switch(RtsFlags.TraceFlags.allocSampling) {
+        case SAMPLE_BY_HEAP_ALLOC: cap->heap_ip_sample_count = 0; break;
+        case SAMPLE_BY_STACK_ALLOC:
+            cap->heap_ip_sample_count = 2*HEAP_ALLOC_MAX_SAMPLES; break;
+        default: barf("Unknown allocation sampling method %d", RtsFlags.TraceFlags.allocSampling);
+        }
+        cap->heap_ip_samples = stgMallocBytes(
+            sizeof(void *) * HEAP_ALLOC_MAX_SAMPLES,
+            "initCapability");
+    } else {
+        cap->heap_ip_sample_count = HEAP_ALLOC_MAX_SAMPLES; // "full"
+        cap->heap_ip_samples = NULL;
+    }
 #endif
 
     traceCapCreate(cap);
@@ -357,15 +376,18 @@ moreCapabilities (nat from USED_IF_THREADS, nat to USED_IF_THREADS)
         // BaseReg (eg. unregisterised), so in this case
 	// capabilities[0] must coincide with &MainCapability.
         capabilities[0] = &MainCapability;
+        initCapability(&MainCapability, 0);
     }
-
-    for (i = 0; i < to; i++) {
-        if (i < from) {
-            capabilities[i] = old_capabilities[i];
-        } else {
-            capabilities[i] = stgMallocBytes(sizeof(Capability),
-                                             "moreCapabilities");
-            initCapability(capabilities[i], i);
+    else
+    {
+        for (i = 0; i < to; i++) {
+            if (i < from) {
+                capabilities[i] = old_capabilities[i];
+            } else {
+                capabilities[i] = stgMallocBytes(sizeof(Capability),
+                                                 "moreCapabilities");
+                initCapability(capabilities[i], i);
+            }
         }
     }
 
@@ -983,7 +1005,8 @@ freeCapabilities (void)
     nat i;
     for (i=0; i < n_capabilities; i++) {
         freeCapability(capabilities[i]);
-        stgFree(capabilities[i]);
+        if (capabilities[i] != &MainCapability)
+            stgFree(capabilities[i]);
     }
 #else
     freeCapability(&MainCapability);
@@ -1069,3 +1092,11 @@ rtsBool checkSparkCountInvariant (void)
 
 }
 #endif
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

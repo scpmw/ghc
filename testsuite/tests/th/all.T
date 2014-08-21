@@ -317,3 +317,15 @@ test('T8577',
      ['T8577', '-v0 ' + config.ghc_th_way_flags])
 test('T8633', normal, compile_and_run, [''])
 test('T8625', normal, ghci_script, ['T8625.script'])
+test('T8759', normal, compile_fail, ['-v0'])
+test('T8759a', normal, compile_fail, ['-v0'])
+test('T7021',
+     extra_clean(['T7021a.hi', 'T7021a.o']), multimod_compile, ['T7021','-v0'])
+test('T8807', normal, compile, ['-v0'])
+test('T8884', normal, compile, ['-v0'])
+test('T8954', normal, compile, ['-v0'])
+test('T8932', normal, compile_fail, ['-v0'])
+test('T8987', normal, compile_fail, ['-v0'])
+test('T7241', normal, compile_fail, ['-v0'])
+test('T9199', normal, compile, ['-v0'])
+

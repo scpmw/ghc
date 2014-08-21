@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -----------------------------------------------------------------------------
 --
 -- Generating machine code (instruction selection)
@@ -85,7 +87,8 @@ basicBlockCodeGen :: CmmBlock
                           , [NatCmmDecl CmmStatics Instr])
 
 basicBlockCodeGen block = do
-  let (CmmEntry id, nodes, tail)  = blockSplit block
+  let (_, nodes, tail)  = blockSplit block
+      id = entryLabel block
       stmts = blockToList nodes
   mid_instrs <- stmtsToInstrs stmts
   tail_instrs <- stmtToInstrs tail
@@ -123,6 +126,8 @@ stmtToInstrs stmt = do
   dflags <- getDynFlags
   case stmt of
     CmmComment s   -> return (unitOL (COMMENT s))
+    CmmTick {}     -> return nilOL
+    CmmUnwind {}   -> return nilOL
 
     CmmAssign reg src
       | isFloatType ty  -> assignReg_FltCode size reg src
@@ -652,6 +657,12 @@ outOfLineMachOp_table mop
 
         MO_BSwap w   -> fsLit $ bSwapLabel w
         MO_PopCnt w  -> fsLit $ popCntLabel w
+        MO_Clz w     -> fsLit $ clzLabel w
+        MO_Ctz w     -> fsLit $ ctzLabel w
+        MO_AtomicRMW w amop -> fsLit $ atomicRMWLabel w amop
+        MO_Cmpxchg w -> fsLit $ cmpxchgLabel w
+        MO_AtomicRead w -> fsLit $ atomicReadLabel w
+        MO_AtomicWrite w -> fsLit $ atomicWriteLabel w
 
         MO_S_QuotRem {}  -> unsupported
         MO_U_QuotRem {}  -> unsupported

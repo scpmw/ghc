@@ -6,8 +6,9 @@
 ``Long-distance'' floating of bindings towards the top level.
 
 \begin{code}
+{-# LANGUAGE CPP #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
-{-# OPTIONS -fno-warn-tabs #-}
+{-# OPTIONS_GHC -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
@@ -285,18 +286,20 @@ floatExpr lam@(Lam (TB _ lam_spec) _)
     (add_to_stats fs floats, floats, mkLams bndrs body') }
 
 floatExpr (Tick tickish expr)
-  | tickishScoped tickish
+  | tickish `tickishScopesLike` SoftScope -- not scoped, can just float
   = case (floatExpr expr)    of { (fs, floating_defns, expr') ->
-    let
-	-- Annotate bindings floated outwards past an scc expression
-	-- with the cc.  We mark that cc as "duplicated", though.
+    (fs, floating_defns, Tick tickish expr') }
+
+  | not (tickishCounts tickish) || tickishCanSplit tickish
+  = case (floatExpr expr)    of { (fs, floating_defns, expr') ->
+    let -- Annotate bindings floated outwards past an scc expression
+        -- with the cc.  We mark that cc as "duplicated", though.
         annotated_defns = wrapTick (mkNoCount tickish) floating_defns
     in
     (fs, annotated_defns, Tick tickish expr') }
 
-  | otherwise  -- not scoped, can just float
-  = case (floatExpr expr)    of { (fs, floating_defns, expr') ->
-    (fs, floating_defns, Tick tickish expr') }
+  | otherwise
+  = pprPanic "floatExpr tick" (ppr tickish)
 
 floatExpr (Cast expr co)
   = case (floatExpr expr) of { (fs, floating_defns, expr') ->
@@ -456,11 +459,6 @@ type MinorEnv = M.IntMap (Bag FloatBind)  -- Keyed by minor level
 data FloatBinds  = FB !(Bag FloatLet)	   	-- Destined for top level
      		      !MajorEnv 		-- Levels other than top
      -- See Note [Representation of FloatBinds]
-
-instance Outputable FloatBind where
-  ppr (FloatLet b) = ptext (sLit "LET") <+> ppr b
-  ppr (FloatCase e b c bs) = hang (ptext (sLit "CASE") <+> ppr e <+> ptext (sLit "of") <+> ppr b)
-                                2 (ppr c <+> ppr bs)
 
 instance Outputable FloatBinds where
   ppr (FB fbs defs) 

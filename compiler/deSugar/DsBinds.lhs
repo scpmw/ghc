@@ -10,7 +10,8 @@ in that the @Rec@/@NonRec@/etc structure is thrown away (whereas at
 lower levels it is preserved with @let@/@letrec@s).
 
 \begin{code}
-{-# OPTIONS -fno-warn-tabs #-}
+{-# LANGUAGE CPP #-}
+{-# OPTIONS_GHC -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
@@ -34,6 +35,7 @@ import HsSyn		-- lots of things
 import CoreSyn		-- lots of things
 import Literal          ( Literal(MachStr) )
 import CoreSubst
+import OccurAnal        ( occurAnalyseExpr )
 import MkCore
 import CoreUtils
 import CoreArity ( etaExpand )
@@ -95,13 +97,8 @@ ds_lhs_binds :: LHsBinds Id -> DsM (OrdList (Id,CoreExpr))
 ds_lhs_binds binds = do { ds_bs <- mapBagM dsLHsBind binds
                         ; return (foldBag appOL id nilOL ds_bs) }
 
-dsLHsBind :: (Origin, LHsBind Id) -> DsM (OrdList (Id,CoreExpr))
-dsLHsBind (origin, L loc bind)
-  = handleWarnings $ putSrcSpanDs loc $ dsHsBind bind
-  where
-    handleWarnings = if isGenerated origin
-                     then discardWarningsDs
-                     else id
+dsLHsBind :: LHsBind Id -> DsM (OrdList (Id,CoreExpr))
+dsLHsBind (L loc bind) = putSrcSpanDs loc $ dsHsBind bind
 
 dsHsBind :: HsBind Id -> DsM (OrdList (Id,CoreExpr))
 
@@ -458,7 +455,10 @@ dsSpec mb_poly_rhs (L loc (SpecPrag poly_id spec_co spec_inl))
        ; (bndrs, ds_lhs) <- liftM collectBinders
                                   (dsHsWrapper spec_co (Var poly_id))
        ; let spec_ty = mkPiTypes bndrs (exprType ds_lhs)
-       ; case decomposeRuleLhs bndrs ds_lhs of {
+       ; -- pprTrace "dsRule" (vcat [ ptext (sLit "Id:") <+> ppr poly_id
+         --                         , ptext (sLit "spec_co:") <+> ppr spec_co
+         --                         , ptext (sLit "ds_rhs:") <+> ppr ds_lhs ]) $
+         case decomposeRuleLhs bndrs ds_lhs of {
            Left msg -> do { warnDs msg; return Nothing } ;
            Right (rule_bndrs, _fn, args) -> do
 
@@ -582,73 +582,173 @@ SPEC f :: ty                [n]   INLINE [k]
 decomposeRuleLhs :: [Var] -> CoreExpr -> Either SDoc ([Var], Id, [CoreExpr])
 -- (decomposeRuleLhs bndrs lhs) takes apart the LHS of a RULE,
 -- The 'bndrs' are the quantified binders of the rules, but decomposeRuleLhs
--- may add some extra dictionary binders (see Note [Constant rule dicts])
+-- may add some extra dictionary binders (see Note [Free dictionaries])
 --
 -- Returns Nothing if the LHS isn't of the expected shape
-decomposeRuleLhs bndrs lhs 
-  =  -- Note [Simplifying the left-hand side of a RULE]
-    case collectArgs opt_lhs of
-        (Var fn, args) -> check_bndrs fn args
+-- Note [Decomposing the left-hand side of a RULE]
+decomposeRuleLhs orig_bndrs orig_lhs
+  | not (null unbound)    -- Check for things unbound on LHS
+                          -- See Note [Unused spec binders]
+  = Left (vcat (map dead_msg unbound))
 
-        (Case scrut bndr ty [(DEFAULT, _, body)], args)
-	        | isDeadBinder bndr	-- Note [Matching seqId]
-		-> check_bndrs seqId (args' ++ args)
-		where
-		   args' = [Type (idType bndr), Type ty, scrut, body]
-	   
-	_other -> Left bad_shape_msg
+  | Var fn_var <- fun
+  , not (fn_var `elemVarSet` orig_bndr_set)
+  = -- pprTrace "decmposeRuleLhs" (vcat [ ptext (sLit "orig_bndrs:") <+> ppr orig_bndrs
+    --                                  , ptext (sLit "orig_lhs:") <+> ppr orig_lhs
+    --                                  , ptext (sLit "lhs1:")     <+> ppr lhs1
+    --                                  , ptext (sLit "bndrs1:") <+> ppr bndrs1
+    --                                  , ptext (sLit "fn_var:") <+> ppr fn_var
+    --                                  , ptext (sLit "args:")   <+> ppr args]) $
+    Right (bndrs1, fn_var, args)
+
+  | Case scrut bndr ty [(DEFAULT, _, body)] <- fun
+  , isDeadBinder bndr	-- Note [Matching seqId]
+  , let args' = [Type (idType bndr), Type ty, scrut, body]
+  = Right (bndrs1, seqId, args' ++ args)
+
+  | otherwise 
+  = Left bad_shape_msg
  where
-   opt_lhs = simpleOptExpr lhs
+   lhs1       = drop_dicts orig_lhs
+   lhs2       = simpleOptExpr lhs1  -- See Note [Simplify rule LHS]
+   (fun,args) = collectArgs lhs2
+   lhs_fvs    = exprFreeVars lhs2
+   unbound    = filterOut (`elemVarSet` lhs_fvs) orig_bndrs
+   bndrs1     = orig_bndrs ++ extra_dict_bndrs
 
-   check_bndrs fn args
-     | null dead_bndrs = Right (extra_dict_bndrs ++ bndrs, fn, args)
-     | otherwise       = Left (vcat (map dead_msg dead_bndrs))
-     where
-       arg_fvs = exprsFreeVars args
+   orig_bndr_set = mkVarSet orig_bndrs
 
-            -- Check for dead binders: Note [Unused spec binders]
-       dead_bndrs = filterOut (`elemVarSet` arg_fvs) bndrs
-
-            -- Add extra dict binders: Note [Constant rule dicts]
-       extra_dict_bndrs = [ mkLocalId (localiseName (idName d)) (idType d)
-                          | d <- varSetElems (arg_fvs `delVarSetList` bndrs)
-         	          , isDictId d]
-
+        -- Add extra dict binders: Note [Free dictionaries]
+   extra_dict_bndrs = [ mkLocalId (localiseName (idName d)) (idType d)
+                      | d <- varSetElems (lhs_fvs `delVarSetList` orig_bndrs)
+                      , isDictId d ]
 
    bad_shape_msg = hang (ptext (sLit "RULE left-hand side too complicated to desugar"))
-                      2 (ppr opt_lhs)
+                      2 (vcat [ text "Optimised lhs:" <+> ppr lhs2
+                              , text "Orig lhs:" <+> ppr orig_lhs])
    dead_msg bndr = hang (sep [ ptext (sLit "Forall'd") <+> pp_bndr bndr
 			     , ptext (sLit "is not bound in RULE lhs")])
-                      2 (ppr opt_lhs)
+                      2 (vcat [ text "Orig bndrs:" <+> ppr orig_bndrs
+                              , text "Orig lhs:" <+> ppr orig_lhs
+                              , text "optimised lhs:" <+> ppr lhs2 ])
    pp_bndr bndr
     | isTyVar bndr                      = ptext (sLit "type variable") <+> quotes (ppr bndr)
     | Just pred <- evVarPred_maybe bndr = ptext (sLit "constraint") <+> quotes (ppr pred)
     | otherwise                         = ptext (sLit "variable") <+> quotes (ppr bndr)
+
+   drop_dicts :: CoreExpr -> CoreExpr
+   drop_dicts e 
+       = wrap_lets needed bnds body
+     where
+       needed = orig_bndr_set `minusVarSet` exprFreeVars body
+       (bnds, body) = split_lets (occurAnalyseExpr e)
+       	   -- The occurAnalyseExpr drops dead bindings which is
+           -- crucial to ensure that every binding is used later;
+           -- which in turn makes wrap_lets work right
+
+   split_lets :: CoreExpr -> ([(DictId,CoreExpr)], CoreExpr)
+   split_lets e
+     | Let (NonRec d r) body <- e
+     , isDictId d
+     , (bs, body') <- split_lets body
+     = ((d,r):bs, body')
+     | otherwise
+     = ([], e)
+
+   wrap_lets :: VarSet -> [(DictId,CoreExpr)] -> CoreExpr -> CoreExpr
+   wrap_lets _ [] body = body
+   wrap_lets needed ((d, r) : bs) body
+     | rhs_fvs `intersectsVarSet` needed = Let (NonRec d r) (wrap_lets needed' bs body)
+     | otherwise                         = wrap_lets needed bs body
+     where
+       rhs_fvs = exprFreeVars r
+       needed' = (needed `minusVarSet` rhs_fvs) `extendVarSet` d
 \end{code}
 
-Note [Simplifying the left-hand side of a RULE]
+Note [Decomposing the left-hand side of a RULE]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-simpleOptExpr occurrence-analyses and simplifies the lhs
-and thereby
-(a) sorts dict bindings into NonRecs and inlines them
-(b) substitute trivial lets so that they don't get in the way
-    Note that we substitute the function too; we might 
-    have this as a LHS:  let f71 = M.f Int in f71
-(c) does eta reduction
+There are several things going on here.  
+* drop_dicts: see Note [Drop dictionary bindings on rule LHS]
+* simpleOptExpr: see Note [Simplify rule LHS]
+* extra_dict_bndrs: see Note [Free dictionaries]
 
-For (c) consider the fold/build rule, which without simplification
-looked like:
-	fold k z (build (/\a. g a))  ==>  ...
-This doesn't match unless you do eta reduction on the build argument.
-Similarly for a LHS like
-	augment g (build h) 
-we do not want to get
-	augment (\a. g a) (build h)
-otherwise we don't match when given an argument like
-	augment (\a. h a a) (build h)
+Note [Drop dictionary bindings on rule LHS]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+drop_dicts drops dictionary bindings on the LHS where possible.  
+   E.g.  let d:Eq [Int] = $fEqList $fEqInt in f d
+     --> f d
+   Reasoning here is that there is only one d:Eq [Int], and so we can 
+   quantify over it. That makes 'd' free in the LHS, but that is later
+   picked up by extra_dict_bndrs (Note [Dead spec binders]).
 
-NB: tcSimplifyRuleLhs is very careful not to generate complicated
-    dictionary expressions that we might have to match
+   NB 1: We can only drop the binding if the RHS doesn't bind
+         one of the orig_bndrs, which we assume occur on RHS. 
+         Example
+            f :: (Eq a) => b -> a -> a
+            {-# SPECIALISE f :: Eq a => b -> [a] -> [a] #-}
+         Here we want to end up with
+            RULE forall d:Eq a.  f ($dfEqList d) = f_spec d
+         Of course, the ($dfEqlist d) in the pattern makes it less likely
+         to match, but ther is no other way to get d:Eq a
+
+   NB 2: We do drop_dicts *before* simplOptEpxr, so that we expect all 
+         the evidence bindings to be wrapped around the outside of the
+         LHS.  (After simplOptExpr they'll usually have been inlined.)
+         dsHsWrapper does dependency analysis, so that civilised ones
+         will be simple NonRec bindings.  We don't handle recursive
+         dictionaries!
+
+    NB3: In the common case of a non-overloaded, but perhpas-polymorphic
+         specialisation, we don't need to bind *any* dictionaries for use
+         in the RHS. For example (Trac #8331)
+             {-# SPECIALIZE INLINE useAbstractMonad :: ReaderST s Int #-}
+             useAbstractMonad :: MonadAbstractIOST m => m Int
+         Here, deriving (MonadAbstractIOST (ReaderST s)) is a lot of code
+         but the RHS uses no dictionaries, so we want to end up with
+             RULE forall s (d :: MonadBstractIOST (ReaderT s)).
+                useAbstractMonad (ReaderT s) d = $suseAbstractMonad s
+
+   Trac #8848 is a good example of where there are some intersting
+   dictionary bindings to discard.
+
+The drop_dicts algorithm is based on these observations:
+
+  * Given (let d = rhs in e) where d is a DictId,
+    matching 'e' will bind e's free variables.
+
+  * So we want to keep the binding if one of the needed variables (for
+    which we need a binding) is in fv(rhs) but not already in fv(e).
+
+  * The "needed variables" are simply the orig_bndrs.  Consider
+       f :: (Eq a, Show b) => a -> b -> String
+       {-# SPECIALISE f :: (Show b) => Int -> b -> String
+    Then orig_bndrs includes the *quantified* dictionaries of the type
+    namely (dsb::Show b), but not the one for Eq Int
+
+So we work inside out, applying the above criterion at each step.
+
+
+Note [Simplify rule LHS]
+~~~~~~~~~~~~~~~~~~~~~~~~
+simplOptExpr occurrence-analyses and simplifies the LHS:
+
+   (a) Inline any remaining dictionary bindings (which hopefully 
+       occur just once)
+
+   (b) Substitute trivial lets so that they don't get in the way
+       Note that we substitute the function too; we might 
+       have this as a LHS:  let f71 = M.f Int in f71
+
+   (c) Do eta reduction.  To see why, consider the fold/build rule, 
+       which without simplification looked like:
+          fold k z (build (/\a. g a))  ==>  ...
+       This doesn't match unless you do eta reduction on the build argument.
+       Similarly for a LHS like
+       	 augment g (build h) 
+       we do not want to get
+       	 augment (\a. g a) (build h)
+       otherwise we don't match when given an argument like
+          augment (\a. h a a) (build h)
 
 Note [Matching seqId]
 ~~~~~~~~~~~~~~~~~~~
@@ -671,8 +771,8 @@ the constraint is unused.  We could bind 'd' to (error "unused")
 but it seems better to reject the program because it's almost certainly
 a mistake.  That's what the isDeadBinder call detects.
 
-Note [Constant rule dicts]
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Note [Free dictionaries]
+~~~~~~~~~~~~~~~~~~~~~~~~
 When the LHS of a specialisation rule, (/\as\ds. f es) has a free dict, 
 which is presumably in scope at the function definition site, we can quantify 
 over it too.  *Any* dict with that type will do.

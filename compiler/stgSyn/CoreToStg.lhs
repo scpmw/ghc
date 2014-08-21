@@ -1,4 +1,6 @@
 \begin{code}
+{-# LANGUAGE BangPatterns, CPP #-}
+
 --
 -- (c) The GRASP/AQUA Project, Glasgow University, 1993-1998
 --
@@ -28,7 +30,6 @@ import DataCon
 import CostCentre       ( noCCS )
 import VarSet
 import VarEnv
-import Maybes           ( maybeToBool )
 import Module
 import Name             ( getOccName, isExternalName, nameOccName )
 import OccName          ( occNameString, occNameFS )
@@ -44,6 +45,7 @@ import ForeignCall
 import Demand           ( isSingleUsed )
 import PrimOp           ( PrimCall(..) )
 
+import Data.Maybe    (isJust)
 import Control.Monad (liftM, ap)
 
 -- Note [Live vs free]
@@ -316,28 +318,9 @@ mkTopStgRhs :: DynFlags -> Module -> FreeVarsInfo
             -> SRT -> Id -> StgBinderInfo -> StgExpr
             -> StgRhs
 
-mkTopStgRhs _ _ rhs_fvs srt _ binder_info (StgLam bndrs body)
-  = StgRhsClosure noCCS binder_info
-                  (getFVs rhs_fvs)
-                  ReEntrant
-                  srt
-                  bndrs body
-
-mkTopStgRhs dflags this_mod _ _ _ _ (StgConApp con args)
-  | not (isDllConApp dflags this_mod con args)  -- Dynamic StgConApps are updatable
-  = StgRhsCon noCCS con args
-
-mkTopStgRhs _ _ rhs_fvs srt bndr binder_info rhs
-  = StgRhsClosure noCCS binder_info
-                  (getFVs rhs_fvs)
-                  (getUpdateFlag bndr)
-                  srt
-                  [] rhs
-
-getUpdateFlag :: Id -> UpdateFlag
-getUpdateFlag bndr
-  = if isSingleUsed (idDemandInfo bndr)
-    then SingleEntry else Updatable
+mkTopStgRhs dflags this_mod = mkStgRhs' con_updateable
+        -- Dynamic StgConApps are updatable
+  where con_updateable con args = isDllConApp dflags this_mod con args
 
 -- ---------------------------------------------------------------------------
 -- Expressions
@@ -363,13 +346,13 @@ coreToStgExpr
 -- should have converted them all to a real core representation.
 coreToStgExpr (Lit (LitInteger {})) = panic "coreToStgExpr: LitInteger"
 coreToStgExpr (Lit l)      = return (StgLit l, emptyFVInfo, emptyVarSet)
-coreToStgExpr (Var v)      = coreToStgApp Nothing v               []
-coreToStgExpr (Coercion _) = coreToStgApp Nothing coercionTokenId []
+coreToStgExpr (Var v)      = coreToStgApp Nothing v               [] []
+coreToStgExpr (Coercion _) = coreToStgApp Nothing coercionTokenId [] []
 
 coreToStgExpr expr@(App _ _)
-  = coreToStgApp Nothing f args
+  = coreToStgApp Nothing f args ticks
   where
-    (f, args) = myCollectArgs expr
+    (f, args, ticks) = myCollectArgs expr
 
 coreToStgExpr expr@(Lam _ _)
   = let
@@ -386,16 +369,15 @@ coreToStgExpr expr@(Lam _ _)
 
     return (result_expr, fvs, escs)
 
-coreToStgExpr (Tick (HpcTick m n) expr)
-  = do (expr2, fvs, escs) <- coreToStgExpr expr
-       return (StgTick m n expr2, fvs, escs)
-
-coreToStgExpr (Tick (ProfNote cc tick push) expr)
-  = do (expr2, fvs, escs) <- coreToStgExpr expr
-       return (StgSCC cc tick push expr2, fvs, escs)
-
-coreToStgExpr (Tick Breakpoint{} _expr)
-  = panic "coreToStgExpr: breakpoint should not happen"
+coreToStgExpr (Tick tick expr)
+  = do !_ <- case tick of
+         HpcTick{}    -> return ()
+         ProfNote{}   -> return ()
+         SourceNote{} -> return ()
+         CoreNote{}   -> return ()
+         Breakpoint{} -> panic "coreToStgExpr: breakpoint should not happen"
+       (expr2, fvs, escs) <- coreToStgExpr expr
+       return (StgTick tick expr2, fvs, escs)
 
 coreToStgExpr (Cast expr _)
   = coreToStgExpr expr
@@ -540,11 +522,12 @@ coreToStgApp
                                         -- with specified update flag
         -> Id                           -- Function
         -> [CoreArg]                    -- Arguments
+        -> [Tickish Id]                 -- Debug ticks
         -> LneM (StgExpr, FreeVarsInfo, EscVarsSet)
 
 
-coreToStgApp _ f args = do
-    (args', args_fvs) <- coreToStgArgs args
+coreToStgApp _ f args ticks = do
+    (args', args_fvs, ticks') <- coreToStgArgs args
     how_bound <- lookupVarLne f
 
     let
@@ -606,17 +589,18 @@ coreToStgApp _ f args = do
                 FCallId call     -> ASSERT( saturated )
                                     StgOpApp (StgFCallOp call (idUnique f)) args' res_ty
 
-                TickBoxOpId {}   -> pprPanic "coreToStg TickBox" $ ppr (f,args')
                 _other           -> StgApp f args'
         fvs = fun_fvs  `unionFVInfo` args_fvs
         vars = fun_escs `unionVarSet` (getFVSet args_fvs)
                                 -- All the free vars of the args are disqualified
                                 -- from being let-no-escaped.
 
+        tapp = foldr StgTick app (ticks ++ ticks')
+
     -- Forcing these fixes a leak in the code generator, noticed while
     -- profiling for trac #4367
     app `seq` fvs `seq` seqVarSet vars `seq` return (
-        app,
+        tapp,
         fvs,
         vars
      )
@@ -628,24 +612,31 @@ coreToStgApp _ f args = do
 -- This is the guy that turns applications into A-normal form
 -- ---------------------------------------------------------------------------
 
-coreToStgArgs :: [CoreArg] -> LneM ([StgArg], FreeVarsInfo)
+coreToStgArgs :: [CoreArg] -> LneM ([StgArg], FreeVarsInfo, [Tickish Id])
 coreToStgArgs []
-  = return ([], emptyFVInfo)
+  = return ([], emptyFVInfo, [])
 
 coreToStgArgs (Type _ : args) = do     -- Type argument
-    (args', fvs) <- coreToStgArgs args
-    return (args', fvs)
+    (args', fvs, ts) <- coreToStgArgs args
+    return (args', fvs, ts)
 
 coreToStgArgs (Coercion _ : args)  -- Coercion argument; replace with place holder
-  = do { (args', fvs) <- coreToStgArgs args
-       ; return (StgVarArg coercionTokenId : args', fvs) }
+  = do { (args', fvs, ts) <- coreToStgArgs args
+       ; return (StgVarArg coercionTokenId : args', fvs, ts) }
+
+coreToStgArgs (Tick t e : args)
+  = ASSERT( not (tickishIsCode t) )
+    do { (args', fvs, ts) <- coreToStgArgs (e : args)
+       ; return (args', fvs, t:ts) }
 
 coreToStgArgs (arg : args) = do         -- Non-type argument
-    (stg_args, args_fvs) <- coreToStgArgs args
+    (stg_args, args_fvs, ticks) <- coreToStgArgs args
     (arg', arg_fvs, _escs) <- coreToStgExpr arg
     let
         fvs = args_fvs `unionFVInfo` arg_fvs
-        stg_arg = case arg' of
+
+        (aticks, arg'') = stripStgTicksTop tickishFloatable arg'
+        stg_arg = case arg'' of
                        StgApp v []      -> StgVarArg v
                        StgConApp con [] -> StgVarArg (dataConWorkId con)
                        StgLit lit       -> StgLitArg lit
@@ -673,7 +664,7 @@ coreToStgArgs (arg : args) = do         -- Non-type argument
         -- We also want to check if a pointer is cast to a non-ptr etc
 
     WARN( bad_args, ptext (sLit "Dangerous-looking argument. Probable cause: bad unsafeCoerce#") $$ ppr arg )
-     return (stg_arg : stg_args, fvs)
+     return (stg_arg : stg_args, fvs, ticks ++ aticks)
 
 
 -- ---------------------------------------------------------------------------
@@ -820,21 +811,31 @@ coreToStgRhs scope_fv_info binders (bndr, rhs) = do
     bndr_info = lookupFVInfo scope_fv_info bndr
 
 mkStgRhs :: FreeVarsInfo -> SRT -> Id -> StgBinderInfo -> StgExpr -> StgRhs
+mkStgRhs = mkStgRhs' con_updateable
+  where con_updateable _ _ = False
 
-mkStgRhs _ _ _ _ (StgConApp con args) = StgRhsCon noCCS con args
-
-mkStgRhs rhs_fvs srt _ binder_info (StgLam bndrs body)
+mkStgRhs' :: (DataCon -> [StgArg] -> Bool)
+            -> FreeVarsInfo -> SRT -> Id -> StgBinderInfo -> StgExpr -> StgRhs
+mkStgRhs' con_updateable rhs_fvs srt bndr binder_info rhs
+  | StgLam bndrs body <- rhs
   = StgRhsClosure noCCS binder_info
-                  (getFVs rhs_fvs)
-                  ReEntrant
-                  srt bndrs body
-
-mkStgRhs rhs_fvs srt bndr binder_info rhs
+                   (getFVs rhs_fvs)
+                   ReEntrant
+                   srt bndrs body
+  | StgConApp con args <- unticked_rhs
+  , not (con_updateable con args)
+  = StgRhsCon noCCS con args
+  | otherwise
   = StgRhsClosure noCCS binder_info
-                  (getFVs rhs_fvs)
-                  upd_flag srt [] rhs
-  where
-     upd_flag = getUpdateFlag bndr
+                   (getFVs rhs_fvs)
+                   upd_flag srt [] rhs
+ where
+
+    (_, unticked_rhs) = stripStgTicksTop (not . tickishIsCode) rhs
+
+    upd_flag | isSingleUsed (idDemandInfo bndr)  = SingleEntry
+             | otherwise                         = Updatable
+
   {-
     SDM: disabled.  Eval/Apply can't handle functions with arity zero very
     well; and making these into simple non-updatable thunks breaks other
@@ -1106,7 +1107,7 @@ minusFVBinder v fv = fv `delVarEnv` v
         -- c.f. CoreFVs.delBinderFV
 
 elementOfFVInfo :: Id -> FreeVarsInfo -> Bool
-elementOfFVInfo id fvs = maybeToBool (lookupVarEnv fvs id)
+elementOfFVInfo id fvs = isJust (lookupVarEnv fvs id)
 
 lookupFVInfo :: FreeVarsInfo -> Id -> StgBinderInfo
 -- Find how the given Id is used.
@@ -1159,26 +1160,23 @@ myCollectBinders expr
   = go [] expr
   where
     go bs (Lam b e)          = go (b:bs) e
-    go bs e@(Tick t e')
-        | tickishIsCode t    = (reverse bs, e)
-        | otherwise          = go bs e'
-        -- Ignore only non-code source annotations
     go bs (Cast e _)         = go bs e
     go bs e                  = (reverse bs, e)
 
-myCollectArgs :: CoreExpr -> (Id, [CoreArg])
+myCollectArgs :: CoreExpr -> (Id, [CoreArg], [Tickish Id])
         -- We assume that we only have variables
         -- in the function position by now
 myCollectArgs expr
-  = go expr []
+  = go expr [] []
   where
-    go (Var v)          as = (v, as)
-    go (App f a) as        = go f (a:as)
-    go (Tick _ _)     _  = pprPanic "CoreToStg.myCollectArgs" (ppr expr)
-    go (Cast e _)       as = go e as
-    go (Lam b e)        as
-       | isTyVar b         = go e as  -- Note [Collect args]
-    go _                _  = pprPanic "CoreToStg.myCollectArgs" (ppr expr)
+    go (Var v)          as ts = (v, as, ts)
+    go (App f a)        as ts = go f (a:as) ts
+    go (Tick t e)       as ts = ASSERT( all isTypeArg as )
+                                go e as (t:ts) -- ticks can appear inside type apps
+    go (Cast e _)       as ts = go e as ts
+    go (Lam b e)        as ts
+       | isTyVar b            = go e as ts -- Note [Collect args]
+    go _                _  _  = pprPanic "CoreToStg.myCollectArgs" (ppr expr)
 
 -- Note [Collect args]
 -- ~~~~~~~~~~~~~~~~~~~
@@ -1190,4 +1188,5 @@ stgArity :: Id -> HowBound -> Arity
 stgArity _ (LetBound _ arity) = arity
 stgArity f ImportBound        = idArity f
 stgArity _ LambdaBound        = 0
+
 \end{code}

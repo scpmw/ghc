@@ -1,3 +1,5 @@
+{-# LANGUAGE BangPatterns, CPP #-}
+
 -----------------------------------------------------------------------------
 --
 -- Code generation for ticky-ticky profiling
@@ -325,7 +327,7 @@ registerTickyCtr ctr_lbl = do
         , mkStore (CmmLit (cmmLabelOffB ctr_lbl
                                 (oFFSET_StgEntCounter_registeredp dflags)))
                    (mkIntExpr dflags 1) ]
-    ticky_entry_ctrs = mkLblExpr (mkCmmDataLabel rtsPackageId (fsLit "ticky_entry_ctrs"))
+    ticky_entry_ctrs = mkLblExpr (mkCmmDataLabel rtsPackageKey (fsLit "ticky_entry_ctrs"))
   emit =<< mkCmmIfThen test (catAGraphs register_stmts)
 
 tickyReturnOldCon, tickyReturnNewCon :: RepArity -> FCode ()
@@ -415,7 +417,7 @@ tickyDynAlloc :: Maybe Id -> SMRep -> LambdaFormInfo -> FCode ()
 --
 -- TODO what else to count while we're here?
 tickyDynAlloc mb_id rep lf = ifTicky $ getDynFlags >>= \dflags ->
-  let bytes = wORD_SIZE dflags * heapClosureSize dflags rep
+  let bytes = wORD_SIZE dflags * heapClosureSizeW dflags rep
 
       countGlobal tot ctr = do
         bumpTickyCounterBy tot bytes
@@ -470,12 +472,12 @@ tickyAllocHeap genuine hp
                      bytes,
             -- Bump the global allocation total ALLOC_HEAP_tot
             addToMemLbl (cLong dflags)
-                        (mkCmmDataLabel rtsPackageId (fsLit "ALLOC_HEAP_tot"))
+                        (mkCmmDataLabel rtsPackageKey (fsLit "ALLOC_HEAP_tot"))
                         bytes,
             -- Bump the global allocation counter ALLOC_HEAP_ctr
             if not genuine then mkNop
             else addToMemLbl (cLong dflags)
-                             (mkCmmDataLabel rtsPackageId (fsLit "ALLOC_HEAP_ctr"))
+                             (mkCmmDataLabel rtsPackageKey (fsLit "ALLOC_HEAP_ctr"))
                              1
             ]}
 
@@ -485,7 +487,9 @@ tickyAllocHeap genuine hp
 
 -- the units are bytes
 
-tickyAllocPrim :: CmmExpr -> CmmExpr -> CmmExpr -> FCode ()
+tickyAllocPrim :: CmmExpr  -- ^ size of the full header, in bytes
+               -> CmmExpr  -- ^ size of the payload, in bytes
+               -> CmmExpr -> FCode ()
 tickyAllocPrim _hdr _goods _slop = ifTicky $ do
   bumpTickyCounter    (fsLit "ALLOC_PRIM_ctr")
   bumpTickyCounterByE (fsLit "ALLOC_PRIM_adm") _hdr
@@ -537,13 +541,13 @@ ifTickyDynThunk :: FCode () -> FCode ()
 ifTickyDynThunk code = tickyDynThunkIsOn >>= \b -> when b code
 
 bumpTickyCounter :: FastString -> FCode ()
-bumpTickyCounter lbl = bumpTickyLbl (mkCmmDataLabel rtsPackageId lbl)
+bumpTickyCounter lbl = bumpTickyLbl (mkCmmDataLabel rtsPackageKey lbl)
 
 bumpTickyCounterBy :: FastString -> Int -> FCode ()
-bumpTickyCounterBy lbl = bumpTickyLblBy (mkCmmDataLabel rtsPackageId lbl)
+bumpTickyCounterBy lbl = bumpTickyLblBy (mkCmmDataLabel rtsPackageKey lbl)
 
 bumpTickyCounterByE :: FastString -> CmmExpr -> FCode ()
-bumpTickyCounterByE lbl = bumpTickyLblByE (mkCmmDataLabel rtsPackageId lbl)
+bumpTickyCounterByE lbl = bumpTickyLblByE (mkCmmDataLabel rtsPackageKey lbl)
 
 bumpTickyEntryCount :: CLabel -> FCode ()
 bumpTickyEntryCount lbl = do

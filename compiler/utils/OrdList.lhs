@@ -15,6 +15,10 @@ module OrdList (
         mapOL, fromOL, toOL, foldrOL, foldlOL
 ) where
 
+import Outputable
+
+import Data.Monoid
+
 infixl 5  `appOL`
 infixl 5  `snocOL`
 infixr 5  `consOL`
@@ -28,6 +32,13 @@ data OrdList a
   | Two (OrdList a) -- Invariant: non-empty
         (OrdList a) -- Invariant: non-empty
 
+instance Outputable a => Outputable (OrdList a) where
+  ppr ol = ppr (fromOL ol)  -- Convert to list and print that
+
+instance Monoid (OrdList a) where
+  mempty = nilOL
+  mappend = appOL
+  mconcat = concatOL
 
 nilOL    :: OrdList a
 isNilOL  :: OrdList a -> Bool

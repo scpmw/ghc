@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP, GADTs #-}
+
 -----------------------------------------------------------------------------
 --
 -- Pretty-printing of Cmm as C, suitable for feeding gcc
@@ -16,7 +18,6 @@
 --
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE GADTs #-}
 module PprC (
         writeCs,
         pprStringInCStyle
@@ -137,10 +138,10 @@ pprTop (CmmData _section (Statics lbl lits)) =
 
 pprBBlock :: CmmBlock -> SDoc
 pprBBlock block =
-  nest 4 (pprBlockId lbl <> colon) $$
+  nest 4 (pprBlockId (entryLabel block) <> colon) $$
   nest 8 (vcat (map pprStmt (blockToList nodes)) $$ pprStmt last)
  where
-  (CmmEntry lbl, nodes, last)  = blockSplit block
+  (_, nodes, last)  = blockSplit block
 
 -- --------------------------------------------------------------------------
 -- Info tables. Just arrays of words.
@@ -170,12 +171,14 @@ pprStmt :: CmmNode e x -> SDoc
 pprStmt stmt =
     sdocWithDynFlags $ \dflags ->
     case stmt of
-    CmmEntry _ -> empty
+    CmmEntry{}   -> empty
     CmmComment _ -> empty -- (hang (ptext (sLit "/*")) 3 (ftext s)) $$ ptext (sLit "*/")
                           -- XXX if the string contains "*/", we need to fix it
                           -- XXX we probably want to emit these comments when
                           -- some debugging option is on.  They can get quite
                           -- large.
+
+    CmmTick _ -> empty
 
     CmmAssign dest src -> pprAssign dflags dest src
 
@@ -752,6 +755,12 @@ pprCallishMachOp_for_C mop
         MO_Memmove      -> ptext (sLit "memmove")
         (MO_BSwap w)    -> ptext (sLit $ bSwapLabel w)
         (MO_PopCnt w)   -> ptext (sLit $ popCntLabel w)
+        (MO_Clz w)      -> ptext (sLit $ clzLabel w)
+        (MO_Ctz w)      -> ptext (sLit $ ctzLabel w)
+        (MO_AtomicRMW w amop) -> ptext (sLit $ atomicRMWLabel w amop)
+        (MO_Cmpxchg w)  -> ptext (sLit $ cmpxchgLabel w)
+        (MO_AtomicRead w)  -> ptext (sLit $ atomicReadLabel w)
+        (MO_AtomicWrite w) -> ptext (sLit $ atomicWriteLabel w)
         (MO_UF_Conv w)  -> ptext (sLit $ word2FloatLabel w)
 
         MO_S_QuotRem  {} -> unsupported

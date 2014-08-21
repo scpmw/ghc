@@ -138,6 +138,8 @@ notNodeReg _                             = True
 lintCmmMiddle :: CmmNode O O -> CmmLint ()
 lintCmmMiddle node = case node of
   CmmComment _ -> return ()
+  CmmTick _    -> return ()
+  CmmUnwind{}  -> return ()
 
   CmmAssign reg expr -> do
             dflags <- getDynFlags

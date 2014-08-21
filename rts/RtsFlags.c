@@ -29,6 +29,10 @@
 #include <sys/types.h>
 #endif
 
+#ifdef TRACING
+#include "Trace.h"
+#endif
+
 // Flag Structure
 RTS_FLAGS RtsFlags;
 
@@ -97,12 +101,12 @@ void initRtsFlagsDefaults(void)
     StgWord64 maxStkSize = 8 * getPhysicalMemorySize() / 10;
     // if getPhysicalMemorySize fails just move along with an 8MB limit
     if (maxStkSize == 0)
-        maxStkSize = (8 * 1024 * 1024) / sizeof(W_);
+        maxStkSize = 8 * 1024 * 1024;
 
     RtsFlags.GcFlags.statsFile          = NULL;
     RtsFlags.GcFlags.giveStats          = NO_GC_STATS;
 
-    RtsFlags.GcFlags.maxStkSize         = maxStkSize;
+    RtsFlags.GcFlags.maxStkSize         = maxStkSize / sizeof(W_);
     RtsFlags.GcFlags.initialStkSize     = 1024 / sizeof(W_);
     RtsFlags.GcFlags.stkChunkSize       = (32 * 1024) / sizeof(W_);
     RtsFlags.GcFlags.stkChunkBufferSize = (1 * 1024) / sizeof(W_);
@@ -185,6 +189,9 @@ void initRtsFlagsDefaults(void)
     RtsFlags.TraceFlags.sparks_sampled= rtsFalse;
     RtsFlags.TraceFlags.sparks_full   = rtsFalse;
     RtsFlags.TraceFlags.user          = rtsFalse;
+
+    RtsFlags.TraceFlags.allocSampling = rtsFalse;
+    RtsFlags.TraceFlags.timerSampling = rtsFalse;
 #endif
 
 #ifdef PROFILING
@@ -224,6 +231,13 @@ void initRtsFlagsDefaults(void)
     RtsFlags.PapiFlags.eventType        = 0;
     RtsFlags.PapiFlags.numUserEvents    = 0;
 #endif
+
+#ifdef USE_PERF_EVENT
+#ifdef TRACING
+    RtsFlags.PerfEventFlags.sampleType   = 0;
+    RtsFlags.PerfEventFlags.samplePeriod = 0;
+#endif
+#endif
 }
 
 static const char *
@@ -241,7 +255,8 @@ usage_text[] = {
 "  -?       Prints this message and exits; the program is not executed",
 "  --info   Print information about the RTS used by this program",
 "",
-"  -K<size> Sets the maximum stack size (default 8M)  Egs: -K32k   -K512k",
+"  -K<size>  Sets the maximum stack size (default: 80% of the heap)",
+"            Egs: -K32k -K512k -K8M",
 "  -ki<size> Sets the initial thread stack size (default 1k)  Egs: -ki4k -ki2m",
 "  -kc<size> Sets the stack chunk size (default 32k)",
 "  -kb<size> Sets the stack chunk buffer size (default 1k)",
@@ -401,6 +416,25 @@ usage_text[] = {
 "            e - cache miss and branch misprediction events",
 "            +PAPI_EVENT   - collect papi preset event PAPI_EVENT",
 "            #NATIVE_EVENT - collect native event NATIVE_EVENT (in hex)",
+#endif
+#ifdef TRACING
+"  -E[<x>][<p>] Sample instruction pointers for profiling (use with -l)",
+"            Samples are taken at intervals of <p> by <x>:",
+#ifdef USE_PERF_EVENT
+"             t   - time",
+"             h   - heap residency",
+"             a   - heap allocation",
+"             s   - stack allocation",
+"             y   - cycles (default)",
+"             c/C - cache access / miss",
+"             b/B - branch / branch mispredict",
+"             l/L - stalled in frontend / backend",
+#else
+"             t   - time (default)",
+"             h   - heap residency",
+"             a   - heap allocation (default)",
+"             s   - stack allocation",
+#endif
 #endif
 "",
 "RTS options may also be specified using the GHCRTS environment variable.",
@@ -771,6 +805,95 @@ error = rtsTrue;
                   break;
                 default:
                   bad_option( rts_argv[arg] );
+                }
+                break;
+#endif
+
+#ifdef TRACING
+            case 'E':
+                OPTION_UNSAFE;
+                {
+                    char *p = rts_argv[arg] + 2;
+                    nat period = 0;
+                    if (*p) {
+                        // Get desired period, if any
+                        char *next=p+1;
+                        if (isdigit(*next)) {
+                            period = strtol(next, &next, 10);
+                        }
+                        if (*next) {
+                            bad_option(rts_argv[arg]);
+                            break;
+                        }
+                    }
+                    switch(*p) {
+#ifdef USE_PERF_EVENT
+                    case 'c':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_CACHE;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'C':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_CACHE_MISS;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'b':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_BRANCH;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'B':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_BRANCH_MISS;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'l':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_STALLED_FE;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 'L':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_STALLED_BE;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+                    case 0:
+                    case 'y':
+                        RtsFlags.PerfEventFlags.sampleType =
+                            PERF_EVENT_SAMPLE_BY_CYCLE;
+                        RtsFlags.PerfEventFlags.samplePeriod = period;
+                        break;
+#else
+                    case 0:
+#endif
+                    case 't':
+                        RtsFlags.TraceFlags.timerSampling = rtsTrue;
+                        if (period != 0) {
+                            errorBelch("Custom periods not supported for timer sampling, try -V!");
+                        }
+                        break;
+                    case 'a':
+                        RtsFlags.TraceFlags.allocSampling = SAMPLE_BY_HEAP_ALLOC;
+                        if (period != 0) {
+                            errorBelch("Custom periods not supported for heap allocation sampling, try -A!");
+                        }
+                        break;
+                    case 's':
+                        RtsFlags.TraceFlags.allocSampling = SAMPLE_BY_STACK_ALLOC;
+                        if (period != 0) {
+                            errorBelch("Custom periods not supported for stack allocation sampling, try -kc!");
+                        }
+                        break;
+                    case 'h':
+                        RtsFlags.ProfFlags.doHeapProfile = TRACE_HEAP_BY_CODE_PTR;
+                        if (period != 0) {
+                            errorBelch("Custom periods not supported for heap residency sampling, try -i!");
+                        }
+                        break;
+                    default:
+                        bad_option(rts_argv[arg]);
+                    }
                 }
                 break;
 #endif
@@ -1858,3 +1981,11 @@ void freeRtsArgs(void)
     freeProgArgv();
     freeRtsArgv();
 }
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

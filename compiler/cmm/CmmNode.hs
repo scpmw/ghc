@@ -1,16 +1,22 @@
--- CmmNode type for representation using Hoopl graphs.
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 
+-- CmmNode type for representation using Hoopl graphs.
+
 module CmmNode (
-     CmmNode(..), CmmFormal, CmmActual,
+     CmmNode(..), CmmFormal, CmmActual, CmmTickScope,
      UpdFrameOffset, Convention(..),
      ForeignConvention(..), ForeignTarget(..), foreignTargetHints,
      CmmReturnInfo(..),
      mapExp, mapExpDeep, wrapRecExp, foldExp, foldExpDeep, wrapRecExpf,
-     mapExpM, mapExpDeepM, wrapRecExpM, mapSuccessors
+     mapExpM, mapExpDeepM, wrapRecExpM, mapSuccessors,
+     combineTickScopes,
   ) where
 
 import CodeGen.Platform
@@ -19,6 +25,8 @@ import DynFlags
 import FastString
 import ForeignCall
 import SMRep
+import CoreSyn (RawTickish)
+import qualified Unique as U
 
 import Compiler.Hoopl
 import Data.Maybe
@@ -32,9 +40,12 @@ import Prelude hiding (succ)
 #define ULabel {-# UNPACK #-} !Label
 
 data CmmNode e x where
-  CmmEntry :: ULabel -> CmmNode C O
+  CmmEntry :: ULabel -> [CmmTickScope] -> CmmNode C O
 
   CmmComment :: FastString -> CmmNode O O
+
+  CmmTick :: !RawTickish -> CmmNode O O
+  CmmUnwind :: !GlobalReg -> !CmmExpr -> CmmNode O O
 
   CmmAssign :: !CmmReg -> !CmmExpr -> CmmNode O O
     -- Assign to register
@@ -201,7 +212,7 @@ deriving instance Eq (CmmNode e x)
 -- Hoopl instances of CmmNode
 
 instance NonLocal CmmNode where
-  entryLabel (CmmEntry l) = l
+  entryLabel (CmmEntry l _) = l
 
   successors (CmmBranch l) = [l]
   successors (CmmCondBranch {cml_true=t, cml_false=f}) = [f, t] -- meets layout constraint
@@ -217,6 +228,8 @@ type CmmActual = CmmExpr
 type CmmFormal = LocalReg
 
 type UpdFrameOffset = ByteOff
+
+type CmmTickScope = U.Unique
 
 -- | A convention maps a list of values (function arguments or return
 -- values) to registers or stack locations.
@@ -430,8 +443,10 @@ wrapRecExp f (CmmLoad addr ty)    = f (CmmLoad (wrapRecExp f addr) ty)
 wrapRecExp f e                    = f e
 
 mapExp :: (CmmExpr -> CmmExpr) -> CmmNode e x -> CmmNode e x
-mapExp _ f@(CmmEntry _)                          = f
+mapExp _ f@(CmmEntry{})                          = f
 mapExp _ m@(CmmComment _)                        = m
+mapExp _ m@(CmmTick _)                           = m
+mapExp _ m@(CmmUnwind _ _)                       = m
 mapExp f   (CmmAssign r e)                       = CmmAssign r (f e)
 mapExp f   (CmmStore addr e)                     = CmmStore (f addr) (f e)
 mapExp f   (CmmUnsafeForeignCall tgt fs as)      = CmmUnsafeForeignCall (mapForeignTarget f tgt) fs (map f as)
@@ -459,8 +474,10 @@ wrapRecExpM f n@(CmmLoad addr ty)  = maybe (f n) (f . flip CmmLoad ty) (wrapRecE
 wrapRecExpM f e                    = f e
 
 mapExpM :: (CmmExpr -> Maybe CmmExpr) -> CmmNode e x -> Maybe (CmmNode e x)
-mapExpM _ (CmmEntry _)              = Nothing
+mapExpM _ (CmmEntry{})              = Nothing
 mapExpM _ (CmmComment _)            = Nothing
+mapExpM _ (CmmTick _)               = Nothing
+mapExpM _ (CmmUnwind _ _)           = Nothing
 mapExpM f (CmmAssign r e)           = CmmAssign r `fmap` f e
 mapExpM f (CmmStore addr e)         = (\[addr', e'] -> CmmStore addr' e') `fmap` mapListM f [addr, e]
 mapExpM _ (CmmBranch _)             = Nothing
@@ -512,6 +529,8 @@ wrapRecExpf f e                  z = f e z
 foldExp :: (CmmExpr -> z -> z) -> CmmNode e x -> z -> z
 foldExp _ (CmmEntry {}) z                         = z
 foldExp _ (CmmComment {}) z                       = z
+foldExp _ (CmmTick {}) z                          = z
+foldExp _ (CmmUnwind {}) z                        = z
 foldExp f (CmmAssign _ e) z                       = f e z
 foldExp f (CmmStore addr e) z                     = f addr $ f e z
 foldExp f (CmmUnsafeForeignCall t _ as) z         = foldr f (foldExpForeignTarget f t z) as
@@ -532,3 +551,11 @@ mapSuccessors f (CmmCondBranch p y n)  = CmmCondBranch p (f y) (f n)
 mapSuccessors f (CmmSwitch e arms)     = CmmSwitch e (map (fmap f) arms)
 mapSuccessors _ n = n
 
+-- -----------------------------------------------------------------------------
+
+combineTickScopes :: [CmmTickScope] -> [CmmTickScope] -> [CmmTickScope]
+combineTickScopes sc0 sc1
+  | l0 > l1    = take (l1 - common) sc1 ++ sc0
+  | otherwise  = take (l0 - common) sc0 ++ sc1
+  where l0 = length sc0; l1 = length sc1
+        common = length $ takeWhile id $ zipWith (==) (reverse sc0) (reverse sc1)

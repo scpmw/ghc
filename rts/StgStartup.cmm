@@ -96,8 +96,8 @@ stg_returnToStackTop /* no args: explicit stack layout */
 stg_returnToSched /* no args: explicit stack layout */
 {
   W_ r1;
-  r1 = R1; // foreign calls may clobber R1
   SAVE_THREAD_STATE();
+  r1 = R1; // foreign calls may clobber R1
   foreign "C" threadPaused(MyCapability() "ptr", CurrentTSO);
   R1 = r1;
   jump StgReturn [R1];
@@ -120,10 +120,10 @@ stg_returnToSchedNotPaused /* no args: explicit stack layout */
 stg_returnToSchedButFirst /* no args: explicit stack layout */
 {
   W_ r1, r2, r3;
+  SAVE_THREAD_STATE();
   r1 = R1;
   r2 = R2;
   r3 = R3;
-  SAVE_THREAD_STATE();
   // foreign calls may clobber R1/R2/.., so we save them above
   foreign "C" threadPaused(MyCapability() "ptr", CurrentTSO);
   R1 = r1;

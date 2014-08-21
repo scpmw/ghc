@@ -237,7 +237,7 @@ void storageAddCapabilities (nat from, nat to)
         }
     }
 
-#if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR)
+#if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR) && (CC_SUPPORTS_TLS == 0)
     newThreadLocalKey(&gctKey);
 #endif
 
@@ -261,7 +261,7 @@ freeStorage (rtsBool free_heap)
     closeMutex(&sm_mutex);
 #endif
     stgFree(nurseries);
-#if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR)
+#if defined(THREADED_RTS) && defined(llvm_CC_FLAVOR) && (CC_SUPPORTS_TLS == 0)
     freeThreadLocalKey(&gctKey);
 #endif
     freeGcThreads();
@@ -662,20 +662,22 @@ move_STACK (StgStack *src, StgStack *dest)
 }
 
 /* -----------------------------------------------------------------------------
-   allocate()
+   StgPtr allocate (Capability *cap, W_ n)
 
-   This allocates memory in the current thread - it is intended for
-   use primarily from STG-land where we have a Capability.  It is
-   better than allocate() because it doesn't require taking the
-   sm_mutex lock in the common case.
+   Allocates an area of memory n *words* large, from the nursery of
+   the supplied Capability, or from the global block pool if the area
+   requested is larger than LARGE_OBJECT_THRESHOLD.  Memory is not
+   allocated from the current nursery block, so as not to interfere
+   with Hp/HpLim.
 
-   Memory is allocated directly from the nursery if possible (but not
-   from the current nursery block, so as not to interfere with
-   Hp/HpLim).
+   The address of the allocated memory is returned. allocate() never
+   fails; if it returns, the returned value is a valid address.  If
+   the nursery is already full, then another block is allocated from
+   the global block pool.  If we need to get memory from the OS and
+   that operation fails, then the whole process will be killed.
    -------------------------------------------------------------------------- */
 
-StgPtr
-allocate (Capability *cap, W_ n)
+StgPtr allocate (Capability *cap, W_ n)
 {
     bdescr *bd;
     StgPtr p;
@@ -684,7 +686,15 @@ allocate (Capability *cap, W_ n)
     CCS_ALLOC(cap->r.rCCCS,n);
     
     if (n >= LARGE_OBJECT_THRESHOLD/sizeof(W_)) {
-        W_ req_blocks =  (W_)BLOCK_ROUND_UP(n*sizeof(W_)) / BLOCK_SIZE;
+        // The largest number of words such that
+        // the computation of req_blocks will not overflow.
+        W_ max_words = (HS_WORD_MAX & ~(BLOCK_SIZE-1)) / sizeof(W_);
+        W_ req_blocks;
+
+        if (n > max_words)
+            req_blocks = HS_WORD_MAX; // signal overflow below
+        else
+            req_blocks = (W_)BLOCK_ROUND_UP(n*sizeof(W_)) / BLOCK_SIZE;
 
         // Attempting to allocate an object larger than maxHeapSize
         // should definitely be disallowed.  (bug #1791)
@@ -1342,3 +1352,11 @@ _bdescr (StgPtr p)
 }
 
 #endif
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

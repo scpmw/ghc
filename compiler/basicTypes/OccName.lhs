@@ -4,6 +4,8 @@
 %
 
 \begin{code}
+{-# LANGUAGE DeriveDataTypeable #-}
+
 -- |
 -- #name_types#
 -- GHC uses several kinds of name internally:
@@ -20,7 +22,7 @@
 --
 -- * 'Var.Var': see "Var#name_types"
 
-{-# OPTIONS -fno-warn-tabs #-}
+{-# OPTIONS_GHC -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
@@ -30,6 +32,8 @@
 module OccName (
 	-- * The 'NameSpace' type
 	NameSpace, -- Abstract
+
+        nameSpacesRelated,
 	
 	-- ** Construction
 	-- $real_vs_source_data_constructors
@@ -51,7 +55,6 @@ module OccName (
 	mkTcOcc, mkTcOccFS,
 	mkClsOcc, mkClsOccFS,
         mkDFunOcc,
-	mkTupleOcc, 
 	setOccNameSpace,
         demoteOccName,
         HasOccName(..),
@@ -62,9 +65,9 @@ module OccName (
         mkGenDefMethodOcc, 
 	mkDerivedTyConOcc, mkNewTyCoOcc, mkClassOpAuxOcc,
         mkCon2TagOcc, mkTag2ConOcc, mkMaxTagOcc,
-  	mkClassDataConOcc, mkDictOcc, mkIPOcc, 
- 	mkSpecOcc, mkForeignExportOcc, mkGenOcc1, mkGenOcc2,
- 	mkGenD, mkGenR, mkGen1R, mkGenRCo, mkGenC, mkGenS,
+	mkClassDataConOcc, mkDictOcc, mkIPOcc,
+	mkSpecOcc, mkForeignExportOcc, mkRepEqOcc, mkGenOcc1, mkGenOcc2,
+	mkGenD, mkGenR, mkGen1R, mkGenRCo, mkGenC, mkGenS,
         mkDataTOcc, mkDataCOcc, mkDataConWorkerOcc,
 	mkSuperDictSelOcc, mkLocalOcc, mkMethodOcc, mkInstTyTcOcc,
 	mkInstTyCoOcc, mkEqPredCoOcc,
@@ -82,14 +85,12 @@ module OccName (
 	
 	isTcClsNameSpace, isTvNameSpace, isDataConNameSpace, isVarNameSpace, isValNameSpace,
 
-	isTupleOcc_maybe,
-
 	-- * The 'OccEnv' type
 	OccEnv, emptyOccEnv, unitOccEnv, extendOccEnv, mapOccEnv,
 	lookupOccEnv, mkOccEnv, mkOccEnv_C, extendOccEnvList, elemOccEnv,
 	occEnvElts, foldOccEnv, plusOccEnv, plusOccEnv_C, extendOccEnv_C,
         extendOccEnv_Acc, filterOccEnv, delListFromOccEnv, delFromOccEnv,
-        alterOccEnv, 
+        alterOccEnv, pprOccEnv,
 
 	-- * The 'OccSet' type
 	OccSet, emptyOccSet, unitOccSet, mkOccSet, extendOccSet, 
@@ -103,12 +104,14 @@ module OccName (
 	-- * Lexical characteristics of Haskell names
 	isLexCon, isLexVar, isLexId, isLexSym,
 	isLexConId, isLexConSym, isLexVarId, isLexVarSym,
-	startsVarSym, startsVarId, startsConSym, startsConId
+	startsVarSym, startsVarId, startsConSym, startsConId,
+
+        -- FsEnv
+        FastStringEnv, emptyFsEnv, lookupFsEnv, extendFsEnv, mkFsEnv
     ) where
 
 import Util
 import Unique
-import BasicTypes
 import DynFlags
 import UniqFM
 import UniqSet
@@ -117,6 +120,29 @@ import Outputable
 import Binary
 import Data.Char
 import Data.Data
+\end{code}
+
+%************************************************************************
+%*									*
+              FastStringEnv
+%*									*
+%************************************************************************
+
+FastStringEnv can't be in FastString because the env depends on UniqFM
+
+\begin{code}
+type FastStringEnv a = UniqFM a         -- Keyed by FastString
+
+
+emptyFsEnv  :: FastStringEnv a
+lookupFsEnv :: FastStringEnv a -> FastString -> Maybe a
+extendFsEnv :: FastStringEnv a -> FastString -> a -> FastStringEnv a
+mkFsEnv     :: [(FastString,a)] -> FastStringEnv a
+
+emptyFsEnv  = emptyUFM
+lookupFsEnv = lookupUFM
+extendFsEnv = addToUFM
+mkFsEnv     = listToUFM
 \end{code}
 
 %************************************************************************
@@ -248,6 +274,9 @@ instance Data OccName where
   toConstr _   = abstractConstr "OccName"
   gunfold _ _  = error "gunfold"
   dataTypeOf _ = mkNoRepType "OccName"
+
+instance HasOccName OccName where
+  occName = id
 \end{code}
 
 
@@ -260,6 +289,11 @@ instance Data OccName where
 \begin{code}
 instance Outputable OccName where
     ppr = pprOccName
+
+instance OutputableBndr OccName where
+    pprBndr _ = ppr
+    pprInfixOcc n = pprInfixVar (isSymOcc n) (ppr n)
+    pprPrefixOcc n = pprPrefixVar (isSymOcc n) (ppr n)
 
 pprOccName :: OccName -> SDoc
 pprOccName (OccName sp occ) 
@@ -338,7 +372,20 @@ demoteOccName (OccName space name) = do
   space' <- demoteNameSpace space
   return $ OccName space' name
 
-{- | Other names in the compiler add aditional information to an OccName.
+-- Name spaces are related if there is a chance to mean the one when one writes
+-- the other, i.e. variables <-> data constructors and type variables <-> type constructors
+nameSpacesRelated :: NameSpace -> NameSpace -> Bool
+nameSpacesRelated ns1 ns2 = ns1 == ns2 || otherNameSpace ns1 == ns2
+
+otherNameSpace :: NameSpace -> NameSpace
+otherNameSpace VarName = DataName
+otherNameSpace DataName = VarName
+otherNameSpace TvName = TcClsName
+otherNameSpace TcClsName = TvName
+
+
+
+{- | Other names in the compiler add additional information to an OccName.
 This class provides a consistent way to access the underlying OccName. -}
 class HasOccName name where
   occName :: name -> OccName
@@ -415,7 +462,10 @@ filterOccEnv x (A y)       = A $ filterUFM x y
 alterOccEnv fn (A y) k     = A $ alterUFM fn y k
 
 instance Outputable a => Outputable (OccEnv a) where
-    ppr (A x) = ppr x
+    ppr x = pprOccEnv ppr x
+
+pprOccEnv :: (a -> SDoc) -> OccEnv a -> SDoc
+pprOccEnv ppr_elt (A env) = pprUniqFM ppr_elt env
 
 type OccSet = UniqSet OccName
 
@@ -496,7 +546,7 @@ isDataSymOcc _                    = False
 -- it is a data constructor or variable or whatever)
 isSymOcc :: OccName -> Bool
 isSymOcc (OccName DataName s)  = isLexConSym s
-isSymOcc (OccName TcClsName s) = isLexConSym s || isLexVarSym s
+isSymOcc (OccName TcClsName s) = isLexSym s
 isSymOcc (OccName VarName s)   = isLexSym s
 isSymOcc (OccName TvName s)    = isLexSym s
 -- Pretty inefficient!
@@ -572,7 +622,7 @@ isDerivedOccName occ =
 \begin{code}
 mkDataConWrapperOcc, mkWorkerOcc, mkMatcherOcc, mkDefaultMethodOcc,
         mkGenDefMethodOcc, mkDerivedTyConOcc, mkClassDataConOcc, mkDictOcc,
- 	mkIPOcc, mkSpecOcc, mkForeignExportOcc, mkGenOcc1, mkGenOcc2,
+	mkIPOcc, mkSpecOcc, mkForeignExportOcc, mkRepEqOcc, mkGenOcc1, mkGenOcc2,
  	mkGenD, mkGenR, mkGen1R, mkGenRCo,
 	mkDataTOcc, mkDataCOcc, mkDataConWorkerOcc, mkNewTyCoOcc,
 	mkInstTyCoOcc, mkEqPredCoOcc, mkClassOpAuxOcc,
@@ -593,6 +643,7 @@ mkDictOcc	    = mk_simple_deriv varName  "$d"
 mkIPOcc		    = mk_simple_deriv varName  "$i"
 mkSpecOcc	    = mk_simple_deriv varName  "$s"
 mkForeignExportOcc  = mk_simple_deriv varName  "$f"
+mkRepEqOcc          = mk_simple_deriv tvName   "$r"      -- In RULES involving Coercible
 mkNewTyCoOcc        = mk_simple_deriv tcName   "NTCo:"	-- Coercion for newtypes
 mkInstTyCoOcc       = mk_simple_deriv tcName   "TFCo:"   -- Coercion for type functions
 mkEqPredCoOcc	    = mk_simple_deriv tcName   "$co"
@@ -807,61 +858,21 @@ tidyOccName env occ@(OccName occ_sp fs)
 
 %************************************************************************
 %*									*
-		Stuff for dealing with tuples
-%*									*
-%************************************************************************
-
-\begin{code}
-mkTupleOcc :: NameSpace -> TupleSort -> Arity -> OccName
-mkTupleOcc ns sort ar = OccName ns (mkFastString str)
-  where
- 	-- no need to cache these, the caching is done in the caller
-	-- (TysWiredIn.mk_tuple)
-    str = case sort of
-		UnboxedTuple    -> '(' : '#' : commas ++ "#)"
-		BoxedTuple      -> '(' : commas ++ ")"
-                ConstraintTuple -> '(' : commas ++ ")"
-                  -- Cute hack: reuse the standard tuple OccNames (and hence code)
-                  -- for fact tuples, but give them different Uniques so they are not equal.
-                  --
-                  -- You might think that this will go wrong because isTupleOcc_maybe won't
-                  -- be able to tell the difference between boxed tuples and fact tuples. BUT:
-                  --  1. Fact tuples never occur directly in user code, so it doesn't matter
-                  --     that we can't detect them in Orig OccNames originating from the user
-                  --     programs (or those built by setRdrNameSpace used on an Exact tuple Name)
-                  --  2. Interface files have a special representation for tuple *occurrences*
-                  --     in IfaceTyCons, their workers (in IfaceSyn) and their DataCons (in case
-                  --     alternatives). Thus we don't rely on the OccName to figure out what kind
-                  --     of tuple an occurrence was trying to use in these situations.
-                  --  3. We *don't* represent tuple data type declarations specially, so those
-                  --     are still turned into wired-in names via isTupleOcc_maybe. But that's OK
-                  --     because we don't actually need to declare fact tuples thanks to this hack.
-                  --
-                  -- So basically any OccName like (,,) flowing to isTupleOcc_maybe will always
-                  -- refer to the standard boxed tuple. Cool :-)
-
-    commas = take (ar-1) (repeat ',')
-
-isTupleOcc_maybe :: OccName -> Maybe (NameSpace, TupleSort, Arity)
--- Tuples are special, because there are so many of them!
-isTupleOcc_maybe (OccName ns fs)
-  = case unpackFS fs of
-	'(':'#':',':rest     -> Just (ns, UnboxedTuple, 2 + count_commas rest)
-	'(':',':rest         -> Just (ns, BoxedTuple,   2 + count_commas rest)
-	_other               -> Nothing
-  where
-    count_commas (',':rest) = 1 + count_commas rest
-    count_commas _          = 0
-\end{code}
-
-%************************************************************************
-%*									*
 \subsection{Lexical categories}
 %*									*
 %************************************************************************
 
 These functions test strings to see if they fit the lexical categories
 defined in the Haskell report.
+
+Note [Classification of generated names]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Some names generated for internal use can show up in debugging output,
+e.g.  when using -ddump-simpl. These generated names start with a $
+but should still be pretty-printed using prefix notation. We make sure
+this is the case in isLexVarSym by only classifying a name as a symbol
+if all its characters are symbols, not just its first one.
 
 \begin{code}
 isLexCon,   isLexVar,    isLexId,    isLexSym    :: FastString -> Bool
@@ -889,19 +900,26 @@ isLexConSym cs				-- Infix type or data constructors
   | cs == (fsLit "->") = True
   | otherwise	       = startsConSym (headFS cs)
 
-isLexVarSym cs				-- Infix identifiers
-  | nullFS cs	      = False		-- 	e.g. "+"
-  | otherwise         = startsVarSym (headFS cs)
+isLexVarSym fs				-- Infix identifiers e.g. "+"
+  | fs == (fsLit "~R#") = True
+  | otherwise
+  = case (if nullFS fs then [] else unpackFS fs) of
+      [] -> False
+      (c:cs) -> startsVarSym c && all isVarSymChar cs
+        -- See Note [Classification of generated names]
 
 -------------
 startsVarSym, startsVarId, startsConSym, startsConId :: Char -> Bool
-startsVarSym c = isSymbolASCII c || (ord c > 0x7f && isSymbol c) -- Infix Ids
-startsConSym c = c == ':'				-- Infix data constructors
+startsVarSym c = isSymbolASCII c || (ord c > 0x7f && isSymbol c)  -- Infix Ids
+startsConSym c = c == ':'		-- Infix data constructors
 startsVarId c  = isLower c || c == '_'	-- Ordinary Ids
 startsConId c  = isUpper c || c == '('	-- Ordinary type constructors and data constructors
 
 isSymbolASCII :: Char -> Bool
 isSymbolASCII c = c `elem` "!#$%&*+./<=>?@\\^|~-"
+
+isVarSymChar :: Char -> Bool
+isVarSymChar c = c == ':' || startsVarSym c
 \end{code}
 
 %************************************************************************

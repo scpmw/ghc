@@ -100,10 +100,15 @@ struct PROFILING_FLAGS {
 
 # define HEAP_BY_CLOSURE_TYPE   8
 
+/* trace heap profiling */
+# define TRACE_HEAP_START       256
+# define TRACE_HEAP_BY_CODE_PTR (TRACE_HEAP_START+0)
+
     Time                heapProfileInterval; /* time between samples */
     nat                 heapProfileIntervalTicks; /* ticks between samples (derived) */
-    rtsBool             includeTSOs;
 
+#ifdef PROFILING
+    rtsBool             includeTSOs;
 
     rtsBool		showCCSOnException;
 
@@ -118,6 +123,7 @@ struct PROFILING_FLAGS {
     char*               ccsSelector;
     char*               retainerSelector;
     char*               bioSelector;
+#endif
 
 };
 
@@ -126,6 +132,7 @@ struct PROFILING_FLAGS {
 #define TRACE_STDERR    2
 
 struct TRACE_FLAGS {
+#ifdef TRACING
     int tracing;
     rtsBool timestamp;      /* show timestamp in stderr output */
     rtsBool scheduler;      /* trace scheduler events */
@@ -133,6 +140,10 @@ struct TRACE_FLAGS {
     rtsBool sparks_sampled; /* trace spark events by a sampled method */
     rtsBool sparks_full;    /* trace spark events 100% accurately */
     rtsBool user;           /* trace user events (emitted from Haskell code) */
+
+    rtsBool allocSampling;  /* collect code pointers from allocation sites */
+    rtsBool timerSampling;  /* collect instruction pointers from timer signals */
+#endif
 };
 
 struct CONCURRENT_FLAGS {
@@ -210,6 +221,25 @@ struct PAPI_FLAGS {
 
 #endif
 
+#ifdef USE_PERF_EVENT
+
+struct PERF_EVENT_FLAGS {
+#ifdef TRACING
+    nat     sampleType;
+    nat     samplePeriod;
+#endif
+};
+
+#define PERF_EVENT_SAMPLE_BY_CYCLE       1
+#define PERF_EVENT_SAMPLE_BY_CACHE       2
+#define PERF_EVENT_SAMPLE_BY_CACHE_MISS  3
+#define PERF_EVENT_SAMPLE_BY_BRANCH      4
+#define PERF_EVENT_SAMPLE_BY_BRANCH_MISS 5
+#define PERF_EVENT_SAMPLE_BY_STALLED_FE  6
+#define PERF_EVENT_SAMPLE_BY_STALLED_BE  7
+
+#endif
+
 /* Put them together: */
 
 typedef struct _RTS_FLAGS {
@@ -228,6 +258,9 @@ typedef struct _RTS_FLAGS {
 #endif
 #ifdef USE_PAPI
     struct PAPI_FLAGS   PapiFlags;
+#endif
+#ifdef USE_PERF_EVENT
+    struct PERF_EVENT_FLAGS PerfEventFlags;
 #endif
 } RTS_FLAGS;
 

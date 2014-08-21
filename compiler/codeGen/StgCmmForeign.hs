@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -----------------------------------------------------------------------------
 --
 -- Code generation for foreign calls.
@@ -218,6 +220,7 @@ emitForeignCall safety results target args
     k <- newLabelC
     let (off, _, copyout) = copyInOflow dflags NativeReturn (Young k) results []
        -- see Note [safe foreign call convention]
+    tscope <- getTickScope
     emit $
            (    mkStore (CmmStackSlot (Young k) (widthInBytes (wordWidth dflags)))
                         (CmmLit (CmmBlock k))
@@ -228,7 +231,7 @@ emitForeignCall safety results target args
                                        , ret_args = off
                                        , ret_off = updfr_off
                                        , intrbl = playInterruptible safety })
-            <*> mkLabel k
+            <*> mkLabel k tscope
             <*> copyout
            )
     return (ReturnedTo k off)
@@ -267,7 +270,12 @@ maybe_assign_temp e = do
 saveThreadState :: DynFlags -> CmmAGraph
 saveThreadState dflags =
   -- CurrentTSO->stackobj->sp = Sp;
-  mkStore (cmmOffset dflags (CmmLoad (cmmOffset dflags stgCurrentTSO (tso_stackobj dflags)) (bWord dflags)) (stack_SP dflags)) stgSp
+  let stackobj = CmmLoad (cmmOffset dflags stgCurrentTSO (tso_stackobj dflags)) (bWord dflags)
+      sp_fld = cmmOffset dflags stackobj (stack_SP dflags)
+  in (if gopt Opt_Debug dflags
+      then mkUnwind Sp (CmmLoad sp_fld (bWord dflags))
+      else mkNop)
+  <*> mkStore sp_fld stgSp
   <*> closeNursery dflags
   -- and save the current cost centre stack in the TSO when profiling:
   <*> if gopt Opt_SccProfilingOn dflags then
@@ -358,7 +366,7 @@ stack_SP     dflags = closureField dflags (oFFSET_StgStack_sp dflags)
 
 
 closureField :: DynFlags -> ByteOff -> ByteOff
-closureField dflags off = off + fixedHdrSize dflags * wORD_SIZE dflags
+closureField dflags off = off + fixedHdrSize dflags
 
 stgSp, stgHp, stgCurrentTSO, stgCurrentNursery :: CmmExpr
 stgSp             = CmmReg sp
@@ -404,6 +412,9 @@ add_shim :: DynFlags -> Type -> CmmExpr -> CmmExpr
 add_shim dflags arg_ty expr
   | tycon == arrayPrimTyCon || tycon == mutableArrayPrimTyCon
   = cmmOffsetB dflags expr (arrPtrsHdrSize dflags)
+
+  | tycon == smallArrayPrimTyCon || tycon == smallMutableArrayPrimTyCon
+  = cmmOffsetB dflags expr (smallArrPtrsHdrSize dflags)
 
   | tycon == byteArrayPrimTyCon || tycon == mutableByteArrayPrimTyCon
   = cmmOffsetB dflags expr (arrWordsHdrSize dflags)

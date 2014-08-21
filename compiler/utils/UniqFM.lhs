@@ -20,9 +20,9 @@ and ``addToUFM\_C'' and ``Data.IntMap.insertWith'' differ in the order
 of arguments of combining function.
 
 \begin{code}
-{-# LANGUAGE DeriveTraversable, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveTraversable, DeriveDataTypeable, GeneralizedNewtypeDeriving #-}
+{-# OPTIONS_GHC -Wall #-}
 
-{-# OPTIONS -Wall #-}
 module UniqFM (
         -- * Unique-keyed mappings
         UniqFM,       -- abstract type
@@ -58,10 +58,12 @@ module UniqFM (
         lookupUFM, lookupUFM_Directly,
         lookupWithDefaultUFM, lookupWithDefaultUFM_Directly,
         eltsUFM, keysUFM, splitUFM,
+        ufmToSet_Directly,
         ufmToList,
-        joinUFM
+        joinUFM, pprUniqFM
     ) where
 
+import FastString
 import Unique           ( Uniquable(..), Unique, getKey )
 import Outputable
 
@@ -69,6 +71,7 @@ import Compiler.Hoopl   hiding (Unique)
 
 import Data.Function (on)
 import qualified Data.IntMap as M
+import qualified Data.IntSet as S
 import qualified Data.Foldable as Foldable
 import qualified Data.Traversable as Traversable
 import Data.Typeable
@@ -180,6 +183,7 @@ lookupWithDefaultUFM_Directly
                 :: UniqFM elt -> elt -> Unique -> elt
 keysUFM         :: UniqFM elt -> [Unique]       -- Get the keys
 eltsUFM         :: UniqFM elt -> [elt]
+ufmToSet_Directly :: UniqFM elt -> S.IntSet
 ufmToList       :: UniqFM elt -> [(Unique, elt)]
 
 \end{code}
@@ -293,6 +297,7 @@ lookupWithDefaultUFM (UFM m) v k = M.findWithDefault v (getKey $ getUnique k) m
 lookupWithDefaultUFM_Directly (UFM m) v u = M.findWithDefault v (getKey u) m
 keysUFM (UFM m) = map getUnique $ M.keys m
 eltsUFM (UFM m) = M.elems m
+ufmToSet_Directly (UFM m) = M.keysSet m
 ufmToList (UFM m) = map (\(k, v) -> (getUnique k, v)) $ M.toList m
 
 -- Hoopl
@@ -315,5 +320,11 @@ joinUFM eltJoin l (OldFact old) (NewFact new) = foldUFM_Directly add (NoChange, 
 
 \begin{code}
 instance Outputable a => Outputable (UniqFM a) where
-    ppr ufm = ppr (ufmToList ufm)
+    ppr ufm = pprUniqFM ppr ufm
+
+pprUniqFM :: (a -> SDoc) -> UniqFM a -> SDoc
+pprUniqFM ppr_elt ufm
+  = brackets $ fsep $ punctuate comma $
+    [ ppr uq <+> ptext (sLit ":->") <+> ppr_elt elt
+    | (uq, elt) <- ufmToList ufm ]
 \end{code}

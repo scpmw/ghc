@@ -4,6 +4,8 @@
 \section{Code output phase}
 
 \begin{code}
+{-# LANGUAGE CPP #-}
+
 module CodeOutput( codeOutput, outputForeignStubs ) where
 
 #include "HsVersions.h"
@@ -48,7 +50,7 @@ codeOutput :: DynFlags
            -> FilePath
            -> ModLocation
            -> ForeignStubs
-           -> [PackageId]
+           -> [PackageKey]
            -> Stream IO RawCmmGroup ()                       -- Compiled C--
            -> IO (FilePath,
                   (Bool{-stub_h_exists-}, Maybe FilePath{-stub_c_exists-}))
@@ -72,10 +74,9 @@ codeOutput dflags this_mod filenm location foreign_stubs pkg_deps cmm_stream
                 ; return cmm
                 }
 
-        ; showPass dflags "CodeOutput"
         ; stubs_exist <- outputForeignStubs dflags this_mod location foreign_stubs
         ; case hscTarget dflags of {
-             HscAsm         -> outputAsm dflags this_mod filenm linted_cmm_stream;
+             HscAsm         -> outputAsm dflags this_mod location filenm linted_cmm_stream;
              HscC           -> outputC dflags filenm linted_cmm_stream pkg_deps;
              HscLlvm        -> outputLlvm dflags filenm linted_cmm_stream;
              HscInterpreted -> panic "codeOutput: HscInterpreted";
@@ -99,7 +100,7 @@ doOutput filenm io_action = bracket (openFile filenm WriteMode) hClose io_action
 outputC :: DynFlags
         -> FilePath
         -> Stream IO RawCmmGroup ()
-        -> [PackageId]
+        -> [PackageKey]
         -> IO ()
 
 outputC dflags filenm cmm_stream packages
@@ -114,7 +115,7 @@ outputC dflags filenm cmm_stream packages
        --   * -#include options from the cmdline and OPTIONS pragmas
        --   * the _stub.h file, if there is one.
        --
-       let rts = getPackageDetails (pkgState dflags) rtsPackageId
+       let rts = getPackageDetails dflags rtsPackageKey
                        
        let cc_injects = unlines (map mk_include (includes rts))
            mk_include h_file = 
@@ -140,8 +141,8 @@ outputC dflags filenm cmm_stream packages
 %************************************************************************
 
 \begin{code}
-outputAsm :: DynFlags -> Module -> FilePath -> Stream IO RawCmmGroup () -> IO ()
-outputAsm dflags this_mod filenm cmm_stream
+outputAsm :: DynFlags -> Module -> ModLocation -> FilePath -> Stream IO RawCmmGroup () -> IO ()
+outputAsm dflags this_mod location filenm cmm_stream
  | cGhcWithNativeCodeGen == "YES"
   = do ncg_uniqs <- mkSplitUniqSupply 'n'
 
@@ -149,7 +150,7 @@ outputAsm dflags this_mod filenm cmm_stream
 
        _ <- {-# SCC "OutputAsm" #-} doOutput filenm $
            \h -> {-# SCC "NativeCodeGen" #-}
-                 nativeCodeGen dflags this_mod h ncg_uniqs cmm_stream
+                 nativeCodeGen dflags this_mod location h ncg_uniqs cmm_stream
        return ()
 
  | otherwise
@@ -190,11 +191,8 @@ outputForeignStubs dflags mod location stubs
    stub_c <- newTempName dflags "c"
 
    case stubs of
-     NoStubs -> do
-        -- When compiling External Core files, may need to use stub
-        -- files from a previous compilation
-        stub_h_exists <- doesFileExist stub_h
-        return (stub_h_exists, Nothing)
+     NoStubs ->
+        return (False, Nothing)
 
      ForeignStubs h_code c_code -> do
         let
@@ -212,7 +210,7 @@ outputForeignStubs dflags mod location stubs
 
         -- we need the #includes from the rts package for the stub files
         let rts_includes = 
-               let rts_pkg = getPackageDetails (pkgState dflags) rtsPackageId in
+               let rts_pkg = getPackageDetails dflags rtsPackageKey in
                concatMap mk_include (includes rts_pkg)
             mk_include i = "#include \"" ++ i ++ "\"\n"
 

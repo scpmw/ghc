@@ -198,6 +198,14 @@ static void searchHeapBlocks (HashTable *addrs, bdescr *bd)
 		prim = rtsTrue;
 		size = mut_arr_ptrs_sizeW((StgMutArrPtrs *)p);
 		break;
+
+	    case SMALL_MUT_ARR_PTRS_CLEAN:
+	    case SMALL_MUT_ARR_PTRS_DIRTY:
+	    case SMALL_MUT_ARR_PTRS_FROZEN:
+	    case SMALL_MUT_ARR_PTRS_FROZEN0:
+		prim = rtsTrue;
+		size = small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs *)p);
+		break;
 		
 	    case TSO:
 		prim = rtsTrue;
@@ -290,7 +298,7 @@ void checkUnload (StgClosure *static_objects)
   // marked as unreferenced can be physically unloaded, because we
   // have no references to it.
   prev = NULL;
-  for (oc = unloaded_objects; oc; prev = oc, oc = next) {
+  for (oc = unloaded_objects; oc; oc = next) {
       next = oc->next;
       if (oc->referenced == 0) {
           if (prev == NULL) {
@@ -304,8 +312,17 @@ void checkUnload (StgClosure *static_objects)
       } else {
           IF_DEBUG(linker, debugBelch("Object file still in use: %"
                                       PATH_FMT "\n", oc->fileName));
+          prev = oc;
       }
   }
 
   freeHashTable(addrs, NULL);
 }
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

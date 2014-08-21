@@ -29,6 +29,7 @@ import BasicTypes
 import Util
 import Outputable
 import FastString
+import SrcLoc      ( showUserRealSpan )
 \end{code}
 
 %************************************************************************
@@ -91,7 +92,14 @@ ppr_bind (Rec binds)           = vcat (map pp binds)
 ppr_binding :: OutputableBndr b => (b, Expr b) -> SDoc
 ppr_binding (val_bdr, expr)
   = pprBndr LetBind val_bdr $$
-    hang (ppr val_bdr <+> equals) 2 (pprCoreExpr expr)
+    hang (ppr val_bdr <+> equals) 2 (ppr_annot val_bdr $ pprCoreExpr expr)
+
+ppr_annot :: Outputable b => b -> SDoc -> SDoc
+ppr_annot name doc = sdocWithDynFlags $ \dflags ->
+  let annot = showSDocDump dflags $ text "ann<#" <> ppr name <> text "#>"
+  in pprAnnotate annot doc
+
+
 \end{code}
 
 \begin{code}
@@ -121,7 +129,7 @@ ppr_expr add_par (Cast expr co)
                if gopt Opt_SuppressCoercions dflags
                then ptext (sLit "...")
                else parens $
-                        sep [ppr co, dcolon <+> pprEqPred (coercionKind co)]
+                        sep [ppr co, dcolon <+> ppr (coercionType co)]
 
 
 ppr_expr add_par expr@(Lam _ _)
@@ -164,7 +172,8 @@ ppr_expr add_par (Case expr var ty [(con,args,rhs)])
                      <+> ppr_bndr var
                    , ptext (sLit "<-") <+> ppr_expr id expr
                      <+> ptext (sLit "} in") ]
-             , pprCoreExpr rhs
+             , ppr_annot (var, con) $
+               pprCoreExpr rhs
              ]
     else add_par $
          sep [sep [ptext (sLit "case") <+> pprCoreExpr expr,
@@ -172,6 +181,7 @@ ppr_expr add_par (Case expr var ty [(con,args,rhs)])
                    sep [ptext (sLit "of") <+> ppr_bndr var,
                         char '{' <+> ppr_case_pat con args <+> arrow]
                ],
+              ppr_annot (var, con) $
               pprCoreExpr rhs,
               char '}'
          ]
@@ -184,11 +194,12 @@ ppr_expr add_par (Case expr var ty alts)
                 <+> pprCoreExpr expr
                 <+> ifPprDebug (braces (ppr ty)),
               ptext (sLit "of") <+> ppr_bndr var <+> char '{'],
-         nest 2 (vcat (punctuate semi (map pprCoreAlt alts))),
+         nest 2 (vcat (punctuate semi (map ppr_alt alts))),
          char '}'
     ]
   where
     ppr_bndr = pprBndr CaseBind
+    ppr_alt alt@(con,_,_) = ppr_annot (var, con) $ pprCoreAlt alt
 
 
 -- special cases: let ... in let ...
@@ -223,7 +234,10 @@ ppr_expr add_par (Let bind expr)
                 NonRec _ _ -> (sLit "let {")
 
 ppr_expr add_par (Tick tickish expr)
-  = add_par (sep [ppr tickish, pprCoreExpr expr])
+  = sdocWithDynFlags $ \dflags ->
+  if gopt Opt_PprShowTicks dflags
+  then add_par (sep [ppr tickish, pprCoreExpr expr])
+  else ppr_expr add_par expr
 
 pprCoreAlt :: OutputableBndr a => (AltCon, [a] , Expr a) -> SDoc
 pprCoreAlt (con, args, rhs)
@@ -376,10 +390,11 @@ ppIdInfo id info
     else
     showAttributes
     [ (True, pp_scope <> ppr (idDetails id))
-    , (has_arity,      ptext (sLit "Arity=") <> int arity)
-    , (has_caf_info,   ptext (sLit "Caf=") <> ppr caf_info)
-    , (True,           ptext (sLit "Str=") <> pprStrictness str_info)
-    , (has_unf,        ptext (sLit "Unf=") <> ppr unf_info)
+    , (has_arity,        ptext (sLit "Arity=") <> int arity)
+    , (has_called_arity, ptext (sLit "CallArity=") <> int called_arity)
+    , (has_caf_info,     ptext (sLit "Caf=") <> ppr caf_info)
+    , (True,             ptext (sLit "Str=") <> pprStrictness str_info)
+    , (has_unf,          ptext (sLit "Unf=") <> ppr unf_info)
     , (not (null rules), ptext (sLit "RULES:") <+> vcat (map pprRule rules))
     ]   -- Inline pragma, occ, demand, one-shot info
         -- printed out with all binders (when debug is on);
@@ -391,6 +406,9 @@ ppIdInfo id info
 
     arity = arityInfo info
     has_arity = arity /= 0
+
+    called_arity = callArityInfo info
+    has_called_arity = called_arity /= 0
 
     caf_info = cafInfo info
     has_caf_info = not (mayHaveCafRefs caf_info)
@@ -510,6 +528,12 @@ instance Outputable id => Outputable (Tickish id) where
          (True,True)  -> hcat [ptext (sLit "scctick<"), ppr cc, char '>']
          (True,False) -> hcat [ptext (sLit "tick<"),    ppr cc, char '>']
          _            -> hcat [ptext (sLit "scc<"),     ppr cc, char '>']
+  ppr (SourceNote span _) =
+      hcat [ ptext (sLit "src<"), text (showUserRealSpan True span), char '>']
+  ppr (CoreNote {coreBind = bnd, coreNote = ExprPtr{}}) =
+      hcat [ ptext (sLit "core<"), ppr bnd, ptext (sLit "=...>") ]
+  ppr (CoreNote {coreBind = bnd, coreNote = AltPtr (con,_,_)}) =
+      hcat [ ptext (sLit "core<"), ppr bnd <+> ppr con <>ptext (sLit "->...>") ]
 \end{code}
 
 -----------------------------------------------------

@@ -16,8 +16,8 @@ module HsPat (
 
         mkPrefixConPat, mkCharLitPat, mkNilPat,
 
-        isBangHsBind, isLiftedPatBind,
-        isBangLPat, hsPatNeedsParens,
+        isStrictHsBind, looksLazyPatBind,
+        isStrictLPat, hsPatNeedsParens,
         isIrrefutableHsPat,
 
         pprParendLPat
@@ -75,10 +75,13 @@ data Pat id
                    -- overall type of the pattern, and the toList
                    -- function to convert the scrutinee to a list value
 
-  | TuplePat    [LPat id]               -- Tuple
-                Boxity                  -- UnitPat is TuplePat []
-                PostTcType
-        -- You might think that the PostTcType was redundant, but it's essential
+  | TuplePat    [LPat id]    -- Tuple sub-patterns
+                Boxity       -- UnitPat is TuplePat []
+                [PostTcType] -- [] before typechecker, filled in afterwards with
+                             -- the types of the tuple components
+        -- You might think that the PostTcType was redundant, because we can 
+        -- get the pattern type by getting the types of the sub-patterns.
+        -- But it's essential
         --      data T a where
         --        T1 :: Int -> T Int
         --      f :: (T a, a) -> Int
@@ -89,6 +92,8 @@ data Pat id
         -- Note the (w::a), NOT (w::Int), because we have not yet
         -- refined 'a' to Int.  So we must know that the second component
         -- of the tuple is of type 'a' not Int.  See selectMatchVar
+        -- (June 14: I'm not sure this comment is right; the sub-patterns
+        --           will be wrapped in CoPats, no?)
 
   | PArrPat     [LPat id]               -- Syntactic parallel array
                 PostTcType              -- The type of the elements
@@ -98,14 +103,18 @@ data Pat id
                 (HsConPatDetails id)
 
   | ConPatOut {
-        pat_con   :: Located ConLike,
+        pat_con     :: Located ConLike,
+        pat_arg_tys :: [Type],          -- The univeral arg types, 1-1 with the universal
+                                        -- tyvars of the constructor/pattern synonym
+                                        --   Use (conLikeResTy pat_con pat_arg_tys) to get 
+                                        --   the type of the pattern
+
         pat_tvs   :: [TyVar],           -- Existentially bound type variables (tyvars only)
         pat_dicts :: [EvVar],           -- Ditto *coercion variables* and *dictionaries*
                                         -- One reason for putting coercion variable here, I think,
                                         --      is to ensure their kinds are zonked
         pat_binds :: TcEvBinds,         -- Bindings involving those dictionaries
         pat_args  :: HsConPatDetails id,
-        pat_ty    :: Type,              -- The type of the pattern
         pat_wrap  :: HsWrapper          -- Extra wrapper to pass to the matcher
     }
 
@@ -313,18 +322,18 @@ instance (OutputableBndr id, Outputable arg)
 %************************************************************************
 
 \begin{code}
-mkPrefixConPat :: DataCon -> [OutPat id] -> Type -> OutPat id
+mkPrefixConPat :: DataCon -> [OutPat id] -> [Type] -> OutPat id
 -- Make a vanilla Prefix constructor pattern
-mkPrefixConPat dc pats ty
+mkPrefixConPat dc pats tys
   = noLoc $ ConPatOut { pat_con = noLoc (RealDataCon dc), pat_tvs = [], pat_dicts = [],
                         pat_binds = emptyTcEvBinds, pat_args = PrefixCon pats,
-                        pat_ty = ty, pat_wrap = idHsWrapper }
+                        pat_arg_tys = tys, pat_wrap = idHsWrapper }
 
 mkNilPat :: Type -> OutPat id
-mkNilPat ty = mkPrefixConPat nilDataCon [] ty
+mkNilPat ty = mkPrefixConPat nilDataCon [] [ty]
 
 mkCharLitPat :: Char -> OutPat id
-mkCharLitPat c = mkPrefixConPat charDataCon [noLoc $ LitPat (HsCharPrim c)] charTy
+mkCharLitPat c = mkPrefixConPat charDataCon [noLoc $ LitPat (HsCharPrim c)] []
 \end{code}
 
 
@@ -358,34 +367,34 @@ patterns are treated specially, of course.
 
 The 1.3 report defines what ``irrefutable'' and ``failure-free'' patterns are.
 \begin{code}
-isBangLPat :: LPat id -> Bool
-isBangLPat (L _ (BangPat {})) = True
-isBangLPat (L _ (ParPat p))   = isBangLPat p
-isBangLPat _                  = False
+isStrictLPat :: LPat id -> Bool
+isStrictLPat (L _ (ParPat p))             = isStrictLPat p
+isStrictLPat (L _ (BangPat {}))           = True
+isStrictLPat (L _ (TuplePat _ Unboxed _)) = True
+isStrictLPat _                            = False
 
-isBangHsBind :: HsBind id -> Bool
--- A pattern binding with an outermost bang
+isStrictHsBind :: HsBind id -> Bool
+-- A pattern binding with an outermost bang or unboxed tuple must be matched strictly
 -- Defined in this module because HsPat is above HsBinds in the import graph
-isBangHsBind (PatBind { pat_lhs = p }) = isBangLPat p
-isBangHsBind _                         = False
+isStrictHsBind (PatBind { pat_lhs = p }) = isStrictLPat p
+isStrictHsBind _                         = False
 
-isLiftedPatBind :: HsBind id -> Bool
--- A pattern binding with a compound pattern, not just a variable
---    (I# x)       yes
---    (# a, b #)   no, even if a::Int#
---    x            no, even if x::Int#
--- We want to warn about a missing bang-pattern on the yes's
-isLiftedPatBind (PatBind { pat_lhs = p }) = isLiftedLPat p
-isLiftedPatBind _                         = False
+looksLazyPatBind :: HsBind id -> Bool
+-- Returns True of anything *except*
+--     a StrictHsBind (as above) or 
+--     a VarPat
+-- In particular, returns True of a pattern binding with a compound pattern, like (I# x)
+looksLazyPatBind (PatBind { pat_lhs = p }) = looksLazyLPat p
+looksLazyPatBind _                         = False
 
-isLiftedLPat :: LPat id -> Bool
-isLiftedLPat (L _ (ParPat p))   = isLiftedLPat p
-isLiftedLPat (L _ (BangPat p))  = isLiftedLPat p
-isLiftedLPat (L _ (AsPat _ p))  = isLiftedLPat p
-isLiftedLPat (L _ (TuplePat _ Unboxed _)) = False
-isLiftedLPat (L _ (VarPat {}))            = False
-isLiftedLPat (L _ (WildPat {}))           = False
-isLiftedLPat _                            = True
+looksLazyLPat :: LPat id -> Bool
+looksLazyLPat (L _ (ParPat p))             = looksLazyLPat p
+looksLazyLPat (L _ (AsPat _ p))            = looksLazyLPat p
+looksLazyLPat (L _ (BangPat {}))           = False
+looksLazyLPat (L _ (TuplePat _ Unboxed _)) = False
+looksLazyLPat (L _ (VarPat {}))            = False
+looksLazyLPat (L _ (WildPat {}))           = False
+looksLazyLPat _                            = True
 
 isIrrefutableHsPat :: OutputableBndr id => LPat id -> Bool
 -- (isIrrefutableHsPat p) is true if matching against p cannot fail,

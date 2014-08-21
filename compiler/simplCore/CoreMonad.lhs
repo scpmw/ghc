@@ -4,14 +4,13 @@
 \section[CoreMonad]{The core pipeline monad}
 
 \begin{code}
-{-# OPTIONS -fno-warn-tabs #-}
+{-# LANGUAGE CPP, UndecidableInstances #-}
+{-# OPTIONS_GHC -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
 --     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
-
-{-# LANGUAGE UndecidableInstances #-}
 
 module CoreMonad (
     -- * Configuration of the core-to-core passes
@@ -305,6 +304,7 @@ data CoreToDo           -- These are diff core-to-core passes,
   | CoreLiberateCase
   | CoreDoPrintCore
   | CoreDoStaticArgs
+  | CoreDoCallArity
   | CoreDoStrictness
   | CoreDoWorkerWrapper
   | CoreDoSpecialising
@@ -333,6 +333,7 @@ coreDumpFlag CoreDoFloatInwards       = Just Opt_D_verbose_core2core
 coreDumpFlag (CoreDoFloatOutwards {}) = Just Opt_D_verbose_core2core
 coreDumpFlag CoreLiberateCase         = Just Opt_D_verbose_core2core
 coreDumpFlag CoreDoStaticArgs 	      = Just Opt_D_verbose_core2core
+coreDumpFlag CoreDoCallArity 	      = Just Opt_D_dump_call_arity
 coreDumpFlag CoreDoStrictness 	      = Just Opt_D_dump_stranal
 coreDumpFlag CoreDoWorkerWrapper      = Just Opt_D_dump_worker_wrapper
 coreDumpFlag CoreDoSpecialising       = Just Opt_D_dump_spec
@@ -356,6 +357,7 @@ instance Outputable CoreToDo where
   ppr (CoreDoFloatOutwards f)  = ptext (sLit "Float out") <> parens (ppr f)
   ppr CoreLiberateCase         = ptext (sLit "Liberate case")
   ppr CoreDoStaticArgs 	       = ptext (sLit "Static argument")
+  ppr CoreDoCallArity	       = ptext (sLit "Called arity analysis")
   ppr CoreDoStrictness 	       = ptext (sLit "Demand analysis")
   ppr CoreDoWorkerWrapper      = ptext (sLit "Worker Wrapper binds")
   ppr CoreDoSpecialising       = ptext (sLit "Specialise")

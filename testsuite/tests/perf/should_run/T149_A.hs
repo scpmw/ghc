@@ -2,7 +2,7 @@ module Main (main) where
 
 -- See Trac #149
 
--- Curently (with GHC 7.0) the CSE works, just,
+-- Currently (with GHC 7.0) the CSE works, just,
 -- but it's delicate.
 
 
@@ -21,5 +21,5 @@ playerMostOccur1 (x:xs)
  | otherwise = playerMostOccur1 xs
 
 numOccur :: Int -> [Int] -> Int
-numOccur i is = length $ filter (i ==) is
+numOccur i is = length is
 

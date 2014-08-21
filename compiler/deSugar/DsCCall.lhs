@@ -6,7 +6,8 @@
 Desugaring foreign calls
 
 \begin{code}
-{-# OPTIONS -fno-warn-tabs #-}
+{-# LANGUAGE CPP #-}
+{-# OPTIONS_GHC -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
@@ -32,7 +33,6 @@ import CoreUtils
 import MkCore
 import Var
 import MkId
-import Maybes
 import ForeignCall
 import DataCon
 
@@ -50,6 +50,8 @@ import VarSet
 import DynFlags
 import Outputable
 import Util
+
+import Data.Maybe
 \end{code}
 
 Desugaring of @ccall@s consists of adding some state manipulation,
@@ -177,7 +179,7 @@ unboxArg arg
   --	data MutableByteArray s ix = MutableByteArray ix ix (MutableByteArray# s)
   | is_product_type &&
     data_con_arity == 3 &&
-    maybeToBool maybe_arg3_tycon &&
+    isJust maybe_arg3_tycon &&
     (arg3_tycon ==  byteArrayPrimTyCon ||
      arg3_tycon ==  mutableByteArrayPrimTyCon)
   = do case_bndr <- newSysLocalDs arg_ty
@@ -192,7 +194,7 @@ unboxArg arg
   where
     arg_ty					= exprType arg
     maybe_product_type 			   	= splitDataProductType_maybe arg_ty
-    is_product_type			   	= maybeToBool maybe_product_type
+    is_product_type			   	= isJust maybe_product_type
     Just (_, _, data_con, data_con_arg_tys)	= maybe_product_type
     data_con_arity				= dataConSourceArity data_con
     (data_con_arg_ty1 : _)			= data_con_arg_tys
@@ -236,9 +238,9 @@ boxResult result_ty
 		     _ -> []
 
 	      return_result state anss
-		= mkConApp (tupleCon UnboxedTuple (2 + length extra_result_tys))
-	         	   (map Type (realWorldStatePrimTy : io_res_ty : extra_result_tys)
-			      ++ (state : anss)) 
+		= mkCoreConApps (tupleCon UnboxedTuple (2 + length extra_result_tys))
+	         	        (map Type (realWorldStatePrimTy : io_res_ty : extra_result_tys)
+			         ++ (state : anss)) 
 
 	; (ccall_res_ty, the_alt) <- mk_alt return_result res
 

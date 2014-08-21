@@ -202,32 +202,34 @@
  */
 #define NotBlocked          0
 #define BlockedOnMVar       1
-#define BlockedOnMVarRead   2
-#define BlockedOnBlackHole  3
-#define BlockedOnRead       4
-#define BlockedOnWrite      5
-#define BlockedOnDelay      6
-#define BlockedOnSTM        7
+#define BlockedOnMVarRead   14 /* TODO: renumber me, see #9003 */
+#define BlockedOnBlackHole  2
+#define BlockedOnRead       3
+#define BlockedOnWrite      4
+#define BlockedOnDelay      5
+#define BlockedOnSTM        6
 
 /* Win32 only: */
-#define BlockedOnDoProc     8
+#define BlockedOnDoProc     7
 
 /* Only relevant for PAR: */
   /* blocked on a remote closure represented by a Global Address: */
-#define BlockedOnGA         9
+#define BlockedOnGA         8
   /* same as above but without sending a Fetch message */
-#define BlockedOnGA_NoSend  10
+#define BlockedOnGA_NoSend  9
 /* Only relevant for THREADED_RTS: */
-#define BlockedOnCCall      11
-#define BlockedOnCCall_Interruptible 12
+#define BlockedOnCCall      10
+#define BlockedOnCCall_Interruptible 11
    /* same as above but permit killing the worker thread */
 
 /* Involved in a message sent to tso->msg_cap */
-#define BlockedOnMsgThrowTo 13
+#define BlockedOnMsgThrowTo 12
 
 /* The thread is not on any run queues, but can be woken up
    by tryWakeupThread() */
-#define ThreadMigrating     14
+#define ThreadMigrating     13
+
+/* WARNING WARNING top number is BlockedOnMVarRead 14, not 13!! */
 
 /*
  * These constants are returned to the scheduler by a thread that has
@@ -291,5 +293,17 @@
    -------------------------------------------------------------------------- */
 
 #define MAX_SPARE_WORKERS 6
+
+/* Maximum number of heap allocation samples to collect per
+ * Cap. Should be more than block count of typical allocation area, so
+ * it is guaranteed to be flushed before we ever fill it.
+ */
+
+#define HEAP_ALLOC_MAX_SAMPLES 4096
+
+/* Maximum number of timer samples to collect per Task. Lower values
+ * mean that the buffer will be flushed more often.
+ */
+#define TIMER_MAX_SAMPLES 512
 
 #endif /* RTS_CONSTANTS_H */

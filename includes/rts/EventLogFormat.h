@@ -162,6 +162,8 @@
 #define EVENT_TASK_MIGRATE        56 /* (taskID, cap, new_cap)   */
 #define EVENT_TASK_DELETE         57 /* (taskID)                 */
 #define EVENT_USER_MARKER         58 /* (marker_name) */
+#define EVENT_HACK_BUG_T9003      59 /* Hack: see trac #9003 */
+
 /* Range 59 - 59 is available for new GHC and common events. */
 
 /* Range 60 - 80 is used by eden for parallel tracing
@@ -172,12 +174,23 @@
 
 /* Range 140 - 159 is reserved for Perf events. */
 
+/* Range 200 - 210 is hereby reserved for profiling stuff. In hopes that I this
+   is were I can find some peace. */
+
+#define EVENT_DEBUG_MODULE        200
+#define EVENT_DEBUG_BLOCK         201
+#define EVENT_DEBUG_SOURCE        202
+#define EVENT_DEBUG_CORE          203
+#define EVENT_DEBUG_SAMPLE_RANGE  204
+
+#define EVENT_SAMPLES             205
+
 /*
  * The highest event code +1 that ghc itself emits. Note that some event
  * ranges higher than this are reserved but not currently emitted by ghc.
  * This must match the size of the EventDesc[] array in EventLog.c
  */
-#define NUM_GHC_EVENT_TAGS        59
+#define NUM_GHC_EVENT_TAGS        206
 
 #if 0  /* DEPRECATED EVENTS: */
 /* we don't actually need to record the thread, it's implicit */

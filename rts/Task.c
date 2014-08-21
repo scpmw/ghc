@@ -18,6 +18,8 @@
 #include "Schedule.h"
 #include "Hash.h"
 #include "Trace.h"
+#include "PerfEvent.h"
+#include "Ticker.h"
 
 #if HAVE_SIGNAL_H
 #include <signal.h>
@@ -39,7 +41,7 @@ static Task * allocTask (void);
 static Task * newTask   (rtsBool);
 
 #if defined(THREADED_RTS)
-static Mutex all_tasks_mutex;
+Mutex all_tasks_mutex;
 #endif
 
 /* -----------------------------------------------------------------------------
@@ -129,9 +131,53 @@ allocTask (void)
 #if defined(THREADED_RTS)
         task->id = osThreadId();
 #endif
+#if defined(USE_PERF_EVENT)
+        perf_event_init(task);
+#endif
+#ifdef TRACING
+        initTickerSampling(task);
+#endif
         setMyTask(task);
         return task;
     }
+}
+
+void freeMyTask (void)
+{
+    Task *task;
+
+    task = myTask();
+
+    if (task == NULL) return;
+
+    if (!task->stopped) {
+        errorBelch(
+            "freeMyTask() called, but the Task is not stopped; ignoring");
+        return;
+    }
+
+    if (task->worker) {
+        errorBelch("freeMyTask() called on a worker; ignoring");
+        return;
+    }
+
+    ACQUIRE_LOCK(&all_tasks_mutex);
+
+    if (task->all_prev) {
+        task->all_prev->all_next = task->all_next;
+    } else {
+        all_tasks = task->all_next;
+    }
+    if (task->all_next) {
+        task->all_next->all_prev = task->all_prev;
+    }
+
+    taskCount--;
+
+    RELEASE_LOCK(&all_tasks_mutex);
+
+    freeTask(task);
+    setMyTask(NULL);
 }
 
 static void
@@ -182,6 +228,11 @@ newTask (rtsBool worker)
     task->wakeup = rtsFalse;
 #endif
 
+#ifdef TRACING
+    task->timer_ip_sample_count = 0;
+    task->timer_ip_samples = NULL;
+#endif
+
     task->next = NULL;
 
     ACQUIRE_LOCK(&all_tasks_mutex);
@@ -219,7 +270,7 @@ newInCall (Task *task)
         task->spare_incalls = incall->next;
         task->n_spare_incalls--;
     } else {
-        incall = stgMallocBytes((sizeof(InCall)), "newBoundTask");
+        incall = stgMallocBytes((sizeof(InCall)), "newInCall");
     }
 
     incall->tso = NULL;
@@ -312,6 +363,20 @@ discardTasksExcept (Task *keep)
         next = task->all_next;
         if (task != keep) {
             debugTrace(DEBUG_sched, "discarding task %" FMT_SizeT "", (size_t)TASK_ID(task));
+#if defined(THREADED_RTS)
+            // It is possible that some of these tasks are currently blocked
+            // (in the parent process) either on their condition variable
+            // `cond` or on their mutex `lock`. If they are we may deadlock
+            // when `freeTask` attempts to call `closeCondition` or
+            // `closeMutex` (the behaviour of these functions is documented to
+            // be undefined in the case that there are threads blocked on
+            // them). To avoid this, we re-initialize both the condition
+            // variable and the mutex before calling `freeTask` (we do
+            // precisely the same for all global locks in `forkProcess`).
+            initCondition(&task->cond);
+            initMutex(&task->lock);
+#endif
+
             // Note that we do not traceTaskDelete here because
             // we are not really deleting a task.
             // The OS threads for all these tasks do not exist in
@@ -373,6 +438,14 @@ workerStart(Task *task)
     if (RtsFlags.ParFlags.setAffinity) {
         setThreadAffinity(cap->no, n_capabilities);
     }
+
+#ifdef USE_PERF_EVENT
+    perf_event_init(task);
+#endif
+
+#ifdef TRACING
+    initTickerSampling(task);
+#endif
 
     // set the thread-local pointer to the Task:
     setMyTask(task);
@@ -464,3 +537,11 @@ printAllTasks(void)
 
 #endif
 
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

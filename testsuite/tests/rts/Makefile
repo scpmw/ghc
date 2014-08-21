@@ -84,6 +84,9 @@ T5435_dyn_asm :
 T6006_setup :
 	'$(TEST_HC)' $(TEST_HC_OPTS) -c T6006.hs
 
+T8124_setup :
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c T8124.hs
+
 ifeq "$(TARGETPLATFORM)" "i386-unknown-mingw32"
 T7037_CONST = const
 else
@@ -105,7 +108,11 @@ BASE_DIR = $(shell $(LOCAL_GHC_PKG) field base library-dirs | sed 's/^.*: *//')
 BASE_LIB = $(shell $(LOCAL_GHC_PKG) field base hs-libraries | sed 's/^.*: *//')
 GHC_PRIM_DIR = $(shell $(LOCAL_GHC_PKG) field ghc-prim library-dirs | sed 's/^.*: *//')
 GHC_PRIM_LIB = $(shell $(LOCAL_GHC_PKG) field ghc-prim hs-libraries | sed 's/^.*: *//')
-INTEGER_GMP_DIR = $(shell $(LOCAL_GHC_PKG) field integer-gmp library-dirs | sed 's/^.*: *//')
+# We need to get first library directory here in order to get rid of
+# system gmp library directory installation when ghc is configured
+# with --with-gmp-libraries=<dir> parameter
+INTEGER_GMP_DIR = $(shell $(LOCAL_GHC_PKG) field integer-gmp library-dirs \
+	| sed 's/^.*: *//' | head -1)
 INTEGER_GMP_LIB = $(shell $(LOCAL_GHC_PKG) field integer-gmp hs-libraries | sed 's/^.*: *//')
 
 BASE        = $(BASE_DIR)/lib$(BASE_LIB).a

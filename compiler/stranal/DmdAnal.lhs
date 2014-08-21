@@ -7,15 +7,15 @@
 			-----------------
 
 \begin{code}
-{-# OPTIONS -fno-warn-tabs #-}
+{-# LANGUAGE CPP #-}
+{-# OPTIONS_GHC -fno-warn-tabs #-}
 
 module DmdAnal ( dmdAnalProgram ) where
 
 #include "HsVersions.h"
 
-import Var		( isTyVar )
 import DynFlags
-import WwLib            ( deepSplitProductType_maybe )
+import WwLib            ( findTypeShape, deepSplitProductType_maybe )
 import Demand	-- All of it
 import CoreSyn
 import Outputable
@@ -26,11 +26,8 @@ import Data.List
 import DataCon
 import Id
 import CoreUtils	( exprIsHNF, exprType, exprIsTrivial )
--- import PprCore	
 import TyCon
-import Type		( eqType )
--- import Pair
--- import Coercion         ( coercionKind )
+import Type
 import FamInstEnv
 import Util
 import Maybes		( isJust )
@@ -118,26 +115,29 @@ dmdAnalStar :: AnalEnv
             -> Demand 	-- This one takes a *Demand*
             -> CoreExpr -> (BothDmdArg, CoreExpr)
 dmdAnalStar env dmd e 
-  | (cd, defer_and_use) <- toCleanDmd dmd
+  | (cd, defer_and_use) <- toCleanDmd dmd (exprType e)
   , (dmd_ty, e')        <- dmdAnal env cd e
   = (postProcessDmdTypeM defer_and_use dmd_ty, e')
 
 -- Main Demand Analsysis machinery
-dmdAnal :: AnalEnv
+dmdAnal, dmdAnal' :: AnalEnv
         -> CleanDemand 	       -- The main one takes a *CleanDemand*
         -> CoreExpr -> (DmdType, CoreExpr)
 
 -- The CleanDemand is always strict and not absent
 --    See Note [Ensure demand is strict]
 
-dmdAnal _ _ (Lit lit)     = (nopDmdType, Lit lit)
-dmdAnal _ _ (Type ty)     = (nopDmdType, Type ty)	-- Doesn't happen, in fact
-dmdAnal _ _ (Coercion co) = (nopDmdType, Coercion co)
+dmdAnal env d e = -- pprTrace "dmdAnal" (ppr d <+> ppr e) $
+                  dmdAnal' env d e
 
-dmdAnal env dmd (Var var)
+dmdAnal' _ _ (Lit lit)     = (nopDmdType, Lit lit)
+dmdAnal' _ _ (Type ty)     = (nopDmdType, Type ty)	-- Doesn't happen, in fact
+dmdAnal' _ _ (Coercion co) = (nopDmdType, Coercion co)
+
+dmdAnal' env dmd (Var var)
   = (dmdTransform env var dmd, Var var)
 
-dmdAnal env dmd (Cast e co)
+dmdAnal' env dmd (Cast e co)
   = (dmd_ty, Cast e' co)
   where
     (dmd_ty, e') = dmdAnal env dmd e
@@ -155,24 +155,24 @@ dmdAnal env dmd (Cast e co)
 	-- a fixpoint.  So revert to a vanilla Eval demand
 -}
 
-dmdAnal env dmd (Tick t e)
+dmdAnal' env dmd (Tick t e)
   = (dmd_ty, Tick t e')
   where
     (dmd_ty, e') = dmdAnal env dmd e
 
-dmdAnal env dmd (App fun (Type ty))
+dmdAnal' env dmd (App fun (Type ty))
   = (fun_ty, App fun' (Type ty))
   where
     (fun_ty, fun') = dmdAnal env dmd fun
 
-dmdAnal sigs dmd (App fun (Coercion co))
+dmdAnal' sigs dmd (App fun (Coercion co))
   = (fun_ty, App fun' (Coercion co))
   where
     (fun_ty, fun') = dmdAnal sigs dmd fun
 
 -- Lots of the other code is there to make this
 -- beautiful, compositional, application rule :-)
-dmdAnal env dmd (App fun arg)	-- Non-type arguments
+dmdAnal' env dmd (App fun arg)	-- Non-type arguments
   = let				-- [Type arg handled above]
         call_dmd          = mkCallDmd dmd
 	(fun_ty, fun') 	  = dmdAnal env call_dmd fun
@@ -190,7 +190,7 @@ dmdAnal env dmd (App fun arg)	-- Non-type arguments
     (res_ty `bothDmdType` arg_ty, App fun' arg')
 
 -- this is an anonymous lambda, since @dmdAnalRhs@ uses @collectBinders@
-dmdAnal env dmd (Lam var body)
+dmdAnal' env dmd (Lam var body)
   | isTyVar var
   = let 
 	(body_ty, body') = dmdAnal env dmd body
@@ -209,7 +209,7 @@ dmdAnal env dmd (Lam var body)
     in
     (postProcessUnsat defer_and_use lam_ty, Lam var' body')
 
-dmdAnal env dmd (Case scrut case_bndr ty [alt@(DataAlt dc, _, _)])
+dmdAnal' env dmd (Case scrut case_bndr ty [alt@(DataAlt dc, _, _)])
   -- Only one alternative with a product constructor
   | let tycon = dataConTyCon dc
   , isProductTyCon tycon 
@@ -267,7 +267,7 @@ dmdAnal env dmd (Case scrut case_bndr ty [alt@(DataAlt dc, _, _)])
 --                                   , text "res_ty" <+> ppr res_ty ]) $
     (res_ty, Case scrut' case_bndr' ty [alt'])
 
-dmdAnal env dmd (Case scrut case_bndr ty alts)
+dmdAnal' env dmd (Case scrut case_bndr ty alts)
   = let      -- Case expression with multiple alternatives
 	(alt_tys, alts')     = mapAndUnzip (dmdAnalAlt env dmd) alts
 	(scrut_ty, scrut')   = dmdAnal env cleanEvalDmd scrut
@@ -281,7 +281,7 @@ dmdAnal env dmd (Case scrut case_bndr ty alts)
 --                                   , text "res_ty" <+> ppr res_ty ]) $
     (res_ty, Case scrut' case_bndr' ty alts')
 
-dmdAnal env dmd (Let (NonRec id rhs) body)
+dmdAnal' env dmd (Let (NonRec id rhs) body)
   = (body_ty2, Let (NonRec id2 annotated_rhs) body')                    
   where
     (sig, lazy_fv, id1, rhs') = dmdAnalRhs NotTopLevel Nothing env id rhs
@@ -306,7 +306,7 @@ dmdAnal env dmd (Let (NonRec id rhs) body)
 	-- the vanilla call demand seem to be due to (b).  So we don't
 	-- bother to re-analyse the RHS.
 
-dmdAnal env dmd (Let (Rec pairs) body)
+dmdAnal' env dmd (Let (Rec pairs) body)
   = let
 	(env', lazy_fv, pairs') = dmdFix NotTopLevel env pairs
 	(body_ty, body')        = dmdAnal env' dmd body
@@ -489,8 +489,7 @@ dmdTransform :: AnalEnv		-- The strictness environment
 
 dmdTransform env var dmd
   | isDataConWorkId var		                 -- Data constructor
-  = dmdTransformDataConSig 
-       (idArity var) (idStrictness var) dmd
+  = dmdTransformDataConSig (idArity var) (idStrictness var) dmd
 
   | gopt Opt_DmdTxDictSel (ae_dflags env),
     Just _ <- isClassOpId_maybe var -- Dictionary component selector
@@ -595,9 +594,18 @@ dmdAnalRhs :: TopLevelFlag
 -- Process the RHS of the binding, add the strictness signature
 -- to the Id, and augment the environment with the signature as well.
 dmdAnalRhs top_lvl rec_flag env id rhs
-  | Just fn <- unpackTrivial rhs   -- See Note [Trivial right-hand sides]
+  | Just fn <- unpackTrivial rhs   -- See Note [Demand analysis for trivial right-hand sides]
   , let fn_str = getStrictness env fn
-  = (fn_str, emptyDmdEnv, set_idStrictness env id fn_str, rhs)
+        fn_fv | isLocalId fn = unitVarEnv fn topDmd
+              | otherwise    = emptyDmdEnv
+        -- Note [Remember to demand the function itself]
+        -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        -- fn_fv: don't forget to produce a demand for fn itself
+        -- Lacking this caused Trac #9128
+        -- The demand is very conservative (topDmd), but that doesn't
+        -- matter; trivial bindings are usually inlined, so it only 
+        -- kicks in for top-level bindings and NOINLINE bindings
+  = (fn_str, fn_fv, set_idStrictness env id fn_str, rhs)
 
   | otherwise
   = (sig_ty, lazy_fv, id', mkLams bndrs' body')
@@ -640,7 +648,7 @@ dmdAnalRhs top_lvl rec_flag env id rhs
 unpackTrivial :: CoreExpr -> Maybe Id
 -- Returns (Just v) if the arg is really equal to v, modulo
 -- casts, type applications etc 
--- See Note [Trivial right-hand sides]
+-- See Note [Demand analysis for trivial right-hand sides]
 unpackTrivial (Var v)                 = Just v
 unpackTrivial (Cast e _)              = unpackTrivial e
 unpackTrivial (Lam v e) | isTyVar v   = unpackTrivial e
@@ -648,15 +656,23 @@ unpackTrivial (App e a) | isTypeArg a = unpackTrivial e
 unpackTrivial _                       = Nothing
 \end{code}
 
-Note [Trivial right-hand sides]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Note [Demand analysis for trivial right-hand sides]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider
 	foo = plusInt |> co
 where plusInt is an arity-2 function with known strictness.  Clearly
 we want plusInt's strictness to propagate to foo!  But because it has
-no manifest lambdas, it won't do so automatically.  So we have a 
+no manifest lambdas, it won't do so automatically, and indeed 'co' might
+have type (Int->Int->Int) ~ T, so we *can't* eta-expand.  So we have a
 special case for right-hand sides that are "trivial", namely variables,
-casts, type applications, and the like. 
+casts, type applications, and the like.
+
+Note that this can mean that 'foo' has an arity that is smaller than that
+indicated by its demand info.  e.g. if co :: (Int->Int->Int) ~ T, then
+foo's arity will be zero (see Note [exprArity invariant] in CoreArity),
+but its demand signature will be that of plusInt. A small example is the
+test case of Trac #8963.
+
 
 Note [Product demands for function body]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -725,9 +741,8 @@ addLazyFVs dmd_ty lazy_fvs
 	-- call to f.  So we just get an L demand for x for g.
 \end{code}
 
-Note [do not strictify the argument dictionaries of a dfun]
+Note [Do not strictify the argument dictionaries of a dfun]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 The typechecker can tie recursive knots involving dfuns, so we do the
 conservative thing and refrain from strictifying a dfun's argument
 dictionaries.
@@ -739,17 +754,10 @@ annotateBndr :: AnalEnv -> DmdType -> Var -> (DmdType, Var)
 -- according to the result demand of the provided demand type
 -- No effect on the argument demands
 annotateBndr env dmd_ty var
-  | isTyVar var = (dmd_ty, var)
-  | otherwise   = (dmd_ty', set_idDemandInfo env var dmd')
+  | isId var  = (dmd_ty', setIdDemandInfo var dmd)
+  | otherwise = (dmd_ty, var)
   where
-    (dmd_ty', dmd) = peelFV dmd_ty var
-
-    dmd' | gopt Opt_DictsStrict (ae_dflags env)
-             -- We never want to strictify a recursive let. At the moment
-             -- annotateBndr is only call for non-recursive lets; if that
-             -- changes, we need a RecFlag parameter and another guard here.
-         = strictifyDictDmd (idType var) dmd
-         | otherwise = dmd
+    (dmd_ty', dmd) = findBndrDmd env False dmd_ty var
 
 annotateBndrs :: AnalEnv -> DmdType -> [Var] -> (DmdType, [Var])
 annotateBndrs env = mapAccumR (annotateBndr env)
@@ -774,7 +782,7 @@ annotateLamIdBndr env arg_of_dfun dmd_ty one_shot id
 -- Only called for Ids
   = ASSERT( isId id )
     -- pprTrace "annLamBndr" (vcat [ppr id, ppr _dmd_ty]) $
-    (final_ty, setOneShotness one_shot (set_idDemandInfo env id dmd'))
+    (final_ty, setOneShotness one_shot (setIdDemandInfo id dmd))
   where
       -- Watch out!  See note [Lambda-bound unfoldings]
     final_ty = case maybeUnfoldingTemplate (idUnfolding id) of
@@ -784,13 +792,7 @@ annotateLamIdBndr env arg_of_dfun dmd_ty one_shot id
                              (unf_ty, _) = dmdAnalStar env dmd unf
 
     main_ty = addDemand dmd dmd_ty'
-    (dmd_ty', dmd) = peelFV dmd_ty id
-
-    dmd' | gopt Opt_DictsStrict (ae_dflags env),
-           -- see Note [do not strictify the argument dictionaries of a dfun]
-           not arg_of_dfun
-         = strictifyDictDmd (idType id) dmd
-         | otherwise = dmd
+    (dmd_ty', dmd) = findBndrDmd env arg_of_dfun dmd_ty id
 
 deleteFVs :: DmdType -> [Var] -> DmdType
 deleteFVs (DmdType fvs dmds res) bndrs
@@ -1076,18 +1078,39 @@ extendSigsWithLam :: AnalEnv -> Id -> AnalEnv
 -- Extend the AnalEnv when we meet a lambda binder
 extendSigsWithLam env id
   | isId id
-  , isStrictDmd (idDemandInfo id) || ae_virgin env  
+  , isStrictDmd (idDemandInfo id) || ae_virgin env
        -- See Note [Optimistic CPR in the "virgin" case]
        -- See Note [Initial CPR for strict binders]
   , Just (dc,_,_,_) <- deepSplitProductType_maybe (ae_fam_envs env) $ idType id
   = extendAnalEnv NotTopLevel env id (cprProdSig (dataConRepArity dc))
 
-  | otherwise 
+  | otherwise
   = env
 
-set_idDemandInfo :: AnalEnv -> Id -> Demand -> Id
-set_idDemandInfo env id dmd 
-  = setIdDemandInfo id (zapDemand (ae_dflags env) dmd)
+findBndrDmd :: AnalEnv -> Bool -> DmdType -> Id -> (DmdType, Demand)
+-- See Note [Trimming a demand to a type] in Demand.lhs
+findBndrDmd env arg_of_dfun dmd_ty id
+  = (dmd_ty', dmd')
+  where
+    dmd' = zapDemand (ae_dflags env) $
+           strictify $
+           trimToType starting_dmd (findTypeShape fam_envs id_ty)
+
+    (dmd_ty', starting_dmd) = peelFV dmd_ty id
+
+    id_ty = idType id
+
+    strictify dmd
+      | gopt Opt_DictsStrict (ae_dflags env)
+             -- We never want to strictify a recursive let. At the moment
+             -- annotateBndr is only call for non-recursive lets; if that
+             -- changes, we need a RecFlag parameter and another guard here.
+      , not arg_of_dfun -- See Note [Do not strictify the argument dictionaries of a dfun]
+      = strictifyDictDmd id_ty dmd
+      | otherwise
+      = dmd
+
+    fam_envs = ae_fam_envs env
 
 set_idStrictness :: AnalEnv -> Id -> StrictSig -> Id
 set_idStrictness env id sig

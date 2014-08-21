@@ -30,6 +30,7 @@
 #include "Stats.h"
 #include "ProfHeap.h"
 #include "Apply.h"
+#include "Stable.h" /* markStableTables */
 #include "sm/Storage.h" // for END_OF_STATIC_LIST
 
 /*
@@ -525,6 +526,18 @@ push( StgClosure *c, retainer c_child_r, StgClosure **first_child )
     case MUT_ARR_PTRS_FROZEN0:
 	init_ptrs(&se.info, ((StgMutArrPtrs *)c)->ptrs,
 		  (StgPtr)(((StgMutArrPtrs *)c)->payload));
+	*first_child = find_ptrs(&se.info);
+	if (*first_child == NULL)
+	    return;
+	break;
+
+	// StgMutArrPtr.ptrs, no SRT
+    case SMALL_MUT_ARR_PTRS_CLEAN:
+    case SMALL_MUT_ARR_PTRS_DIRTY:
+    case SMALL_MUT_ARR_PTRS_FROZEN:
+    case SMALL_MUT_ARR_PTRS_FROZEN0:
+	init_ptrs(&se.info, ((StgSmallMutArrPtrs *)c)->ptrs,
+		  (StgPtr)(((StgSmallMutArrPtrs *)c)->payload));
 	*first_child = find_ptrs(&se.info);
 	if (*first_child == NULL)
 	    return;
@@ -1768,6 +1781,12 @@ computeRetainerSet( void )
     //
     // The following code assumes that WEAK objects are considered to be roots
     // for retainer profilng.
+    for (n = 0; n < n_capabilities; n++) {
+        // NB: after a GC, all nursery weak_ptr_lists have been migrated
+        // to the global lists living in the generations
+        ASSERT(capabilities[n]->weak_ptr_list_hd == NULL);
+        ASSERT(capabilities[n]->weak_ptr_list_tl == NULL);
+    }
     for (g = 0; g < RtsFlags.GcFlags.generations; g++) {
         for (weak = generations[g].weak_ptr_list; weak != NULL; weak = weak->link) {
             // retainRoot((StgClosure *)weak);
@@ -2267,3 +2286,11 @@ belongToHeap(StgPtr p)
 #endif /* DEBUG_RETAINER */
 
 #endif /* PROFILING */
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

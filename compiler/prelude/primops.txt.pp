@@ -247,13 +247,19 @@ primop   NotIOp   "notI#"   Monadic   Int# -> Int#
 
 primop   IntNegOp    "negateInt#"    Monadic   Int# -> Int#
 primop   IntAddCOp   "addIntC#"    GenPrimOp   Int# -> Int# -> (# Int#, Int# #)
-	 {Add with carry.  First member of result is (wrapped) sum;
-          second member is 0 iff no overflow occured.}
+         {Add signed integers reporting overflow.
+          First member of result is the sum truncated to an {\tt Int#};
+          second member is zero if the true sum fits in an {\tt Int#},
+          nonzero if overflow occurred (the sum is either too large
+          or too small to fit in an {\tt Int#}).}
    with code_size = 2
 
 primop   IntSubCOp   "subIntC#"    GenPrimOp   Int# -> Int# -> (# Int#, Int# #)
-	 {Subtract with carry.  First member of result is (wrapped) difference;
-          second member is 0 iff no overflow occured.}
+         {Subtract signed integers reporting overflow.
+          First member of result is the difference truncated to an {\tt Int#};
+          second member is zero if the true difference fits in an {\tt Int#},
+          nonzero if overflow occurred (the difference is either too large
+          or too small to fit in an {\tt Int#}).}
    with code_size = 2
 
 primop   IntGtOp  ">#"   Compare   Int# -> Int# -> Int#
@@ -379,6 +385,28 @@ primop   PopCnt64Op   "popCnt64#"   GenPrimOp   WORD64 -> Word#
     {Count the number of set bits in a 64-bit word.}
 primop   PopCntOp   "popCnt#"   Monadic   Word# -> Word#
     {Count the number of set bits in a word.}
+
+primop   Clz8Op   "clz8#" Monadic   Word# -> Word#
+    {Count leading zeros in the lower 8 bits of a word.}
+primop   Clz16Op   "clz16#" Monadic   Word# -> Word#
+    {Count leading zeros in the lower 16 bits of a word.}
+primop   Clz32Op   "clz32#" Monadic   Word# -> Word#
+    {Count leading zeros in the lower 32 bits of a word.}
+primop   Clz64Op   "clz64#" GenPrimOp WORD64 -> Word#
+    {Count leading zeros in a 64-bit word.}
+primop   ClzOp     "clz#"   Monadic   Word# -> Word#
+    {Count leading zeros in a word.}
+
+primop   Ctz8Op   "ctz8#"  Monadic   Word# -> Word#
+    {Count trailing zeros in the lower 8 bits of a word.}
+primop   Ctz16Op   "ctz16#" Monadic   Word# -> Word#
+    {Count trailing zeros in the lower 16 bits of a word.}
+primop   Ctz32Op   "ctz32#" Monadic   Word# -> Word#
+    {Count trailing zeros in the lower 32 bits of a word.}
+primop   Ctz64Op   "ctz64#" GenPrimOp WORD64 -> Word#
+    {Count trailing zeros in a 64-bit word.}
+primop   CtzOp     "ctz#"   Monadic   Word# -> Word#
+    {Count trailing zeros in a word.}
 
 primop   BSwap16Op   "byteSwap16#"   Monadic   Word# -> Word#
     {Swap bytes in the lower 16 bits of a word. The higher bytes are undefined. }
@@ -762,54 +790,74 @@ primop  UnsafeThawArrayOp  "unsafeThawArray#" GenPrimOp
 
 primop  CopyArrayOp "copyArray#" GenPrimOp
   Array# a -> Int# -> MutableArray# s a -> Int# -> Int# -> State# s -> State# s
-  {Copy a range of the Array# to the specified region in the MutableArray#.
-   Both arrays must fully contain the specified ranges, but this is not checked.
-   The two arrays must not be the same array in different states, but this is not checked either.}
+  {Given a source array, an offset into the source array, a
+   destination array, an offset into the destination array, and a
+   number of elements to copy, copy the elements from the source array
+   to the destination array. Both arrays must fully contain the
+   specified ranges, but this is not checked. The two arrays must not
+   be the same array in different states, but this is not checked
+   either.}
   with
+  out_of_line      = True
   has_side_effects = True
   can_fail         = True
-  code_size = { primOpCodeSizeForeignCall + 4 }
 
 primop  CopyMutableArrayOp "copyMutableArray#" GenPrimOp
   MutableArray# s a -> Int# -> MutableArray# s a -> Int# -> Int# -> State# s -> State# s
-  {Copy a range of the first MutableArray# to the specified region in the second MutableArray#.
-   Both arrays must fully contain the specified ranges, but this is not checked.}
+  {Given a source array, an offset into the source array, a
+   destination array, an offset into the destination array, and a
+   number of elements to copy, copy the elements from the source array
+   to the destination array. The source and destination arrays can
+   refer to the same array. Both arrays must fully contain the
+   specified ranges, but this is not checked.}
   with
+  out_of_line      = True
   has_side_effects = True
   can_fail         = True
-  code_size = { primOpCodeSizeForeignCall + 4 }
 
 primop  CloneArrayOp "cloneArray#" GenPrimOp
   Array# a -> Int# -> Int# -> Array# a
-  {Return a newly allocated Array# with the specified subrange of the provided Array#.
-   The provided Array# should contain the full subrange specified by the two Int#s, but this is not checked.}
+  {Given a source array, an offset into the source array, and a number
+   of elements to copy, create a new array with the elements from the
+   source array. The provided array must fully contain the specified
+   range, but this is not checked.}
   with
+  out_of_line      = True
   has_side_effects = True
-  code_size = { primOpCodeSizeForeignCall + 4 }
+  can_fail         = True
 
 primop  CloneMutableArrayOp "cloneMutableArray#" GenPrimOp
   MutableArray# s a -> Int# -> Int# -> State# s -> (# State# s, MutableArray# s a #)
-  {Return a newly allocated Array# with the specified subrange of the provided Array#.
-   The provided MutableArray# should contain the full subrange specified by the two Int#s, but this is not checked.}
+  {Given a source array, an offset into the source array, and a number
+   of elements to copy, create a new array with the elements from the
+   source array. The provided array must fully contain the specified
+   range, but this is not checked.}
   with
+  out_of_line      = True
   has_side_effects = True
-  code_size = { primOpCodeSizeForeignCall + 4 }
+  can_fail         = True
 
 primop  FreezeArrayOp "freezeArray#" GenPrimOp
   MutableArray# s a -> Int# -> Int# -> State# s -> (# State# s, Array# a #)
-  {Return a newly allocated Array# with the specified subrange of the provided MutableArray#.
-   The provided MutableArray# should contain the full subrange specified by the two Int#s, but this is not checked.}
+  {Given a source array, an offset into the source array, and a number
+   of elements to copy, create a new array with the elements from the
+   source array. The provided array must fully contain the specified
+   range, but this is not checked.}
   with
+  out_of_line      = True
   has_side_effects = True
-  code_size = { primOpCodeSizeForeignCall + 4 }
+  can_fail         = True
 
 primop  ThawArrayOp "thawArray#" GenPrimOp
   Array# a -> Int# -> Int# -> State# s -> (# State# s, MutableArray# s a #)
-  {Return a newly allocated Array# with the specified subrange of the provided MutableArray#.
-   The provided Array# should contain the full subrange specified by the two Int#s, but this is not checked.}
+  {Given a source array, an offset into the source array, and a number
+   of elements to copy, create a new array with the elements from the
+   source array. The provided array must fully contain the specified
+   range, but this is not checked.}
   with
+  out_of_line      = True
   has_side_effects = True
-  code_size = { primOpCodeSizeForeignCall + 4 }
+  can_fail         = True
 
 primop CasArrayOp  "casArray#" GenPrimOp
    MutableArray# s a -> Int# -> a -> a -> State# s -> (# State# s, Int#, a #)
@@ -818,6 +866,168 @@ primop CasArrayOp  "casArray#" GenPrimOp
    out_of_line = True
    has_side_effects = True
 
+
+------------------------------------------------------------------------
+section "Small Arrays"
+
+	{Operations on {\tt SmallArray\#}. A {\tt SmallArray\#} works
+         just like an {\tt Array\#}, but with different space use and
+         performance characteristics (that are often useful with small
+         arrays). The {\tt SmallArray\#} and {\tt SmallMutableArray#}
+         lack a `card table'. The purpose of a card table is to avoid
+         having to scan every element of the array on each GC by
+         keeping track of which elements have changed since the last GC
+         and only scanning those that have changed. So the consequence
+         of there being no card table is that the representation is
+         somewhat smaller and the writes are somewhat faster (because
+         the card table does not need to be updated). The disadvantage
+         of course is that for a {\tt SmallMutableArray#} the whole
+         array has to be scanned on each GC. Thus it is best suited for
+         use cases where the mutable array is not long lived, e.g.
+         where a mutable array is initialised quickly and then frozen
+         to become an immutable {\tt SmallArray\#}.
+        }
+
+------------------------------------------------------------------------
+
+primtype SmallArray# a
+
+primtype SmallMutableArray# s a
+
+primop  NewSmallArrayOp "newSmallArray#" GenPrimOp
+   Int# -> a -> State# s -> (# State# s, SmallMutableArray# s a #)
+   {Create a new mutable array with the specified number of elements,
+    in the specified state thread,
+    with each element containing the specified initial value.}
+   with
+   out_of_line = True
+   has_side_effects = True
+
+primop  SameSmallMutableArrayOp "sameSmallMutableArray#" GenPrimOp
+   SmallMutableArray# s a -> SmallMutableArray# s a -> Int#
+
+primop  ReadSmallArrayOp "readSmallArray#" GenPrimOp
+   SmallMutableArray# s a -> Int# -> State# s -> (# State# s, a #)
+   {Read from specified index of mutable array. Result is not yet evaluated.}
+   with
+   has_side_effects = True
+   can_fail         = True
+
+primop  WriteSmallArrayOp "writeSmallArray#" GenPrimOp
+   SmallMutableArray# s a -> Int# -> a -> State# s -> State# s
+   {Write to specified index of mutable array.}
+   with
+   has_side_effects = True
+   can_fail         = True
+
+primop  SizeofSmallArrayOp "sizeofSmallArray#" GenPrimOp
+   SmallArray# a -> Int#
+   {Return the number of elements in the array.}
+
+primop  SizeofSmallMutableArrayOp "sizeofSmallMutableArray#" GenPrimOp
+   SmallMutableArray# s a -> Int#
+   {Return the number of elements in the array.}
+
+primop  IndexSmallArrayOp "indexSmallArray#" GenPrimOp
+   SmallArray# a -> Int# -> (# a #)
+   {Read from specified index of immutable array. Result is packaged into
+    an unboxed singleton; the result itself is not yet evaluated.}
+   with
+   can_fail         = True
+
+primop  UnsafeFreezeSmallArrayOp "unsafeFreezeSmallArray#" GenPrimOp
+   SmallMutableArray# s a -> State# s -> (# State# s, SmallArray# a #)
+   {Make a mutable array immutable, without copying.}
+   with
+   has_side_effects = True
+
+primop  UnsafeThawSmallArrayOp  "unsafeThawSmallArray#" GenPrimOp
+   SmallArray# a -> State# s -> (# State# s, SmallMutableArray# s a #)
+   {Make an immutable array mutable, without copying.}
+   with
+   out_of_line = True
+   has_side_effects = True
+
+-- The code_size is only correct for the case when the copy family of
+-- primops aren't inlined. It would be nice to keep track of both.
+
+primop  CopySmallArrayOp "copySmallArray#" GenPrimOp
+  SmallArray# a -> Int# -> SmallMutableArray# s a -> Int# -> Int# -> State# s -> State# s
+  {Given a source array, an offset into the source array, a
+   destination array, an offset into the destination array, and a
+   number of elements to copy, copy the elements from the source array
+   to the destination array. Both arrays must fully contain the
+   specified ranges, but this is not checked. The two arrays must not
+   be the same array in different states, but this is not checked
+   either.}
+  with
+  out_of_line      = True
+  has_side_effects = True
+  can_fail         = True
+
+primop  CopySmallMutableArrayOp "copySmallMutableArray#" GenPrimOp
+  SmallMutableArray# s a -> Int# -> SmallMutableArray# s a -> Int# -> Int# -> State# s -> State# s
+  {Given a source array, an offset into the source array, a
+   destination array, an offset into the destination array, and a
+   number of elements to copy, copy the elements from the source array
+   to the destination array. The source and destination arrays can
+   refer to the same array. Both arrays must fully contain the
+   specified ranges, but this is not checked.}
+  with
+  out_of_line      = True
+  has_side_effects = True
+  can_fail         = True
+
+primop  CloneSmallArrayOp "cloneSmallArray#" GenPrimOp
+  SmallArray# a -> Int# -> Int# -> SmallArray# a
+  {Given a source array, an offset into the source array, and a number
+   of elements to copy, create a new array with the elements from the
+   source array. The provided array must fully contain the specified
+   range, but this is not checked.}
+  with
+  out_of_line      = True
+  has_side_effects = True
+  can_fail         = True
+
+primop  CloneSmallMutableArrayOp "cloneSmallMutableArray#" GenPrimOp
+  SmallMutableArray# s a -> Int# -> Int# -> State# s -> (# State# s, SmallMutableArray# s a #)
+  {Given a source array, an offset into the source array, and a number
+   of elements to copy, create a new array with the elements from the
+   source array. The provided array must fully contain the specified
+   range, but this is not checked.}
+  with
+  out_of_line      = True
+  has_side_effects = True
+  can_fail         = True
+
+primop  FreezeSmallArrayOp "freezeSmallArray#" GenPrimOp
+  SmallMutableArray# s a -> Int# -> Int# -> State# s -> (# State# s, SmallArray# a #)
+  {Given a source array, an offset into the source array, and a number
+   of elements to copy, create a new array with the elements from the
+   source array. The provided array must fully contain the specified
+   range, but this is not checked.}
+  with
+  out_of_line      = True
+  has_side_effects = True
+  can_fail         = True
+
+primop  ThawSmallArrayOp "thawSmallArray#" GenPrimOp
+  SmallArray# a -> Int# -> Int# -> State# s -> (# State# s, SmallMutableArray# s a #)
+  {Given a source array, an offset into the source array, and a number
+   of elements to copy, create a new array with the elements from the
+   source array. The provided array must fully contain the specified
+   range, but this is not checked.}
+  with
+  out_of_line      = True
+  has_side_effects = True
+  can_fail         = True
+
+primop CasSmallArrayOp  "casSmallArray#" GenPrimOp
+   SmallMutableArray# s a -> Int# -> a -> a -> State# s -> (# State# s, Int#, a #)
+   {Unsafe, machine-level atomic compare and swap on an element within an array.}
+   with
+   out_of_line = True
+   has_side_effects = True
 
 ------------------------------------------------------------------------
 section "Byte Arrays"
@@ -863,6 +1073,30 @@ primop  ByteArrayContents_Char "byteArrayContents#" GenPrimOp
 
 primop  SameMutableByteArrayOp "sameMutableByteArray#" GenPrimOp
    MutableByteArray# s -> MutableByteArray# s -> Int#
+
+primop  ShrinkMutableByteArrayOp_Char "shrinkMutableByteArray#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> State# s
+   {Shrink mutable byte array to new specified size (in bytes), in
+    the specified state thread. The new size argument must be less than or
+    equal to the current size as reported by {\tt sizeofMutableArray\#}.}
+   with out_of_line = True
+        has_side_effects = True
+
+primop  ResizeMutableByteArrayOp_Char "resizeMutableByteArray#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> (# State# s,MutableByteArray# s #)
+   {Resize (unpinned) mutable byte array to new specified size (in bytes).
+    The returned {\tt MutableByteArray\#} is either the original
+    {\tt MutableByteArray\#} resized in-place or, if not possible, a newly
+    allocated (unpinned) {\tt MutableByteArray\#} (with the original content
+    copied over).
+
+    To avoid undefined behaviour, the original {\tt MutableByteArray\#} shall
+    not be accessed anymore after a {\tt resizeMutableByteArray\#} has been
+    performed.  Moreover, no reference to the old one should be kept in order
+    to allow garbage collection of the original {\tt MutableByteArray\#} in
+    case a new {\tt MutableByteArray\#} had to be allocated.}
+   with out_of_line = True
+        has_side_effects = True
 
 primop  UnsafeFreezeByteArrayOp "unsafeFreezeByteArray#" GenPrimOp
    MutableByteArray# s -> State# s -> (# State# s, ByteArray# #)
@@ -914,34 +1148,42 @@ primop IndexByteArrayOp_StablePtr "indexStablePtrArray#" GenPrimOp
 
 primop IndexByteArrayOp_Int8 "indexInt8Array#" GenPrimOp
    ByteArray# -> Int# -> Int#
+   {Read 8-bit integer; offset in bytes.}
    with can_fail = True
 
 primop IndexByteArrayOp_Int16 "indexInt16Array#" GenPrimOp
    ByteArray# -> Int# -> Int#
+   {Read 16-bit integer; offset in 16-bit words.}
    with can_fail = True
 
 primop IndexByteArrayOp_Int32 "indexInt32Array#" GenPrimOp
    ByteArray# -> Int# -> INT32
+   {Read 32-bit integer; offset in 32-bit words.}
    with can_fail = True
 
 primop IndexByteArrayOp_Int64 "indexInt64Array#" GenPrimOp
    ByteArray# -> Int# -> INT64
+   {Read 64-bit integer; offset in 64-bit words.}
    with can_fail = True
 
 primop IndexByteArrayOp_Word8 "indexWord8Array#" GenPrimOp
    ByteArray# -> Int# -> Word#
+   {Read 8-bit word; offset in bytes.}
    with can_fail = True
 
 primop IndexByteArrayOp_Word16 "indexWord16Array#" GenPrimOp
    ByteArray# -> Int# -> Word#
+   {Read 16-bit word; offset in 16-bit words.}
    with can_fail = True
 
 primop IndexByteArrayOp_Word32 "indexWord32Array#" GenPrimOp
    ByteArray# -> Int# -> WORD32
+   {Read 32-bit word; offset in 32-bit words.}
    with can_fail = True
 
 primop IndexByteArrayOp_Word64 "indexWord64Array#" GenPrimOp
    ByteArray# -> Int# -> WORD64
+   {Read 64-bit word; offset in 64-bit words.}
    with can_fail = True
 
 primop  ReadByteArrayOp_Char "readCharArray#" GenPrimOp
@@ -958,11 +1200,13 @@ primop  ReadByteArrayOp_WideChar "readWideCharArray#" GenPrimOp
 
 primop  ReadByteArrayOp_Int "readIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> State# s -> (# State# s, Int# #)
+   {Read intger; offset in words.}
    with has_side_effects = True
         can_fail = True
 
 primop  ReadByteArrayOp_Word "readWordArray#" GenPrimOp
    MutableByteArray# s -> Int# -> State# s -> (# State# s, Word# #)
+   {Read word; offset in words.}
    with has_side_effects = True
         can_fail = True
 
@@ -1171,19 +1415,79 @@ primop  SetByteArrayOp "setByteArray#" GenPrimOp
   code_size = { primOpCodeSizeForeignCall + 4 }
   can_fail = True
 
+-- Atomic operations
+
+primop  AtomicReadByteArrayOp_Int "atomicReadIntArray#" GenPrimOp
+   MutableByteArray# s -> Int# -> State# s -> (# State# s, Int# #)
+   {Given an array and an offset in Int units, read an element. The
+    index is assumed to be in bounds. Implies a full memory barrier.}
+   with has_side_effects = True
+        can_fail = True
+
+primop  AtomicWriteByteArrayOp_Int "atomicWriteIntArray#" GenPrimOp
+   MutableByteArray# s -> Int# -> Int# -> State# s -> State# s
+   {Given an array and an offset in Int units, write an element. The
+    index is assumed to be in bounds. Implies a full memory barrier.}
+   with has_side_effects = True
+        can_fail = True
+
 primop CasByteArrayOp_Int "casIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> Int# -> State# s -> (# State# s, Int# #)
-   {Machine-level atomic compare and swap on a word within a ByteArray.}
-   with
-   out_of_line = True
-   has_side_effects = True
+   {Given an array, an offset in Int units, the expected old value, and
+    the new value, perform an atomic compare and swap i.e. write the new
+    value if the current value matches the provided old value. Returns
+    the value of the element before the operation. Implies a full memory
+    barrier.}
+   with has_side_effects = True
+        can_fail = True
 
 primop FetchAddByteArrayOp_Int "fetchAddIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
-   {Machine-level word-sized fetch-and-add within a ByteArray.}
-   with
-   out_of_line = True
-   has_side_effects = True
+   {Given an array, and offset in Int units, and a value to add,
+    atomically add the value to the element. Returns the value of the
+    element before the operation. Implies a full memory barrier.}
+   with has_side_effects = True
+        can_fail = True
+
+primop FetchSubByteArrayOp_Int "fetchSubIntArray#" GenPrimOp
+   MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
+   {Given an array, and offset in Int units, and a value to subtract,
+    atomically substract the value to the element. Returns the value of
+    the element before the operation. Implies a full memory barrier.}
+   with has_side_effects = True
+        can_fail = True
+
+primop FetchAndByteArrayOp_Int "fetchAndIntArray#" GenPrimOp
+   MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
+   {Given an array, and offset in Int units, and a value to AND,
+    atomically AND the value to the element. Returns the value of the
+    element before the operation. Implies a full memory barrier.}
+   with has_side_effects = True
+        can_fail = True
+
+primop FetchNandByteArrayOp_Int "fetchNandIntArray#" GenPrimOp
+   MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
+   {Given an array, and offset in Int units, and a value to NAND,
+    atomically NAND the value to the element. Returns the value of the
+    element before the operation. Implies a full memory barrier.}
+   with has_side_effects = True
+        can_fail = True
+
+primop FetchOrByteArrayOp_Int "fetchOrIntArray#" GenPrimOp
+   MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
+   {Given an array, and offset in Int units, and a value to OR,
+    atomically OR the value to the element. Returns the value of the
+    element before the operation. Implies a full memory barrier.}
+   with has_side_effects = True
+        can_fail = True
+
+primop FetchXorByteArrayOp_Int "fetchXorIntArray#" GenPrimOp
+   MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
+   {Given an array, and offset in Int units, and a value to XOR,
+    atomically XOR the value to the element. Returns the value of the
+    element before the operation. Implies a full memory barrier.}
+   with has_side_effects = True
+        can_fail = True
 
 
 ------------------------------------------------------------------------
@@ -1279,9 +1583,9 @@ primop  CopyArrayArrayOp "copyArrayArray#" GenPrimOp
    Both arrays must fully contain the specified ranges, but this is not checked.
    The two arrays must not be the same array in different states, but this is not checked either.}
   with
+  out_of_line      = True
   has_side_effects = True
-  can_fail = True
-  code_size = { primOpCodeSizeForeignCall }
+  can_fail         = True
 
 primop  CopyMutableArrayArrayOp "copyMutableArrayArray#" GenPrimOp
   MutableArrayArray# s -> Int# -> MutableArrayArray# s -> Int# -> Int# -> State# s -> State# s
@@ -1289,9 +1593,9 @@ primop  CopyMutableArrayArrayOp "copyMutableArrayArray#" GenPrimOp
    MutableArrayArray#.
    Both arrays must fully contain the specified ranges, but this is not checked.}
   with
+  out_of_line      = True
   has_side_effects = True
-  code_size = { primOpCodeSizeForeignCall }
-  can_fail = True
+  can_fail         = True
 
 ------------------------------------------------------------------------
 section "Addr#"
@@ -1629,6 +1933,11 @@ primop  RaiseOp "raise#" GenPrimOp
    strictness  = { \ _arity -> mkClosedStrictSig [topDmd] botRes }
       -- NB: result is bottom
    out_of_line = True
+   has_side_effects = True
+     -- raise# certainly throws a Haskell exception and hence has_side_effects
+     -- It doesn't actually make much difference because the fact that it
+     -- returns bottom independently ensures that we are careful not to discard
+     -- it.  But still, it's better to say the Right Thing.
 
 -- raiseIO# needs to be a primop, because exceptions in the IO monad
 -- must be *precise* - we don't want the strictness analyser turning
@@ -2245,7 +2554,7 @@ pseudoop   "seq"
    { Evaluates its first argument to head normal form, and then returns its second
 	argument as the result. }
 
-primtype Any k
+primtype Any
 	{ The type constructor {\tt Any} is type to which you can unsafely coerce any
 	lifted type, and back.
 
@@ -2270,8 +2579,11 @@ primtype Any k
 
 	{\tt length (Any *) ([] (Any *))}
 
-        Note that {\tt Any} is kind polymorphic, and takes a kind {\tt k} as its
-        first argument. The kind of {\tt Any} is thus {\tt forall k. k -> k}.}
+        Above, we print kinds explicitly, as if with
+        {\tt -fprint-explicit-kinds}.
+
+        Note that {\tt Any} is kind polymorphic; its kind is thus
+        {\tt forall k. k}.}
 
 primtype AnyK
         { The kind {\tt AnyK} is the kind level counterpart to {\tt Any}. In a
@@ -2362,49 +2674,6 @@ pseudoop   "coerce"
      the newtype's concrete type to the abstract type. But it also works in
      more complicated settings, e.g. converting a list of newtypes to a list of
      concrete types.
-   }
-
-primclass Coercible a b
-   { This two-parameter class has instances for types {\tt a} and {\tt b} if
-     the compiler can infer that they have the same representation. This class
-     does not have regular instances; instead they are created on-the-fly during
-     type-checking. Trying to manually declare an instance of {\tt Coercible}
-     is an error.
-
-     Nevertheless one can pretend that the following three kinds of instances
-     exist. First, as a trivial base-case:
-
-     {\tt instance a a}
-
-     Furthermore, for every type constructor there is
-     an instance that allows to coerce under the type constructor. For
-     example, let {\tt D} be a prototypical type constructor ({\tt data} or {\tt
-     newtype}) with three type arguments, which have roles Nominal,
-     Representational resp. Phantom. Then there is an instance of the form
-
-     {\tt instance Coercible b b' => Coercible (D a b c) (D a b' c')}
-
-     Note that the nominal type arguments are equal, the representational type
-     arguments can differ, but need to have a {\tt Coercible} instance
-     themself, and the phantom type arguments can be changed arbitrarily.
-
-     In SafeHaskell code, this instance is only usable if the constructors of
-     every type constructor used in the definition of {\tt D} (including
-     those of {\tt D} itself) are in scope.
-
-     The third kind of instance exists for every {\tt newtype NT = MkNT T} and
-     comes in two variants, namely
-
-     {\tt instance Coercible a T => Coercible a NT}
-
-     {\tt instance Coercible T b => Coercible NT b}
-
-     This instance is only usable if the constructor {\tt MkNT} is in scope.
-
-     If, as a library author of a type constructor like {\tt Set a}, you
-     want to prevent a user of your module to write
-     {\tt coerce :: Set T -> Set NT},
-     you need to set the role of {\tt Set}'s type parameter to Nominal.
    }
 
 ------------------------------------------------------------------------

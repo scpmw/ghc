@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -----------------------------------------------------------------------------
 --
 -- Stg to C-- code generation: bindings
@@ -29,7 +31,7 @@ import StgCmmClosure
 import StgCmmForeign    (emitPrimCall)
 
 import MkGraph
-import CoreSyn          ( AltCon(..) )
+import CoreSyn          ( AltCon(..), tickishIsCode )
 import SMRep
 import Cmm
 import CmmInfo
@@ -46,7 +48,6 @@ import Util
 import BasicTypes
 import Outputable
 import FastString
-import Maybes
 import DynFlags
 
 import Control.Monad
@@ -262,14 +263,22 @@ mkRhsClosure    dflags bndr _cc _bi
                 [NonVoid the_fv]                -- Just one free var
                 upd_flag                -- Updatable thunk
                 []                      -- A thunk
-                (StgCase (StgApp scrutinee [{-no args-}])
-                      _ _ _ _   -- ignore uniq, etc.
-                      (AlgAlt _)
-                      [(DataAlt _, params, _use_mask,
-                            (StgApp selectee [{-no args-}]))])
-  |  the_fv == scrutinee                -- Scrutinee is the only free variable
-  && maybeToBool maybe_offset           -- Selectee is a component of the tuple
-  && offset_into_int <= mAX_SPEC_SELECTEE_SIZE dflags -- Offset is small enough
+                expr
+  | let strip = snd . stripStgTicksTop (not . tickishIsCode) -- ignore non-code ticks
+  , StgCase (StgApp scrutinee [{-no args-}])
+         _ _ _ _   -- ignore uniq, etc.
+         (AlgAlt _)
+         [(DataAlt _, params, _use_mask, sel_expr)] <- strip expr
+  , StgApp selectee [{-no args-}] <- strip sel_expr
+  , the_fv == scrutinee                -- Scrutinee is the only free variable
+
+  , let (_, _, params_w_offsets) = mkVirtConstrOffsets dflags (addIdReps params)
+                                   -- Just want the layout
+  , Just the_offset <- assocMaybe params_w_offsets (NonVoid selectee)
+
+  , let offset_into_int = bytesToWordsRoundUp dflags the_offset
+                          - fixedHdrSizeW dflags
+  , offset_into_int <= mAX_SPEC_SELECTEE_SIZE dflags -- Offset is small enough
   = -- NOT TRUE: ASSERT(is_single_constructor)
     -- The simplifier may have statically determined that the single alternative
     -- is the only possible case and eliminated the others, even if there are
@@ -278,15 +287,8 @@ mkRhsClosure    dflags bndr _cc _bi
     -- will evaluate to.
     --
     -- srt is discarded; it must be empty
-    cgRhsStdThunk bndr lf_info [StgVarArg the_fv]
-  where
-    lf_info               = mkSelectorLFInfo bndr offset_into_int
-                                 (isUpdatable upd_flag)
-    (_, _, params_w_offsets) = mkVirtConstrOffsets dflags (addIdReps params)
-                               -- Just want the layout
-    maybe_offset          = assocMaybe params_w_offsets (NonVoid selectee)
-    Just the_offset       = maybe_offset
-    offset_into_int       = the_offset - fixedHdrSize dflags
+    let lf_info = mkSelectorLFInfo bndr offset_into_int (isUpdatable upd_flag)
+    in cgRhsStdThunk bndr lf_info [StgVarArg the_fv]
 
 ---------- Note [Ap thunks] ------------------
 mkRhsClosure    dflags bndr _cc _bi
@@ -341,7 +343,7 @@ mkRhsClosure dflags bndr cc _ fvs upd_flag args body
         ; dflags <- getDynFlags
         ; let   name  = idName bndr
                 descr = closureDescription dflags mod_name name
-                fv_details :: [(NonVoid Id, VirtualHpOffset)]
+                fv_details :: [(NonVoid Id, ByteOff)]
                 (tot_wds, ptr_wds, fv_details)
                    = mkVirtHeapOffsets dflags (isLFThunk lf_info)
                                        (addIdReps (map unsafe_stripNV reduced_fvs))
@@ -434,7 +436,7 @@ closureCodeBody :: Bool            -- whether this is a top-level binding
                 -> [NonVoid Id]    -- incoming args to the closure
                 -> Int             -- arity, including void args
                 -> StgExpr
-                -> [(NonVoid Id, VirtualHpOffset)] -- the closure's free vars
+                -> [(NonVoid Id, ByteOff)] -- the closure's free vars
                 -> FCode ()
 
 {- There are two main cases for the code for closures.
@@ -472,25 +474,21 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
             \(_offset, node, arg_regs) -> do
                 -- Emit slow-entry code (for entering a closure through a PAP)
                 { mkSlowEntryCode bndr cl_info arg_regs
-
                 ; dflags <- getDynFlags
                 ; let node_points = nodeMustPointToIt dflags lf_info
                       node' = if node_points then Just node else Nothing
-                -- Emit new label that might potentially be a header
-                -- of a self-recursive tail call. See Note
-                -- [Self-recursive tail calls] in StgCmmExpr
                 ; loop_header_id <- newLabelC
-                ; emitLabel loop_header_id
-                ; when node_points (ldvEnterClosure cl_info (CmmLocal node))
                 -- Extend reader monad with information that
                 -- self-recursive tail calls can be optimized into local
-                -- jumps
+                -- jumps. See Note [Self-recursive tail calls] in StgCmmExpr.
                 ; withSelfLoop (bndr, loop_header_id, arg_regs) $ do
                 {
                 -- Main payload
                 ; entryHeapCheck cl_info node' arity arg_regs $ do
-                { -- ticky after heap check to avoid double counting
-                  tickyEnterFun cl_info
+                { -- emit LDV code when profiling
+                  when node_points (ldvEnterClosure cl_info (CmmLocal node))
+                -- ticky after heap check to avoid double counting
+                ; tickyEnterFun cl_info
                 ; enterCostCentreFun cc
                     (CmmMachOp (mo_wordSub dflags)
                          [ CmmReg (CmmLocal node) -- See [NodeReg clobbered with loopification]
@@ -518,10 +516,10 @@ closureCodeBody top_lvl bndr cl_info cc args arity body fv_details
 
 -- A function closure pointer may be tagged, so we
 -- must take it into account when accessing the free variables.
-bind_fv :: (NonVoid Id, VirtualHpOffset) -> FCode (LocalReg, WordOff)
+bind_fv :: (NonVoid Id, ByteOff) -> FCode (LocalReg, ByteOff)
 bind_fv (id, off) = do { reg <- rebindToReg id; return (reg, off) }
 
-load_fvs :: LocalReg -> LambdaFormInfo -> [(LocalReg, WordOff)] -> FCode ()
+load_fvs :: LocalReg -> LambdaFormInfo -> [(LocalReg, ByteOff)] -> FCode ()
 load_fvs node lf_info = mapM_ (\ (reg, off) ->
    do dflags <- getDynFlags
       let tag = lfDynTag dflags lf_info
@@ -551,11 +549,12 @@ mkSlowEntryCode bndr cl_info arg_regs -- function closure is already in `Node'
                                 (mkLblExpr fast_lbl)
                                 (map (CmmReg . CmmLocal) (node : arg_regs))
                                 (initUpdFrameOff dflags)
-       emitProcWithConvention Slow Nothing slow_lbl (node : arg_regs) jump
+       tscope <- getTickScope
+       emitProcWithConvention Slow Nothing slow_lbl (node : arg_regs) (jump, tscope)
   | otherwise = return ()
 
 -----------------------------------------
-thunkCode :: ClosureInfo -> [(NonVoid Id, VirtualHpOffset)] -> CostCentreStack
+thunkCode :: ClosureInfo -> [(NonVoid Id, ByteOff)] -> CostCentreStack
           -> LocalReg -> Int -> StgExpr -> FCode ()
 thunkCode cl_info fv_details _cc node arity body
   = do { dflags <- getDynFlags
@@ -624,7 +623,7 @@ emitBlackHoleCode node = do
              -- work with profiling.
 
   when eager_blackholing $ do
-    emitStore (cmmOffsetW dflags node (fixedHdrSize dflags))
+    emitStore (cmmOffsetW dflags node (fixedHdrSizeW dflags))
                   (CmmReg (CmmGlobal CurrentTSO))
     emitPrimCall [] MO_WriteBarrier []
     emitStore node (CmmReg (CmmGlobal EagerBlackholeInfo))
@@ -676,7 +675,7 @@ pushUpdateFrame lbl updatee body
        updfr  <- getUpdFrameOff
        dflags <- getDynFlags
        let
-           hdr         = fixedHdrSize dflags * wORD_SIZE dflags
+           hdr         = fixedHdrSize dflags
            frame       = updfr + hdr + sIZEOF_StgUpdateFrame_NoHdr dflags
        --
        emitUpdateFrame dflags (CmmStackSlot Old frame) lbl updatee
@@ -685,7 +684,7 @@ pushUpdateFrame lbl updatee body
 emitUpdateFrame :: DynFlags -> CmmExpr -> CLabel -> CmmExpr -> FCode ()
 emitUpdateFrame dflags frame lbl updatee = do
   let
-           hdr         = fixedHdrSize dflags * wORD_SIZE dflags
+           hdr         = fixedHdrSize dflags
            off_updatee = hdr + oFFSET_StgUpdateFrame_updatee dflags
   --
   emitStore frame (mkLblExpr lbl)

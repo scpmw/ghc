@@ -4,7 +4,7 @@
 %
 
 \begin{code}
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE CPP, DeriveDataTypeable #-}
 
 -- |
 -- #name_types#
@@ -331,48 +331,70 @@ instance Ord RdrName where
 -- It is keyed by OccName, because we never use it for qualified names
 -- We keep the current mapping, *and* the set of all Names in scope
 -- Reason: see Note [Splicing Exact Names] in RnEnv
-type LocalRdrEnv = (OccEnv Name, NameSet)
+data LocalRdrEnv = LRE { lre_env      :: OccEnv Name
+                       , lre_in_scope :: NameSet }
+
+instance Outputable LocalRdrEnv where
+  ppr (LRE {lre_env = env, lre_in_scope = ns})
+    = hang (ptext (sLit "LocalRdrEnv {"))
+         2 (vcat [ ptext (sLit "env =") <+> pprOccEnv ppr_elt env
+                 , ptext (sLit "in_scope =") <+> braces (pprWithCommas ppr (nameSetToList ns))
+                 ] <+> char '}')
+    where
+      ppr_elt name = parens (ppr (getUnique (nameOccName name))) <+> ppr name
+                     -- So we can see if the keys line up correctly
 
 emptyLocalRdrEnv :: LocalRdrEnv
-emptyLocalRdrEnv = (emptyOccEnv, emptyNameSet)
+emptyLocalRdrEnv = LRE { lre_env = emptyOccEnv, lre_in_scope = emptyNameSet }
 
 extendLocalRdrEnv :: LocalRdrEnv -> Name -> LocalRdrEnv
 -- The Name should be a non-top-level thing
-extendLocalRdrEnv (env, ns) name
+extendLocalRdrEnv (LRE { lre_env = env, lre_in_scope = ns }) name
   = WARN( isExternalName name, ppr name )
-    ( extendOccEnv env (nameOccName name) name
-    , addOneToNameSet ns name
-    )
+    LRE { lre_env      = extendOccEnv env (nameOccName name) name
+        , lre_in_scope = addOneToNameSet ns name }
 
 extendLocalRdrEnvList :: LocalRdrEnv -> [Name] -> LocalRdrEnv
-extendLocalRdrEnvList (env, ns) names
+extendLocalRdrEnvList (LRE { lre_env = env, lre_in_scope = ns }) names
   = WARN( any isExternalName names, ppr names )
-    ( extendOccEnvList env [(nameOccName n, n) | n <- names]
-    , addListToNameSet ns names
-    )
+    LRE { lre_env = extendOccEnvList env [(nameOccName n, n) | n <- names]
+        , lre_in_scope = addListToNameSet ns names }
 
 lookupLocalRdrEnv :: LocalRdrEnv -> RdrName -> Maybe Name
-lookupLocalRdrEnv (env, _) (Unqual occ) = lookupOccEnv env occ
-lookupLocalRdrEnv _        _            = Nothing
+lookupLocalRdrEnv (LRE { lre_env = env }) (Unqual occ) = lookupOccEnv env occ
+lookupLocalRdrEnv _                       _            = Nothing
 
 lookupLocalRdrOcc :: LocalRdrEnv -> OccName -> Maybe Name
-lookupLocalRdrOcc (env, _) occ = lookupOccEnv env occ
+lookupLocalRdrOcc (LRE { lre_env = env }) occ = lookupOccEnv env occ
 
 elemLocalRdrEnv :: RdrName -> LocalRdrEnv -> Bool
-elemLocalRdrEnv rdr_name (env, _)
-  | isUnqual rdr_name = rdrNameOcc rdr_name `elemOccEnv` env
-  | otherwise         = False
+elemLocalRdrEnv rdr_name (LRE { lre_env = env, lre_in_scope = ns })
+  = case rdr_name of
+      Unqual occ -> occ  `elemOccEnv` env
+      Exact name -> name `elemNameSet` ns  -- See Note [Local bindings with Exact Names]
+      Qual {} -> False
+      Orig {} -> False
 
 localRdrEnvElts :: LocalRdrEnv -> [Name]
-localRdrEnvElts (env, _) = occEnvElts env
+localRdrEnvElts (LRE { lre_env = env }) = occEnvElts env
 
 inLocalRdrEnvScope :: Name -> LocalRdrEnv -> Bool
 -- This is the point of the NameSet
-inLocalRdrEnvScope name (_, ns) = name `elemNameSet` ns
+inLocalRdrEnvScope name (LRE { lre_in_scope = ns }) = name `elemNameSet` ns
 
 delLocalRdrEnvList :: LocalRdrEnv -> [OccName] -> LocalRdrEnv
-delLocalRdrEnvList (env, ns) occs = (delListFromOccEnv env occs, ns)
+delLocalRdrEnvList (LRE { lre_env = env, lre_in_scope = ns }) occs 
+  = LRE { lre_env = delListFromOccEnv env occs
+        , lre_in_scope = ns }
 \end{code}
+
+Note [Local bindings with Exact Names]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+With Template Haskell we can make local bindings that have Exact Names.
+Computing shadowing etc may use elemLocalRdrEnv (at least it certainly
+does so in RnTpes.bindHsTyVars), so for an Exact Name we must consult
+the in-scope-name-set.
+
 
 %************************************************************************
 %*                                                                      *
@@ -586,7 +608,7 @@ pickGREs rdr_name gres
   = ASSERT2( isSrcRdrName rdr_name, ppr rdr_name )
     candidates
   where
-    candidates = mapCatMaybes pick gres
+    candidates = mapMaybe pick gres
     internal_candidates = filter (isInternalName . gre_name) candidates
 
     rdr_is_unqual = isUnqual rdr_name
@@ -700,7 +722,7 @@ shadow_name env name
   = alterOccEnv (fmap alter_fn) env (nameOccName name)
   where
     alter_fn :: [GlobalRdrElt] -> [GlobalRdrElt]
-    alter_fn gres = mapCatMaybes (shadow_with name) gres
+    alter_fn gres = mapMaybe (shadow_with name) gres
 
     shadow_with :: Name -> GlobalRdrElt -> Maybe GlobalRdrElt
     shadow_with new_name old_gre@(GRE { gre_name = old_name, gre_prov = LocalDef })
@@ -719,7 +741,7 @@ shadow_name env name
        | null imp_specs' = Nothing
        | otherwise       = Just (old_gre { gre_prov = Imported imp_specs' })
        where
-         imp_specs' = mapCatMaybes (shadow_is new_name) imp_specs
+         imp_specs' = mapMaybe (shadow_is new_name) imp_specs
 
     shadow_is :: Name -> ImportSpec -> Maybe ImportSpec
     shadow_is new_name is@(ImpSpec { is_decl = id_spec })
@@ -795,7 +817,7 @@ data ImpDeclSpec
                                    -- the defining module for this thing!
 
                                    -- TODO: either should be Module, or there
-                                   -- should be a Maybe PackageId here too.
+                                   -- should be a Maybe PackageKey here too.
         is_as       :: ModuleName, -- ^ Import alias, e.g. from @as M@ (or @Muggle@ if there is no @as@ clause)
         is_qual     :: Bool,       -- ^ Was this import qualified?
         is_dloc     :: SrcSpan     -- ^ The location of the entire import declaration

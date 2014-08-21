@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -----------------------------------------------------------------------------
 --
 -- Building info tables.
@@ -15,7 +17,7 @@ module StgCmmLayout (
 
         slowCall, directCall,
 
-        mkVirtHeapOffsets, mkVirtConstrOffsets, getHpRelOffset, hpRel,
+        mkVirtHeapOffsets, mkVirtConstrOffsets, getHpRelOffset, 
 
         ArgRep(..), toArgRep, argRepSizeW -- re-exported from StgCmmArgRep
   ) where
@@ -114,7 +116,8 @@ emitCallWithExtraStack (callConv, retConv) fun args extra_stack
                   (off, _, copyin) = copyInOflow dflags retConv area res_regs []
                   copyout = mkCallReturnsTo dflags fun callConv args k off updfr_off
                                    extra_stack
-              emit (copyout <*> mkLabel k <*> copyin)
+              tscope <- getTickScope
+              emit (copyout <*> mkLabel k tscope <*> copyin)
               return (ReturnedTo k off)
       }
 
@@ -218,15 +221,16 @@ slowCall fun stg_args
              let correct_arity = cmmEqWord dflags (funInfoArity dflags fun_iptr)
                                                   (mkIntExpr dflags n_args)
 
+             tscope <- getTickScope
              emit (mkCbranch (cmmIsTagged dflags funv) is_tagged_lbl slow_lbl
-                   <*> mkLabel is_tagged_lbl
+                   <*> mkLabel is_tagged_lbl tscope
                    <*> mkCbranch correct_arity fast_lbl slow_lbl
-                   <*> mkLabel fast_lbl
+                   <*> mkLabel fast_lbl tscope
                    <*> fast_code
                    <*> mkBranch end_lbl
-                   <*> mkLabel slow_lbl
+                   <*> mkLabel slow_lbl tscope
                    <*> slow_code
-                   <*> mkLabel end_lbl)
+                   <*> mkLabel end_lbl tscope)
              return r
 
            else do
@@ -357,22 +361,23 @@ slowArgs dflags args -- careful: reps contains voids (V), but args does not
     (arg_pat, n)            = slowCallPattern (map fst args)
     (call_args, rest_args)  = splitAt n args
 
-    stg_ap_pat = mkCmmRetInfoLabel rtsPackageId arg_pat
+    stg_ap_pat = mkCmmRetInfoLabel rtsPackageKey arg_pat
     this_pat   = (N, Just (mkLblExpr stg_ap_pat)) : call_args
     save_cccs  = [(N, Just (mkLblExpr save_cccs_lbl)), (N, Just curCCS)]
-    save_cccs_lbl = mkCmmRetInfoLabel rtsPackageId (fsLit "stg_restore_cccs")
+    save_cccs_lbl = mkCmmRetInfoLabel rtsPackageKey (fsLit "stg_restore_cccs")
 
 -------------------------------------------------------------------------
 ----        Laying out objects on the heap and stack
 -------------------------------------------------------------------------
 
--- The heap always grows upwards, so hpRel is easy
+-- The heap always grows upwards, so hpRel is easy to compute
 hpRel :: VirtualHpOffset         -- virtual offset of Hp
       -> VirtualHpOffset         -- virtual offset of The Thing
       -> WordOff                -- integer word offset
 hpRel hp off = off - hp
 
 getHpRelOffset :: VirtualHpOffset -> FCode CmmExpr
+-- See Note [Virtual and real heap pointers] in StgCmmMonad
 getHpRelOffset virtual_offset
   = do dflags <- getDynFlags
        hp_usg <- getHpUsage
@@ -384,7 +389,7 @@ mkVirtHeapOffsets
   -> [(PrimRep,a)]        -- Things to make offsets for
   -> (WordOff,                -- _Total_ number of words allocated
       WordOff,                -- Number of words allocated for *pointers*
-      [(NonVoid a, VirtualHpOffset)])
+      [(NonVoid a, ByteOff)])
 
 -- Things with their offsets from start of object in order of
 -- increasing offset; BUT THIS MAY BE DIFFERENT TO INPUT ORDER
@@ -397,22 +402,31 @@ mkVirtHeapOffsets
 -- than the unboxed things
 
 mkVirtHeapOffsets dflags is_thunk things
-  = let non_void_things               = filterOut (isVoidRep . fst)  things
-        (ptrs, non_ptrs)              = partition (isGcPtrRep . fst) non_void_things
-        (wds_of_ptrs, ptrs_w_offsets) = mapAccumL computeOffset 0 ptrs
-        (tot_wds, non_ptrs_w_offsets) = mapAccumL computeOffset wds_of_ptrs non_ptrs
-    in
-    (tot_wds, wds_of_ptrs, ptrs_w_offsets ++ non_ptrs_w_offsets)
+  = ( bytesToWordsRoundUp dflags tot_bytes
+    , bytesToWordsRoundUp dflags bytes_of_ptrs
+    , ptrs_w_offsets ++ non_ptrs_w_offsets
+    )
   where
-    hdr_size | is_thunk   = thunkHdrSize dflags
-             | otherwise  = fixedHdrSize dflags
+    hdr_words | is_thunk   = thunkHdrSize dflags
+              | otherwise  = fixedHdrSizeW dflags
+    hdr_bytes = wordsToBytes dflags hdr_words
 
-    computeOffset wds_so_far (rep, thing)
-      = (wds_so_far + argRepSizeW dflags (toArgRep rep),
-         (NonVoid thing, hdr_size + wds_so_far))
+    non_void_things    = filterOut (isVoidRep . fst)  things
+    (ptrs, non_ptrs)   = partition (isGcPtrRep . fst) non_void_things
 
-mkVirtConstrOffsets :: DynFlags -> [(PrimRep,a)] -> (WordOff, WordOff, [(NonVoid a, VirtualHpOffset)])
--- Just like mkVirtHeapOffsets, but for constructors
+    (bytes_of_ptrs, ptrs_w_offsets) =
+       mapAccumL computeOffset 0 ptrs
+    (tot_bytes, non_ptrs_w_offsets) =
+       mapAccumL computeOffset bytes_of_ptrs non_ptrs
+
+    computeOffset bytes_so_far (rep, thing)
+      = (bytes_so_far + wordsToBytes dflags (argRepSizeW dflags (toArgRep rep)),
+         (NonVoid thing, hdr_bytes + bytes_so_far))
+
+-- | Just like mkVirtHeapOffsets, but for constructors
+mkVirtConstrOffsets
+  :: DynFlags -> [(PrimRep,a)]
+  -> (WordOff, WordOff, [(NonVoid a, ByteOff)])
 mkVirtConstrOffsets dflags = mkVirtHeapOffsets dflags False
 
 
@@ -520,7 +534,7 @@ emitClosureProcAndInfoTable top_lvl bndr lf_info info_tbl args body
 emitClosureAndInfoTable ::
   CmmInfoTable -> Convention -> [LocalReg] -> FCode () -> FCode ()
 emitClosureAndInfoTable info_tbl conv args body
-  = do { blks <- getCode body
+  = do { (_, blks) <- getCodeScoped body
        ; let entry_lbl = toEntryLbl (cit_lbl info_tbl)
        ; emitProcWithConvention conv (Just info_tbl) entry_lbl args blks
        }

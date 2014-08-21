@@ -239,3 +239,9 @@ test('ClosedFam1', extra_clean(['ClosedFam1.o-boot', 'ClosedFam1.hi-boot']),
 test('ClosedFam2', extra_clean(['ClosedFam2.o-boot', 'ClosedFam2.hi-boot']),
      multimod_compile, ['ClosedFam2', '-v0'])
 test('T8651', normal, compile, [''])
+test('T8889', normal, compile, [''])
+test('T8913', normal, compile, [''])
+test('T8978', normal, compile, [''])
+test('T8979', normal, compile, [''])
+test('T9085', normal, compile, [''])
+test('T9316', normal, compile, [''])

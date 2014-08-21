@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -----------------------------------------------------------------------------
 --
 -- Stg to C--: code generation for constructors
@@ -21,6 +23,7 @@ import CoreSyn  ( AltCon(..) )
 import StgCmmMonad
 import StgCmmEnv
 import StgCmmHeap
+import StgCmmLayout
 import StgCmmUtils
 import StgCmmClosure
 import StgCmmProf ( curCCS )
@@ -187,9 +190,9 @@ buildDynCon' dflags platform binder _ _cc con [arg]
   , StgLitArg (MachInt val) <- arg
   , val <= fromIntegral (mAX_INTLIKE dflags) -- Comparisons at type Integer!
   , val >= fromIntegral (mIN_INTLIKE dflags) -- ...ditto...
-  = do  { let intlike_lbl   = mkCmmClosureLabel rtsPackageId (fsLit "stg_INTLIKE")
+  = do  { let intlike_lbl   = mkCmmClosureLabel rtsPackageKey (fsLit "stg_INTLIKE")
               val_int = fromIntegral val :: Int
-              offsetW = (val_int - mIN_INTLIKE dflags) * (fixedHdrSize dflags + 1)
+              offsetW = (val_int - mIN_INTLIKE dflags) * (fixedHdrSizeW dflags + 1)
                 -- INTLIKE closures consist of a header and one word payload
               intlike_amode = cmmLabelOffW dflags intlike_lbl offsetW
         ; return ( litIdInfo dflags binder (mkConLFInfo con) intlike_amode
@@ -202,8 +205,8 @@ buildDynCon' dflags platform binder _ _cc con [arg]
   , let val_int = ord val :: Int
   , val_int <= mAX_CHARLIKE dflags
   , val_int >= mIN_CHARLIKE dflags
-  = do  { let charlike_lbl   = mkCmmClosureLabel rtsPackageId (fsLit "stg_CHARLIKE")
-              offsetW = (val_int - mIN_CHARLIKE dflags) * (fixedHdrSize dflags + 1)
+  = do  { let charlike_lbl   = mkCmmClosureLabel rtsPackageKey (fsLit "stg_CHARLIKE")
+              offsetW = (val_int - mIN_CHARLIKE dflags) * (fixedHdrSizeW dflags + 1)
                 -- CHARLIKE closures consist of a header and one word payload
               charlike_amode = cmmLabelOffW dflags charlike_lbl offsetW
         ; return ( litIdInfo dflags binder (mkConLFInfo con) charlike_amode

@@ -13,7 +13,7 @@ dnl
 # see what flags are available. (Better yet, read the documentation!)
 #
 
-AC_INIT([The Glorious Glasgow Haskell Compilation System], [7.7], [glasgow-haskell-bugs@haskell.org], [ghc])
+AC_INIT([The Glorious Glasgow Haskell Compilation System], [7.9], [glasgow-haskell-bugs@haskell.org], [ghc])
 
 # Set this to YES for a released version, otherwise NO
 : ${RELEASE=NO}
@@ -34,7 +34,7 @@ fi
 AC_SUBST([CONFIGURE_ARGS], [$ac_configure_args])
 
 dnl ----------------------------------------------------------
-dnl ** Find unixy sort and find commands, 
+dnl ** Find unixy sort and find commands,
 dnl ** which are needed by FP_SETUP_PROJECT_VERSION
 
 dnl ** Find find command (for Win32's benefit)
@@ -91,7 +91,7 @@ AC_ARG_WITH([ghc],
   WithGhc="$GHC"])
 
 dnl ** Tell the make system which OS we are using
-dnl $OSTYPE is set by the operating system to "msys" or "cygwin" or something 
+dnl $OSTYPE is set by the operating system to "msys" or "cygwin" or something
 AC_SUBST(OSTYPE)
 
 AC_ARG_ENABLE(bootstrap-with-devel-snapshot,
@@ -162,6 +162,11 @@ FP_COMPARE_VERSIONS([$GhcVersion],[-gt],[7.7],
                     CMM_SINK_BOOTSTRAP_IS_NEEDED=NO)
 AC_SUBST(CMM_SINK_BOOTSTRAP_IS_NEEDED)
 
+FP_COMPARE_VERSIONS([$GhcVersion],[-lt],[7.9],
+                    SUPPORTS_PACKAGE_KEY=NO,
+                    SUPPORTS_PACKAGE_KEY=YES)
+AC_SUBST(SUPPORTS_PACKAGE_KEY)
+
 # GHC is passed to Cabal, so we need a native path
 if test "${WithGhc}" != ""
 then
@@ -228,7 +233,7 @@ case $host in
      # here we go with the test
      MINOR=`uname -r|cut -d '.' -f 2-`
      if test "$MINOR" -lt "11"; then
-     	SOLARIS_BROKEN_SHLD=YES
+         SOLARIS_BROKEN_SHLD=YES
      fi
      ;;
 esac
@@ -367,7 +372,7 @@ AS_IF([test "x$with_system_libffi" = "xyes"],
 AC_SUBST(UseSystemLibFFI)
 
 AC_ARG_WITH([ffi-includes],
-[AC_HELP_STRING([--with-ffi-includes=ARG]
+[AC_HELP_STRING([--with-ffi-includes=ARG],
   [Find includes for libffi in ARG [default=system default]])
 ],
 [
@@ -382,7 +387,7 @@ AC_ARG_WITH([ffi-includes],
 AC_SUBST(FFIIncludeDir)
 
 AC_ARG_WITH([ffi-libraries],
-[AC_HELP_STRING([--with-ffi-libraries=ARG]
+[AC_HELP_STRING([--with-ffi-libraries=ARG],
   [Find libffi in ARG [default=system default]])
 ],
 [
@@ -474,6 +479,66 @@ FIND_GCC([WhatGccIsCalled], [gcc], [gcc])
 CC="$WhatGccIsCalled"
 export CC
 
+# If --with-gcc was used, and we're not cross-compiling, then it also
+# applies to the stage0 compiler.
+MAYBE_OVERRIDE_STAGE0([gcc],[CC_STAGE0])
+MAYBE_OVERRIDE_STAGE0([ar],[AR_STAGE0])
+
+dnl ** what cpp to use?
+dnl --------------------------------------------------------------
+AC_ARG_WITH(hs-cpp,
+[AC_HELP_STRING([--with-hs-cpp=ARG],
+        [Use ARG as the path to cpp [default=autodetect]])],
+[
+    if test "$HostOS" = "mingw32"
+    then
+        AC_MSG_WARN([Request to use $withval will be ignored])
+    else
+        HaskellCPPCmd=$withval
+    fi
+],
+[
+        HaskellCPPCmd=$WhatGccIsCalled
+]
+)
+
+
+
+dnl ** what cpp flags to use?
+dnl -----------------------------------------------------------
+AC_ARG_WITH(hs-cpp-flags,
+  [AC_HELP_STRING([--with-hs-cpp-flags=ARG],
+          [Use ARG as the path to hs cpp [default=autodetect]])],
+  [
+      if test "$HostOS" = "mingw32"
+      then
+          AC_MSG_WARN([Request to use $withval will be ignored])
+      else
+          HaskellCPPArgs=$withval
+      fi
+  ],
+[
+  $HaskellCPPCmd -x c /dev/null -dM -E > conftest.txt 2>&1
+  if grep "__clang__" conftest.txt >/dev/null 2>&1; then
+    HaskellCPPArgs="-E -undef -traditional -Wno-invalid-pp-token -Wno-unicode -Wno-trigraphs "
+  else
+      $HaskellCPPCmd  -v > conftest.txt 2>&1
+      if  grep "gcc" conftest.txt >/dev/null 2>&1; then
+          HaskellCPPArgs="-E -undef -traditional "
+        else
+          $HaskellCPPCmd  --version > conftest.txt 2>&1
+          if grep "cpphs" conftest.txt >/dev/null 2>&1; then
+            HaskellCPPArgs="--cpp -traditional"
+          else
+            AC_MSG_WARN([configure can't recognize your CPP program, you may need to set --with-hs-cpp-flags=FLAGS explicitly])
+            HaskellCPPArgs=""
+          fi
+      fi
+  fi
+  ]
+)
+
+
 dnl ** Which ld to use?
 dnl --------------------------------------------------------------
 FP_ARG_WITH_PATH_GNU_PROG([LD], [ld], [ld])
@@ -485,6 +550,20 @@ dnl --------------------------------------------------------------
 FP_ARG_WITH_PATH_GNU_PROG([NM], [nm], [nm])
 NmCmd="$NM"
 AC_SUBST([NmCmd])
+
+dnl ** Which ar to use?
+dnl --------------------------------------------------------------
+FP_ARG_WITH_PATH_GNU_PROG([AR], [ar], [ar])
+ArCmd="$AR"
+fp_prog_ar="$AR"
+AC_SUBST([ArCmd])
+
+dnl ** Which ranlib to use?
+dnl --------------------------------------------------------------
+FP_ARG_WITH_PATH_GNU_PROG([RANLIB], [ranlib], [ranlib])
+RanlibCmd="$RANLIB"
+RANLIB="$RanlibCmd"
+
 
 # Note: we may not have objdump on OS X, and we only need it on Windows (for DLL checks)
 case $HostOS_CPP in
@@ -569,8 +648,8 @@ FP_PROG_LD_FILELIST
 FPTOOLS_SET_C_LD_FLAGS([target],[CFLAGS],[LDFLAGS],[IGNORE_LINKER_LD_FLAGS],[CPPFLAGS])
 FPTOOLS_SET_C_LD_FLAGS([build],[CONF_CC_OPTS_STAGE0],[CONF_GCC_LINKER_OPTS_STAGE0],[CONF_LD_LINKER_OPTS_STAGE0],[CONF_CPP_OPTS_STAGE0])
 FPTOOLS_SET_C_LD_FLAGS([target],[CONF_CC_OPTS_STAGE1],[CONF_GCC_LINKER_OPTS_STAGE1],[CONF_LD_LINKER_OPTS_STAGE1],[CONF_CPP_OPTS_STAGE1])
-# Stage 3 won't be supported by cross-compilation
 FPTOOLS_SET_C_LD_FLAGS([target],[CONF_CC_OPTS_STAGE2],[CONF_GCC_LINKER_OPTS_STAGE2],[CONF_LD_LINKER_OPTS_STAGE2],[CONF_CPP_OPTS_STAGE2])
+# Stage 3 won't be supported by cross-compilation
 
 FP_GCC_EXTRA_FLAGS
 
@@ -603,9 +682,6 @@ dnl a darcs repo, it might not be (see bug #978).
 chmod +x install-sh
 dnl ** figure out how to do a BSD-ish install
 AC_PROG_INSTALL
-
-dnl If you can run configure, you certainly have /bin/sh
-AC_DEFINE([HAVE_BIN_SH], [1], [Define to 1 if you have /bin/sh.])
 
 dnl ** how to invoke `ar' and `ranlib'
 FP_PROG_AR_SUPPORTS_ATFILE
@@ -744,30 +820,6 @@ FP_CHECK_FUNC([WinExec],
 FP_CHECK_FUNC([GetModuleFileName],
   [@%:@include <windows.h>], [GetModuleFileName((HMODULE)0,(LPTSTR)0,0)])
 
-dnl ** check return type of signal handlers
-dnl Foo: assumes we can use prototypes.
-dnl On BCC, signal handlers have type "int(void)", elsewhere its "void(int)".
-dnl AC_CACHE_CHECK([type of signal handlers], ac_cv_type_signal_handler,
-dnl [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <sys/types.h>
-dnl #include <signal.h>
-dnl #ifdef signal
-dnl #undef signal
-dnl #endif
-dnl void (*signal (int, void (*)(int)))(int);
-dnl ]],
-dnl [[int i;]])],
-dnl [ac_cv_type_signal_handler=void_int],
-dnl [ac_cv_type_signal_handler=int_void])])
-dnl if test "$ac_cv_type_signal_handler" = void_int; then
-dnl AC_DEFINE(VOID_INT_SIGNALS)
-dnl fi
-
-dnl On BCC, signal handlers have type "int(void)", elsewhere its "void(int)".
-AC_TYPE_SIGNAL
-if test "$ac_cv_type_signal" = void; then
-  AC_DEFINE([VOID_INT_SIGNALS], [1], [Define to 1 if signal handlers have type void (*)(int). Otherwise, they're assumed to have type int (*)(void).])
-fi
-
 dnl ** check for more functions
 dnl ** The following have been verified to be used in ghc/, but might be used somewhere else, too.
 AC_CHECK_FUNCS([getclock getrusage gettimeofday setitimer siginterrupt sysconf times ctime_r sched_setaffinity setlocale])
@@ -861,7 +913,21 @@ dnl ** check for eventfd which is needed by the I/O manager
 AC_CHECK_HEADERS([sys/eventfd.h])
 AC_CHECK_FUNCS([eventfd])
 
-# checking for PAPI
+dnl ** Check for __thread support in the compiler
+AC_MSG_CHECKING(for __thread support)
+AC_COMPILE_IFELSE(
+  [ AC_LANG_SOURCE([[__thread int tester = 0;]]) ],
+  [
+   AC_MSG_RESULT(yes)
+   AC_DEFINE([CC_SUPPORTS_TLS],[1],[Define to 1 if __thread is supported])
+  ],
+  [
+   AC_MSG_RESULT(no)
+   AC_DEFINE([CC_SUPPORTS_TLS],[0],[Define to 1 if __thread is supported])
+  ])
+
+
+dnl ** checking for PAPI
 AC_CHECK_LIB(papi, PAPI_library_init, HavePapiLib=YES, HavePapiLib=NO)
 AC_CHECK_HEADER([papi.h], [HavePapiHeader=YES], [HavePapiHeader=NO])
 AC_SUBST(HavePapiLib)
@@ -875,6 +941,21 @@ else
    HavePapi=NO
 fi
 AC_SUBST(HavePapi)
+
+# Check for perf_event (only more current Linux)
+AC_CHECK_HEADER([linux/perf_event.h], [HavePerfEvent=YES], [HavePerfEvent=NO])
+AC_SUBST(HavePerfEvent)
+
+# Check for libdwarf
+AC_CHECK_HEADER([libdwarf.h], [HaveDwarfHeader=YES], [HaveLibDwarfHeader=NO])
+AC_CHECK_LIB(dwarf, dwarf_init, [HaveDwarfLib=YES], [HaveDwarfLib=NO])
+AC_CHECK_LIB(elf, elf_begin, [HaveElfLib=YES], [HaveElfLib=NO])
+if test "$HaveDwarfLib" = "YES" -a "$HaveDwarfHeader" = "YES" -a "$HaveElfLib" = "YES"; then
+   HaveLibDwarf=YES
+else
+   HaveLibDwarf=NO
+fi
+AC_SUBST(HaveLibDwarf)
 
 if test "$HAVE_DOCBOOK_XSL" = "NO" ||
    test "$XsltprocCmd" = ""
@@ -958,13 +1039,14 @@ echo ["\
    Using $CompilerName       : $WhatGccIsCalled
       which is version       : $GccVersion
    Building a cross compiler : $CrossCompiling
-
-   ld       : $LdCmd
-   Happy    : $HappyCmd ($HappyVersion)
-   Alex     : $AlexCmd ($AlexVersion)
-   Perl     : $PerlCmd
-   dblatex  : $DblatexCmd
-   xsltproc : $XsltprocCmd
+   cpp       : $HaskellCPPCmd
+   cpp-flags : $HaskellCPPArgs
+   ld        : $LdCmd
+   Happy     : $HappyCmd ($HappyVersion)
+   Alex      : $AlexCmd ($AlexVersion)
+   Perl      : $PerlCmd
+   dblatex   : $DblatexCmd
+   xsltproc  : $XsltprocCmd
 
    Using LLVM tools
       llc   : $LlcCmd

@@ -21,6 +21,7 @@ test('simplrun009', normal, compile_and_run, [''])
 test('simplrun010', [extra_run_opts('24 16 8 +RTS -M10m -RTS'),
                      exit_code(251)]
                   , compile_and_run, [''])
+test('simplrun011', normal, compile_and_run, [''])
 
 # Really we'd like to run T2486 too, to check that its
 # runtime has not gone up, but here I just compile it so that
@@ -51,6 +52,7 @@ test('T5453', normal, compile_and_run, [''])
 test('T5441', extra_clean(['T5441a.o','T5441a.hi']), 
               multimod_compile_and_run, ['T5441',''])
 test('T5603', normal, compile_and_run, [''])
+test('T2110', normal, compile_and_run, [''])
 
 # Run these tests *without* optimisation too
 test('T5625', [ only_ways(['normal','optasm']), exit_code(1) ], compile_and_run, [''])
@@ -63,3 +65,6 @@ test('T7924', exit_code(1), compile_and_run, [''])
 
 # Run this test *without* optimisation too
 test('T457', [ only_ways(['normal','optasm']), exit_code(1) ], compile_and_run, [''])
+
+test('T9128', normal, compile_and_run, [''])
+test('T9390', normal, compile_and_run, [''])

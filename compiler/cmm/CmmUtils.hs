@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE CPP, GADTs, RankNTypes #-}
 
 -----------------------------------------------------------------------------
 --
@@ -55,7 +55,10 @@ module CmmUtils(
 
         analFwd, analBwd, analRewFwd, analRewBwd,
         dataflowPassFwd, dataflowPassBwd, dataflowAnalFwd, dataflowAnalBwd,
-        dataflowAnalFwdBlocks
+        dataflowAnalFwdBlocks,
+
+        -- * Ticks
+        blockTicks
   ) where
 
 #include "HsVersions.h"
@@ -72,6 +75,7 @@ import Unique
 import UniqSupply
 import DynFlags
 import Util
+import CoreSyn  ( RawTickish )
 
 import Data.Word
 import Data.Maybe
@@ -286,22 +290,23 @@ cmmOffsetLitB = cmmOffsetLit
 
 -----------------------
 -- The "W" variants take word offsets
+
 cmmOffsetExprW :: DynFlags -> CmmExpr -> CmmExpr -> CmmExpr
 -- The second arg is a *word* offset; need to change it to bytes
 cmmOffsetExprW dflags  e (CmmLit (CmmInt n _)) = cmmOffsetW dflags e (fromInteger n)
 cmmOffsetExprW dflags e wd_off = cmmIndexExpr dflags (wordWidth dflags) e wd_off
 
 cmmOffsetW :: DynFlags -> CmmExpr -> WordOff -> CmmExpr
-cmmOffsetW dflags e n = cmmOffsetB dflags e (wORD_SIZE dflags * n)
+cmmOffsetW dflags e n = cmmOffsetB dflags e (wordsToBytes dflags n)
 
 cmmRegOffW :: DynFlags -> CmmReg -> WordOff -> CmmExpr
-cmmRegOffW dflags reg wd_off = cmmRegOffB reg (wd_off * wORD_SIZE dflags)
+cmmRegOffW dflags reg wd_off = cmmRegOffB reg (wordsToBytes dflags wd_off)
 
 cmmOffsetLitW :: DynFlags -> CmmLit -> WordOff -> CmmLit
-cmmOffsetLitW dflags lit wd_off = cmmOffsetLitB lit (wORD_SIZE dflags * wd_off)
+cmmOffsetLitW dflags lit wd_off = cmmOffsetLitB lit (wordsToBytes dflags wd_off)
 
 cmmLabelOffW :: DynFlags -> CLabel -> WordOff -> CmmLit
-cmmLabelOffW dflags lbl wd_off = cmmLabelOffB lbl (wORD_SIZE dflags * wd_off)
+cmmLabelOffW dflags lbl wd_off = cmmLabelOffB lbl (wordsToBytes dflags wd_off)
 
 cmmLoadIndexW :: DynFlags -> CmmExpr -> Int -> CmmType -> CmmExpr
 cmmLoadIndexW dflags base off ty = CmmLoad (cmmOffsetW dflags base off) ty
@@ -492,7 +497,7 @@ mapGraphNodes :: ( CmmNode C O -> CmmNode C O
                  , CmmNode O C -> CmmNode O C)
               -> CmmGraph -> CmmGraph
 mapGraphNodes funs@(mf,_,_) g =
-  ofBlockMap (entryLabel $ mf $ CmmEntry $ g_entry g) $ mapMap (mapBlock3' funs) $ toBlockMap g
+  ofBlockMap (entryLabel $ mf $ CmmEntry (g_entry g) []) $ mapMap (mapBlock3' funs) $ toBlockMap g
 
 mapGraphNodes1 :: (forall e x. CmmNode e x -> CmmNode e x) -> CmmGraph -> CmmGraph
 mapGraphNodes1 f = modifyGraph (mapGraph f)
@@ -566,3 +571,13 @@ dataflowPassBwd :: NonLocal n =>
 dataflowPassBwd (CmmGraph {g_entry=entry, g_graph=graph}) facts bwd = do
   (graph, facts, NothingO) <- analyzeAndRewriteBwd bwd (JustC [entry]) graph (mkFactBase (bp_lattice bwd) facts)
   return (CmmGraph {g_entry=entry, g_graph=graph}, facts)
+
+-------------------------------------------------
+-- Tick utilities
+
+blockTicks :: Block CmmNode C C -> [RawTickish]
+blockTicks b = reverse $ foldBlockNodesF goStmt b []
+  where goStmt :: CmmNode e x -> [RawTickish] -> [RawTickish]
+        goStmt  (CmmTick t) ts = t:ts
+        goStmt  _other      ts = ts
+

@@ -9,10 +9,10 @@
 /*
  * The interval timer is used for profiling and for context switching in the
  * threaded build.  Though POSIX 1003.1b includes a standard interface for
- * such things, no one really seems to be implementing them yet.  Even 
+ * such things, no one really seems to be implementing them yet.  Even
  * Solaris 2.3 only seems to provide support for @CLOCK_REAL@, whereas we're
  * keen on getting access to @CLOCK_VIRTUAL@.
- * 
+ *
  * Hence, we use the old-fashioned @setitimer@ that just about everyone seems
  * to support.  So much for standards.
  */
@@ -20,11 +20,16 @@
 #include "PosixSource.h"
 #include "Rts.h"
 
+#define __USE_GNU
+#include <xlocale.h>
+
+#include "Task.h"
 #include "Ticker.h"
 #include "Itimer.h"
 #include "Proftimer.h"
 #include "Schedule.h"
 #include "Clock.h"
+#include "RtsUtils.h"
 
 /* As recommended in the autoconf manual */
 # ifdef TIME_WITH_SYS_TIME
@@ -106,27 +111,28 @@ ghc-stage2: timer_create: Not owner
 #endif /* solaris2_HOST_OS */
 
 #if defined(USE_TIMER_CREATE)
-#  define ITIMER_SIGNAL SIGVTALRM
-#elif defined(HAVE_SETITIMER)
-#  define ITIMER_SIGNAL  SIGALRM
-   // Using SIGALRM can leads to problems, see #850.  But we have no
-   // option if timer_create() is not available.
-#else
-#  error No way to set an interval timer.
-#endif
-
-#if defined(USE_TIMER_CREATE)
 static timer_t timer;
 #endif
 
 static Time itimer_interval = DEFAULT_TICK_INTERVAL;
 
+#define USE_SIGACTION
+
+#ifdef USE_SIGACTION
+
+TickProc current_handle_tick = NULL;
+
+static void handle_sigaction(int signum STG_UNUSED, siginfo_t *siginfo, void *ctx) {
+    ucontext_t *uctx = (ucontext_t *) ctx;
+    current_handle_tick(siginfo->si_code != SI_TIMER, (void *)uctx->uc_mcontext.gregs[REG_RIP]);
+}
+
+#endif
+
 #if !defined(USE_PTHREAD_FOR_ITIMER)
 static void install_vtalrm_handler(TickProc handle_tick)
 {
     struct sigaction action;
-
-    action.sa_handler = handle_tick;
 
     sigemptyset(&action.sa_mask);
 
@@ -142,11 +148,42 @@ static void install_vtalrm_handler(TickProc handle_tick)
     action.sa_flags = 0;
 #endif
 
+#ifdef USE_SIGACTION
+    // Redirect using sa_sigaction, to gain more information about the
+    // signal.
+    current_handle_tick = handle_tick;
+    action.sa_flags |= SA_SIGINFO;
+    action.sa_sigaction = handle_sigaction;
+#else
+    action.sa_handler = handle_tick;
+#endif
+
     if (sigaction(ITIMER_SIGNAL, &action, NULL) == -1) {
         sysErrorBelch("sigaction");
         stg_exit(EXIT_FAILURE);
     }
 }
+
+#ifdef TRACING
+void
+initTickerSampling (Task *task)
+{
+    if (!RtsFlags.TraceFlags.timerSampling) { return; }
+
+    // Install the SIGALRM handler
+    install_vtalrm_handler(current_handle_tick);
+
+    // Initialize fields. This marks the task as willing to accept
+    // timer signals as well.
+    if (!task->timer_ip_samples) {
+        task->timer_ip_sample_count = 0;
+        task->timer_ip_samples = stgMallocBytes(
+            sizeof(void *) * TIMER_MAX_SAMPLES,
+            "newTask");
+    }
+}
+#endif
+
 #endif
 
 #if defined(USE_PTHREAD_FOR_ITIMER)
@@ -202,11 +239,11 @@ startTicker(void)
 #elif defined(USE_TIMER_CREATE)
     {
         struct itimerspec it;
-        
+
         it.it_value.tv_sec  = TimeToSeconds(itimer_interval);
         it.it_value.tv_nsec = TimeToNS(itimer_interval) % 1000000000;
         it.it_interval = it.it_value;
-        
+
         if (timer_settime(timer, 0, &it, NULL) != 0) {
             sysErrorBelch("timer_settime");
             stg_exit(EXIT_FAILURE);
@@ -219,7 +256,7 @@ startTicker(void)
         it.it_value.tv_sec = TimeToSeconds(itimer_interval);
         it.it_value.tv_usec = TimeToUS(itimer_interval) % 1000000;
         it.it_interval = it.it_value;
-        
+
         if (setitimer(ITIMER_REAL, &it, NULL) != 0) {
             sysErrorBelch("setitimer");
             stg_exit(EXIT_FAILURE);
@@ -280,3 +317,11 @@ rtsTimerSignal(void)
 {
     return ITIMER_SIGNAL;
 }
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

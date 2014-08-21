@@ -240,7 +240,7 @@ $1/$2/build/tmp/$$($1_$2_PROG)-wrapper.c: driver/utils/dynwrapper.c | $$$$(dir $
 	echo '#include <Windows.h>' >> $$@
 	echo '#include "Rts.h"' >> $$@
 	echo 'LPTSTR path_dirs[] = {' >> $$@
-	$$(foreach p,$$($1_$2_TRANSITIVE_DEPS),$$(call make-command,echo '    TEXT("/../lib/$$p")$$(comma)' >> $$@))
+	$$(foreach p,$$($1_$2_TRANSITIVE_DEP_KEYS),$$(call make-command,echo '    TEXT("/../lib/$$p")$$(comma)' >> $$@))
 	echo '    TEXT("/../lib/"),' >> $$@
 	echo '    NULL};' >> $$@
 	echo 'LPTSTR progDll = TEXT("../lib/$$($1_$2_PROG).dll");' >> $$@
@@ -259,15 +259,11 @@ $1/$2/build/tmp/$$($1_$2_PROG).dll : $$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$(
 else
 ifeq "$$($1_$2_LINK_WITH_GCC)" "NO"
 $1/$2/build/tmp/$$($1_$2_PROG) : $$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS) | $$$$(dir $$$$@)/.
-	$$(call cmd,$1_$2_HC) -o $$@ $$($1_$2_$$($1_$2_PROGRAM_WAY)_ALL_HC_OPTS) $$(LD_OPTS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_GHC_LD_OPTS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS) $$(addprefix -l,$$($1_$2_EXTRA_LIBRARIES))
+	$$(call cmd,$1_$2_HC) -o $$@ $$($1_$2_$$($1_$2_PROGRAM_WAY)_ALL_HC_OPTS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_GHC_LD_OPTS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS) $$(addprefix -l,$$($1_$2_EXTRA_LIBRARIES))
 
-ifeq "$$($1_$2_PROGRAM_WAY)" "dyn"
-	$(call relative-dynlib-references,$1,$2,$3)
-	$(call relative-dynlib-path,$3)
-endif
 else
 $1/$2/build/tmp/$$($1_$2_PROG) : $$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS) | $$$$(dir $$$$@)/.
-	$$(call cmd,$1_$2_CC) -o $$@ $$($1_$2_$$($1_$2_PROGRAM_WAY)_ALL_CC_OPTS) $$(LD_OPTS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_EXTRA_CC_OPTS) $$(addprefix -l,$$($1_$2_EXTRA_LIBRARIES))
+	$$(call cmd,$1_$2_CC) -o $$@ $$($1_$2_$$($1_$2_PROGRAM_WAY)_ALL_CC_OPTS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_ALL_LD_OPTS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_EXTRA_CC_OPTS) $$(addprefix -l,$$($1_$2_EXTRA_LIBRARIES))
 endif
 endif
 
@@ -290,7 +286,7 @@ endif
 ifeq "$(findstring clean,$(MAKECMDGOALS))" ""
 ifeq "$$($1_$2_INSTALL_INPLACE)" "YES"
 $$($1_$2_INPLACE) : $1/$2/build/tmp/$$($1_$2_PROG_INPLACE) | $$$$(dir $$$$@)/.
-	"$$(CP)" -p $$< $$@
+	$$(INSTALL) -m 755 $$< $$@
 endif
 endif
 

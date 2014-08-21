@@ -6,14 +6,16 @@
 TcPat: Typechecking patterns
 
 \begin{code}
-{-# OPTIONS -fno-warn-tabs #-}
+{-# LANGUAGE CPP, RankNTypes #-}
+{-# OPTIONS_GHC -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
 --     http://ghc.haskell.org/trac/ghc/wiki/Commentary/CodingStyle#TabsvsSpaces
 -- for details
 
-module TcPat ( tcLetPat, TcSigFun, TcSigInfo(..), TcPragFun 
+module TcPat ( tcLetPat, TcSigFun, TcPragFun
+             , TcSigInfo(..), findScopedTyVars
              , LetBndrSpec(..), addInlinePrags, warnPrags
              , tcPat, tcPats, newNoSigLetBndr
 	     , addDataConStupidTheta, badFieldCon, polyPatSig ) where
@@ -29,6 +31,7 @@ import Inst
 import Id
 import Var
 import Name
+import NameSet
 import TcEnv
 --import TcExpr
 import TcMType
@@ -146,8 +149,7 @@ data TcSigInfo
         sig_tvs    :: [(Maybe Name, TcTyVar)],    
                            -- Instantiated type and kind variables
                            -- Just n <=> this skolem is lexically in scope with name n
-                           -- See Note [Kind vars in sig_tvs]
-                     	   -- See Note [More instantiated than scoped] in TcBinds
+                           -- See Note [Binding scoped type variables]
 
         sig_theta  :: TcThetaType,  -- Instantiated theta
 
@@ -157,21 +159,56 @@ data TcSigInfo
         sig_loc    :: SrcSpan       -- The location of the signature
     }
 
+findScopedTyVars  -- See Note [Binding scoped type variables]
+  :: LHsType Name             -- The HsType
+  -> TcType                   -- The corresponding Type:
+                              --   uses same Names as the HsType
+  -> [TcTyVar]                -- The instantiated forall variables of the Type
+  -> [(Maybe Name, TcTyVar)]  -- In 1-1 correspondence with the instantiated vars
+findScopedTyVars hs_ty sig_ty inst_tvs
+  = zipWith find sig_tvs inst_tvs
+  where
+    find sig_tv inst_tv
+      | tv_name `elemNameSet` scoped_names = (Just tv_name, inst_tv)
+      | otherwise                          = (Nothing,      inst_tv)
+      where
+        tv_name = tyVarName sig_tv
+
+    scoped_names = mkNameSet (hsExplicitTvs hs_ty)
+    (sig_tvs,_)  = tcSplitForAllTys sig_ty
+
 instance Outputable TcSigInfo where
     ppr (TcSigInfo { sig_id = id, sig_tvs = tyvars, sig_theta = theta, sig_tau = tau})
         = ppr id <+> dcolon <+> vcat [ pprSigmaType (mkSigmaTy (map snd tyvars) theta tau)
                                      , ppr (map fst tyvars) ]
 \end{code}
 
-Note [Kind vars in sig_tvs]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-With kind polymorphism a signature like
-  f :: forall f a. f a -> f a
-may actuallly give rise to 
-  f :: forall k. forall (f::k -> *) (a:k). f a -> f a
-So the sig_tvs will be [k,f,a], but only f,a are scoped.
-So the scoped ones are not necessarily the *inital* ones!
+Note [Binding scoped type variables]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The type variables *brought into lexical scope* by a type signature may
+be a subset of the *quantified type variables* of the signatures, for two reasons:
 
+* With kind polymorphism a signature like
+    f :: forall f a. f a -> f a
+  may actuallly give rise to
+    f :: forall k. forall (f::k -> *) (a:k). f a -> f a
+  So the sig_tvs will be [k,f,a], but only f,a are scoped.
+  NB: the scoped ones are not necessarily the *inital* ones!
+
+* Even aside from kind polymorphism, tere may be more instantiated
+  type variables than lexically-scoped ones.  For example:
+        type T a = forall b. b -> (a,b)
+        f :: forall c. T c
+  Here, the signature for f will have one scoped type variable, c,
+  but two instantiated type variables, c' and b'.
+
+The function findScopedTyVars takes
+  * hs_ty:    the original HsForAllTy
+  * sig_ty:   the corresponding Type (which is guaranteed to use the same Names
+              as the HsForAllTy)
+  * inst_tvs: the skolems instantiated from the forall's in sig_ty
+It returns a [(Maybe Name, TcTyVar)], in 1-1 correspondence with inst_tvs
+but with a (Just n) for the lexically scoped name of each in-scope tyvar.
 
 Note [sig_tau may be polymorphic]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -495,9 +532,9 @@ tc_pat penv (TuplePat pats boxity _) pat_ty thing_inside
 	-- so that we can experiment with lazy tuple-matching.
 	-- This is a pretty odd place to make the switch, but
 	-- it was easy to do.
-	; let pat_ty'          = mkTyConApp tc arg_tys
-                                     -- pat_ty /= pat_ty iff coi /= IdCo
-              unmangled_result = TuplePat pats' boxity pat_ty'
+	; let 
+              unmangled_result = TuplePat pats' boxity arg_tys
+                                 -- pat_ty /= pat_ty iff coi /= IdCo
 	      possibly_mangled_result
 	        | gopt Opt_IrrefutableTuples dflags &&
                   isBoxed boxity            = LazyPat (noLoc unmangled_result)
@@ -694,13 +731,14 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
                                (zipTopTvSubst univ_tvs ctxt_res_tys) ex_tvs
                      -- Get location from monad, not from ex_tvs
 
-        ; let pat_ty' = mkTyConApp tycon ctxt_res_tys
+        ; let -- pat_ty' = mkTyConApp tycon ctxt_res_tys
 	      -- pat_ty' is type of the actual constructor application
               -- pat_ty' /= pat_ty iff coi /= IdCo
-              
+
 	      arg_tys' = substTys tenv arg_tys
 
-        ; traceTc "tcConPat" (ppr con_name $$ ppr ex_tvs' $$ ppr pat_ty' $$ ppr arg_tys')
+        ; traceTc "tcConPat" (vcat [ ppr con_name, ppr univ_tvs, ppr ex_tvs, ppr eq_spec
+                                   , ppr ex_tvs', ppr ctxt_res_tys, ppr arg_tys' ])
 	; if null ex_tvs && null eq_spec && null theta
 	  then do { -- The common case; no class bindings etc 
                     -- (see Note [Arrows and patterns])
@@ -710,7 +748,7 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
 			            	      pat_tvs = [], pat_dicts = [], 
                                               pat_binds = emptyTcEvBinds,
 					      pat_args = arg_pats', 
-                                              pat_ty = pat_ty',
+                                              pat_arg_tys = ctxt_res_tys,
                                               pat_wrap = idHsWrapper }
 
 		  ; return (mkHsWrapPat wrap res_pat pat_ty, res) }
@@ -743,7 +781,7 @@ tcDataConPat penv (L con_span con_name) data_con pat_ty arg_pats thing_inside
 			            pat_dicts = given,
 			            pat_binds = ev_binds,
 			            pat_args  = arg_pats', 
-                                    pat_ty    = pat_ty',
+                                    pat_arg_tys = ctxt_res_tys,
                                     pat_wrap  = idHsWrapper }
 	; return (mkHsWrapPat wrap res_pat pat_ty, res)
 	} }
@@ -753,11 +791,9 @@ tcPatSynPat :: PatEnv -> Located Name -> PatSyn
 	    -> HsConPatDetails Name -> TcM a
 	    -> TcM (Pat TcId, a)
 tcPatSynPat penv (L con_span _) pat_syn pat_ty arg_pats thing_inside
-  = do	{ let (univ_tvs, ex_tvs, (prov_theta, req_theta)) = patSynSig pat_syn
-              arg_tys = patSynArgTys pat_syn
-              ty = patSynType pat_syn
+  = do	{ let (univ_tvs, ex_tvs, prov_theta, req_theta, arg_tys, ty) = patSynSig pat_syn
 
-        ; (_univ_tvs', inst_tys, subst) <- tcInstTyVars univ_tvs
+        ; (univ_tvs', inst_tys, subst) <- tcInstTyVars univ_tvs
 
 	; checkExistentials ex_tvs penv
         ; (tenv, ex_tvs') <- tcInstSuperSkolTyVarsX subst ex_tvs
@@ -777,14 +813,12 @@ tcPatSynPat penv (L con_span _) pat_syn pat_ty arg_pats thing_inside
 
         ; prov_dicts' <- newEvVars prov_theta'
 
-          {-
+        -- Using a pattern synonym requires the PatternSynonyms
+        -- language flag to keep consistent with #2905
         ; patsyns_on <- xoptM Opt_PatternSynonyms
 	; checkTc patsyns_on
                   (ptext (sLit "A pattern match on a pattern synonym requires PatternSynonyms"))
-		  -- Trac #2905 decided that a *pattern-match* of a GADT
-		  -- should require the GADT language flag.
-                  -- Re TypeFamilies see also #7156
--}
+
         ; let skol_info = case pe_ctxt penv of
                             LamPat mc -> PatSkol (PatSynCon pat_syn) mc
                             LetPat {} -> UnkSkol -- Doesn't matter
@@ -803,7 +837,7 @@ tcPatSynPat penv (L con_span _) pat_syn pat_ty arg_pats thing_inside
 			            pat_dicts = prov_dicts',
 			            pat_binds = ev_binds,
 			            pat_args  = arg_pats',
-                                    pat_ty    = ty',
+                                    pat_arg_tys = mkTyVarTys univ_tvs',
                                     pat_wrap  = req_wrap }
 	; return (mkHsWrapPat wrap res_pat pat_ty, res) }
 

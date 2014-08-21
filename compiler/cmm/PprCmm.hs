@@ -1,3 +1,6 @@
+{-# LANGUAGE GADTs, TypeFamilies, FlexibleContexts, FlexibleInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
+
 ----------------------------------------------------------------------------
 --
 -- Pretty-printing of Cmm as (a superset of) C--
@@ -30,8 +33,6 @@
 --
 -- A useful example pass over Cmm is in nativeGen/MachCodeGen.hs
 
-{-# OPTIONS_GHC -fno-warn-orphans #-}
-{-# LANGUAGE GADTs, TypeFamilies, FlexibleContexts #-}
 module PprCmm
   ( module PprCmmDecl
   , module PprCmmExpr
@@ -42,11 +43,13 @@ import BlockId ()
 import CLabel
 import Cmm
 import CmmUtils
+import DynFlags
 import FastString
 import Outputable
 import PprCmmDecl
 import PprCmmExpr
 import Util
+import PprCore ()
 
 import BasicTypes
 import Compiler.Hoopl
@@ -137,6 +140,9 @@ pprCmmGraph g
   $$ nest 2 (vcat $ map ppr blocks)
   $$ text "}"
   where blocks = postorderDfs g
+    -- postorderDfs has the side-effect of discarding unreachable code,
+    -- so pretty-printed Cmm will omit any unreachable blocks.  This can
+    -- sometimes be confusing.
 
 ---------------------------------------------
 -- Outputting CmmNode and types which it contains
@@ -175,12 +181,22 @@ pprNode :: CmmNode e x -> SDoc
 pprNode node = pp_node <+> pp_debug
   where
     pp_node :: SDoc
-    pp_node = case node of
+    pp_node = sdocWithDynFlags $ \dflags -> case node of
       -- label:
-      CmmEntry id -> ppr id <> colon
+      CmmEntry id tscope -> ppr id <> colon <+>
+         (sdocWithDynFlags $ \dflags ->
+           ppWhen (gopt Opt_PprShowTicks dflags) (text "//" <+> ppr tscope))
 
       -- // text
       CmmComment s -> text "//" <+> ftext s
+
+      -- //tick bla<...>
+      CmmTick t -> if gopt Opt_PprShowTicks dflags
+                   then ptext (sLit "//tick") <+> ppr t
+                   else empty
+
+      -- unwind reg = expr;
+      CmmUnwind r e -> ptext (sLit "unwind ") <> ppr r <+> char '=' <+> ppr e
 
       -- reg = expr;
       CmmAssign reg expr -> ppr reg <+> equals <+> ppr expr <> semi
@@ -264,6 +280,8 @@ pprNode node = pp_node <+> pp_debug
       else case node of
              CmmEntry {}             -> empty -- Looks terrible with text "  // CmmEntry"
              CmmComment {}           -> empty -- Looks also terrible with text "  // CmmComment"
+             CmmTick {}              -> empty -- Looks equally bad with text "  // CmmTick"
+             CmmUnwind {}            -> text "  // CmmUnwind"
              CmmAssign {}            -> text "  // CmmAssign"
              CmmStore {}             -> text "  // CmmStore"
              CmmUnsafeForeignCall {} -> text "  // CmmUnsafeForeignCall"

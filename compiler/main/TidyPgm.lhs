@@ -4,6 +4,8 @@
 \section{Tidying up Core}
 
 \begin{code}
+{-# LANGUAGE BangPatterns, CPP #-}
+
 module TidyPgm (
        mkBootModDetailsTc, tidyProgram, globaliseAndTidyId
    ) where
@@ -21,11 +23,14 @@ import CorePrep
 import CoreUtils
 import Literal
 import Rules
+import PatSyn
+import ConLike
 import CoreArity        ( exprArity, exprBotStrictness_maybe )
 import VarEnv
 import VarSet
 import Var
 import Id
+import MkId             ( mkDictSelRhs )
 import IdInfo
 import InstEnv
 import FamInstEnv
@@ -56,9 +61,15 @@ import FastString
 import qualified ErrUtils as Err
 
 import Control.Monad
+import qualified Data.ByteString.Char8 as BS
 import Data.Function
 import Data.List        ( sortBy )
-import Data.IORef       ( atomicModifyIORef )
+import qualified Data.Map as Map
+import Data.IORef       ( atomicModifyIORef, readIORef )
+import Data.Set         ( elems )
+import System.IO
+import System.FilePath
+import System.Directory
 \end{code}
 
 
@@ -129,18 +140,20 @@ mkBootModDetailsTc hsc_env
         TcGblEnv{ tcg_exports   = exports,
                   tcg_type_env  = type_env, -- just for the Ids
                   tcg_tcs       = tcs,
+                  tcg_patsyns   = pat_syns,
                   tcg_insts     = insts,
                   tcg_fam_insts = fam_insts
                 }
   = do  { let dflags = hsc_dflags hsc_env
         ; showPass dflags CoreTidy
 
-        ; let { insts'     = map (tidyClsInstDFun globaliseAndTidyId) insts
-              ; dfun_ids   = map instanceDFunId insts'
+        ; let { insts'      = map (tidyClsInstDFun globaliseAndTidyId) insts
+              ; pat_syns'   = map (tidyPatSynIds   globaliseAndTidyId) pat_syns
+              ; dfun_ids    = map instanceDFunId insts'
+              ; pat_syn_ids = concatMap patSynIds pat_syns'
               ; type_env1  = mkBootTypeEnv (availsToNameSet exports)
-                                (typeEnvIds type_env) tcs fam_insts
-              ; type_env2  = extendTypeEnvWithPatSyns type_env1 (typeEnvPatSyns type_env)
-              ; type_env'  = extendTypeEnvWithIds type_env2 dfun_ids
+                                           (typeEnvIds type_env) tcs fam_insts
+              ; type_env'  = extendTypeEnvWithIds type_env1 (pat_syn_ids ++ dfun_ids)
               }
         ; return (ModDetails { md_types     = type_env'
                              , md_insts     = insts'
@@ -333,19 +346,13 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
 
         ; let { final_ids  = [ id | id <- bindersOfBinds tidy_binds,
                                     isExternalName (idName id)]
-              ; final_patsyns = filter (isExternalName . getName) patsyns
+              ; type_env1  = extendTypeEnvWithIds type_env final_ids
 
-              ; type_env' = extendTypeEnvWithIds type_env final_ids
-              ; type_env'' = extendTypeEnvWithPatSyns type_env' final_patsyns
-
-              ; tidy_type_env = tidyTypeEnv omit_prags type_env''
-
-              ; tidy_insts    = map (tidyClsInstDFun (lookup_dfun tidy_type_env)) insts
-                -- A DFunId will have a binding in tidy_binds, and so
-                -- will now be in final_env, replete with IdInfo
-                -- Its name will be unchanged since it was born, but
-                -- we want Global, IdInfo-rich (or not) DFunId in the
-                -- tidy_insts
+              ; tidy_insts = map (tidyClsInstDFun (lookup_aux_id tidy_type_env)) insts
+                -- A DFunId will have a binding in tidy_binds, and so will now be in
+                -- tidy_type_env, replete with IdInfo.  Its name will be unchanged since
+                -- it was born, but we want Global, IdInfo-rich (or not) DFunId in the
+                -- tidy_insts.  Similarly the Ids inside a PatSyn.
 
               ; tidy_rules = tidyRules tidy_env ext_rules
                 -- You might worry that the tidy_env contains IdInfo-rich stuff
@@ -353,6 +360,16 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
                 -- empty
 
               ; tidy_vect_info = tidyVectInfo tidy_env vect_info
+
+                -- Tidy the Ids inside each PatSyn, very similarly to DFunIds
+                -- and then override the PatSyns in the type_env with the new tidy ones
+                -- This is really the only reason we keep mg_patsyns at all; otherwise
+                -- they could just stay in type_env
+              ; tidy_patsyns = map (tidyPatSynIds (lookup_aux_id tidy_type_env)) patsyns
+              ; type_env2    = extendTypeEnvList type_env1
+                                    [AConLike (PatSynCon ps) | ps <- tidy_patsyns ]
+
+              ; tidy_type_env = tidyTypeEnv omit_prags type_env2
 
               -- See Note [Injecting implicit bindings]
               ; all_tidy_binds = implicit_binds ++ tidy_binds
@@ -377,6 +394,13 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
               (showSDoc dflags (ppr CoreTidy <+> ptext (sLit "rules")))
               (pprRulesForUser tidy_rules)
 
+           -- When dumping to files, we might have markers in there
+           -- that we ought to convert into annotations of the Core tree
+           -- so debug info can refer to it.
+        ; final_binds <- if (gopt Opt_DumpToFile dflags)
+                         then extractDumpMarkers dflags all_tidy_binds
+                         else return all_tidy_binds
+
           -- Print one-line size info
         ; let cs = coreBindsStats tidy_binds
         ; when (dopt Opt_D_dump_core_stats dflags)
@@ -389,7 +413,7 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
 
         ; return (CgGuts { cg_module   = mod,
                            cg_tycons   = alg_tycons,
-                           cg_binds    = all_tidy_binds,
+                           cg_binds    = final_binds,
                            cg_foreign  = foreign_stubs,
                            cg_dep_pkgs = map fst $ dep_pkgs deps,
                            cg_hpc_info = hpc_info,
@@ -405,11 +429,11 @@ tidyProgram hsc_env  (ModGuts { mg_module    = mod
                               })
         }
 
-lookup_dfun :: TypeEnv -> Var -> Id
-lookup_dfun type_env dfun_id
-  = case lookupTypeEnv type_env (idName dfun_id) of
-        Just (AnId dfun_id') -> dfun_id'
-        _other -> pprPanic "lookup_dfun" (ppr dfun_id)
+lookup_aux_id :: TypeEnv -> Var -> Id
+lookup_aux_id type_env id
+  = case lookupTypeEnv type_env (idName id) of
+        Just (AnId id') -> id'
+        _other          -> pprPanic "lookup_axu_id" (ppr id)
 
 --------------------------
 tidyTypeEnv :: Bool       -- Compiling without -O, so omit prags
@@ -517,7 +541,7 @@ of exceptions, and finally I gave up the battle:
 
 Note [Injecting implicit bindings]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We inject the implict bindings right at the end, in CoreTidy.
+We inject the implicit bindings right at the end, in CoreTidy.
 Some of these bindings, notably record selectors, are not
 constructed in an optimised form.  E.g. record selector for
         data T = MkT { x :: {-# UNPACK #-} !Int }
@@ -559,14 +583,16 @@ Oh: two other reasons for injecting them late:
 There is one sort of implicit binding that is injected still later,
 namely those for data constructor workers. Reason (I think): it's
 really just a code generation trick.... binding itself makes no sense.
-See CorePrep Note [Data constructor workers].
+See Note [Data constructor workers] in CorePrep.
 
 \begin{code}
 getTyConImplicitBinds :: TyCon -> [CoreBind]
-getTyConImplicitBinds tc = map get_defn (mapCatMaybes dataConWrapId_maybe (tyConDataCons tc))
+getTyConImplicitBinds tc = map get_defn (mapMaybe dataConWrapId_maybe (tyConDataCons tc))
 
 getClassImplicitBinds :: Class -> [CoreBind]
-getClassImplicitBinds cls = map get_defn (classAllSelIds cls)
+getClassImplicitBinds cls
+  = [ NonRec op (mkDictSelRhs cls val_index)
+    | (op, val_index) <- classAllSelIds cls `zip` [0..] ]
 
 get_defn :: Id -> CoreBind
 get_defn id = NonRec id (unfoldingTemplate (realIdUnfolding id))
@@ -1006,7 +1032,7 @@ tidyTopBinds hsc_env this_mod unfold_env init_occ_env binds
 
 ------------------------
 tidyTopBind  :: DynFlags
-             -> PackageId
+             -> PackageKey
              -> Module
              -> Id
              -> UnfoldEnv
@@ -1176,7 +1202,7 @@ it as a CAF.  In these cases however, we would need to use an additional
 CAF list to keep track of non-collectable CAFs.
 
 \begin{code}
-hasCafRefs :: DynFlags -> PackageId -> Module
+hasCafRefs :: DynFlags -> PackageKey -> Module
            -> (Id, VarEnv Var) -> Arity -> CoreExpr
            -> CafInfo
 hasCafRefs dflags this_pkg this_mod p arity expr
@@ -1225,6 +1251,87 @@ cafRefsV (_, p) id
 fastOr :: FastBool -> (a -> FastBool) -> a -> FastBool
 -- hack for lazy-or over FastBool.
 fastOr a f x = fastBool (isFastTrue a || isFastTrue (f x))
+
+--------------------------
+
+extractDumpMarkers :: DynFlags -> CoreProgram -> IO CoreProgram
+extractDumpMarkers dflags binds = do
+  dumps <- readIORef $ generatedDumps dflags
+  let extract binds file = do
+        marks <- extractDumpMarkersFile file
+        return $ map (annotateMarkers dflags marks file) binds
+  foldlM extract binds (elems dumps)
+
+extractDumpMarkersFile :: FilePath -> IO (Map.Map String Int)
+extractDumpMarkersFile dumpFile = do
+  (tmpFile, hout) <- openTempFile (takeDirectory dumpFile) (takeFileName dumpFile)
+
+  -- Open dump file, extract the markers
+  hin <- openFile dumpFile ReadMode
+  let extractMarkers n marks = do
+        end <- hIsEOF hin
+        if end then return marks else do
+          line <- BS.hGetLine hin
+          marks' <- extractMarksLine line n marks
+          hPutChar hout '\n'
+          extractMarkers (n+1) marks'
+      markStart = BS.pack "ann<#"
+      markEnd = BS.pack "#>"
+      extractMarksLine line n marks = do
+        -- Look for annotation start, output everything up to that point
+        let (pre,match) = BS.breakSubstring markStart line
+        BS.hPutStr hout pre
+        case () of
+          _ | BS.null match  -> return marks
+                -- If the marker is within a quote, we jump over
+                -- it. This is really more a band-aid, as it's just
+                -- fixing one of the more obvious problems we might
+                -- run into trying to naively "parse" an undefined
+                -- format like this.
+            | openQuotes pre -> case BS.break (== '"') match of
+                (quoted, rest)
+                  | BS.null rest -> BS.hPutStrLn hout quoted >> return marks
+                  | otherwise    -> do BS.hPutStr hout quoted
+                                       hPutChar hout '"'
+                                       extractMarksLine (BS.tail rest) n marks
+            | (body, rest) <- BS.breakSubstring markEnd (BS.drop (BS.length markStart) match) ->
+                let !marks' = Map.insert (BS.unpack body) n marks
+                in extractMarksLine (BS.drop (BS.length markEnd) rest) n marks'
+      openQuotes = BS.foldr' (\x -> if x == '"' then not else id) False
+  marks <- extractMarkers 1 Map.empty
+
+  -- Close files, replace old file with stripped one
+  hClose hin
+  hClose hout
+  renameFile tmpFile dumpFile
+  return $! marks
+
+annotateMarkers :: DynFlags -> Map.Map String Int -> FilePath -> CoreBind -> CoreBind
+annotateMarkers dflags marks file = annotBind
+  where annotBind (NonRec b e)    = NonRec b $ annot b $ annotExpr e
+        annotBind (Rec bs)        = Rec $ map (\(b, e) -> (b, annot b $ annotExpr e)) bs
+
+        annotExpr (App e1 e2)     = App (annotExpr e1) (annotExpr e2)
+        annotExpr (Lam b e)       = Lam b $ annot b $ annotExpr e
+        annotExpr (Let bs e)      = Let (annotBind bs) (annotExpr e)
+        annotExpr (Case e b t as) = Case (annotExpr e) b t $ map (annotAlt b) as
+        annotExpr (Cast e c)      = Cast (annotExpr e) c
+        annotExpr (Tick t e)      = Tick t (annotExpr e)
+        annotExpr other           = other
+
+        annotAlt b (con, bs, e)   = (con, bs, annot (b, con) $ annotExpr e)
+
+        fileFS = mkFastString file
+        mkSpan n = realSrcLocSpan (mkRealSrcLoc fileFS n 1)
+
+        annot name expr =
+          let nameStr = showSDocDump dflags (ppr name)
+          in case Map.lookup nameStr marks of
+            Just n  -> let ann (Lam b e) = Lam b (ann e)
+                           ann other     = Tick (SourceNote (mkSpan n) nameStr) other
+                        in ann expr
+            Nothing -> expr
+
 \end{code}
 
 

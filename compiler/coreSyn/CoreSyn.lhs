@@ -4,9 +4,8 @@
 %
 
 \begin{code}
-{-# LANGUAGE DeriveDataTypeable, DeriveFunctor #-}
-
-{-# OPTIONS -fno-warn-tabs #-}
+{-# LANGUAGE CPP, DeriveDataTypeable, DeriveFunctor #-}
+{-# OPTIONS_GHC -fno-warn-tabs #-}
 -- The above warning supression flag is a temporary kludge.
 -- While working on this module you are encouraged to remove it and
 -- detab the module (please do the detabbing in a separate patch). See
@@ -16,9 +15,10 @@
 -- | CoreSyn holds all the main data types for use by for the Glasgow Haskell Compiler midsection
 module CoreSyn (
 	-- * Main data types
-        Expr(..), Alt, Bind(..), AltCon(..), Arg, Tickish(..),
+        Expr(..), Alt, Bind(..), AltCon(..), Arg,
+        Tickish(..), RawTickish, TickishScoping(..), TickishPlacement(..), ExprPtr(..),
         CoreProgram, CoreExpr, CoreAlt, CoreBind, CoreArg, CoreBndr,
-        TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..),
+        TaggedExpr, TaggedAlt, TaggedBind, TaggedArg, TaggedBndr(..), deTagExpr,
 
         -- ** 'Expr' construction
 	mkLets, mkLams,
@@ -44,8 +44,11 @@ module CoreSyn (
         isValArg, isTypeArg, isTyCoArg, valArgCount, valBndrCount,
         isRuntimeArg, isRuntimeVar,
 
-        tickishCounts, tickishScoped, tickishIsCode, mkNoCount, mkNoScope,
-        tickishCanSplit,
+        tickishCounts, tickishScoped, tickishScopesLike, tickishFloatable,
+        tickishCanSplit, mkNoCount, mkNoScope,
+        tickishIsCode, tickishPlace,
+        exprPtrCons,
+        tickishContains,
 
         -- * Unfolding data types
         Unfolding(..),  UnfoldingGuidance(..), UnfoldingSource(..),
@@ -105,6 +108,7 @@ import DynFlags
 import FastString
 import Outputable
 import Util
+import SrcLoc     ( RealSrcSpan, containsSpan )
 
 import Data.Data hiding (TyCon)
 import Data.Int
@@ -181,25 +185,8 @@ These data types are the heart of the compiler
 --    /must/ be of lifted type (see "Type#type_classification" for
 --    the meaning of /lifted/ vs. /unlifted/).
 --    
---    #let_app_invariant#
---    The right hand side of of a non-recursive 'Let' 
---    _and_ the argument of an 'App',
---    /may/ be of unlifted type, but only if the expression 
---    is ok-for-speculation.  This means that the let can be floated 
---    around without difficulty. For example, this is OK:
---    
---    > y::Int# = x +# 1#
---    
---    But this is not, as it may affect termination if the 
---    expression is floated out:
---    
---    > y::Int# = fac 4#
---    
---    In this situation you should use @case@ rather than a @let@. The function
---    'CoreUtils.needsCaseBinding' can help you determine which to generate, or
---    alternatively use 'MkCore.mkCoreLet' rather than this constructor directly,
---    which will generate a @case@ if necessary
---    
+--    See Note [CoreSyn let/app invariant]
+--
 --    #type_let#
 --    We allow a /non-recursive/ let to bind a type variable, thus:
 --    
@@ -360,9 +347,28 @@ See #letrec_invariant#
 
 Note [CoreSyn let/app invariant]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-See #let_app_invariant#
+The let/app invariant
+     the right hand side of of a non-recursive 'Let', and
+     the argument of an 'App',
+    /may/ be of unlifted type, but only if
+    the expression is ok-for-speculation.
 
-This is intially enforced by DsUtils.mkCoreLet and mkCoreApp
+This means that the let can be floated around
+without difficulty. For example, this is OK:
+
+   y::Int# = x +# 1#
+
+But this is not, as it may affect termination if the
+expression is floated out:
+
+   y::Int# = fac 4#
+
+In this situation you should use @case@ rather than a @let@. The function
+'CoreUtils.needsCaseBinding' can help you determine which to generate, or
+alternatively use 'MkCore.mkCoreLet' rather than this constructor directly,
+which will generate a @case@ if necessary
+
+Th let/app invariant is initially enforced by DsUtils.mkCoreLet and mkCoreApp
 
 Note [CoreSyn case invariants]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -395,7 +401,7 @@ Here's another example:
   f :: T -> Bool
   f = \(x:t). case x of Bool {}
 Since T has no data constructors, the case alternatives are of course
-empty.  However note that 'x' is not bound to a visbily-bottom value;
+empty.  However note that 'x' is not bound to a visibly-bottom value;
 it's the *type* that tells us it's going to diverge.  Its a bit of a
 degnerate situation but we do NOT want to replace
    case x of Bool {}   -->   error Bool "Inaccessible case"
@@ -472,7 +478,47 @@ data Tickish id =
                                 -- Note [substTickish] in CoreSubst.
     }
 
+  -- | A source note.
+  --
+  -- Source notes are pure annotations: Their presence should neither
+  -- influence compilation nor execution. The semantics are given by
+  -- causality: The presence of a source note means that a local
+  -- change in the referenced source code span will possibly provoke
+  -- the generated code to change. On the flip-side, the functionality
+  -- of annotated code *must* be invariant against changes to all
+  -- source code *except* the spans referenced in the source notes
+  -- (see "Causality of optimized Haskell" paper for details).
+  --
+  -- Therefore extending the scope of any given source note is always
+  -- valid. Note that it is still undesirable though, as this reduces
+  -- their usefulness for debugging and profiling. Therefore we will
+  -- generally try only to make use of this property where it is
+  -- neccessary to enable optimizations.
+  | SourceNote
+    { sourceSpan :: RealSrcSpan -- ^ Source covered
+    , sourceName :: String      -- ^ Name for source location
+                                --   (uses same names as CCs)
+    }
+
+  -- | A core note. These types of ticks only live after Core2Stg and
+  -- carry the core that a piece of Stg was generated from.
+  | CoreNote
+    { coreBind :: Var          -- ^ Name the core fragment is bound to
+    , coreNote :: ExprPtr Var  -- ^ Source covered
+    }
+
   deriving (Eq, Ord, Data, Typeable)
+
+-- | Tickish out of Core context
+type RawTickish = Tickish ()
+
+-- | Pointer to a Core expression or case alternative. Ignored for the
+-- purpose of equality checks.
+data ExprPtr id = ExprPtr (Expr id)
+                | AltPtr (Alt id)
+                deriving (Data, Typeable)
+instance Eq (ExprPtr id)  where _ == _       = True
+instance Ord (ExprPtr id) where compare _ _  = EQ
 
 
 -- | A "counting tick" (where tickishCounts is True) is one that
@@ -483,41 +529,210 @@ data Tickish id =
 -- However, we still allow the simplifier to increase or decrease
 -- sharing, so in practice the actual number of ticks may vary, except
 -- that we never change the value from zero to non-zero or vice versa.
---
 tickishCounts :: Tickish id -> Bool
 tickishCounts n@ProfNote{} = profNoteCount n
 tickishCounts HpcTick{}    = True
 tickishCounts Breakpoint{} = True
+tickishCounts _            = False
 
-tickishScoped :: Tickish id -> Bool
-tickishScoped n@ProfNote{} = profNoteScope n
-tickishScoped HpcTick{}    = False
-tickishScoped Breakpoint{} = True
+
+-- | Specifies the scoping behaviour of ticks. This governs the
+-- behaviour of ticks that care about the covered code and the cost
+-- associated with it. Important for ticks relating to profiling.
+data TickishScoping =
+    -- | No scoping: The tick does not care about what code it
+    -- covers. Transformations can freely move code inside as well as
+    -- outside without any additional annotation obligations
+    NoScope
+
+    -- | Soft scoping: We want all code that is covered to stay
+    -- covered.  Note that this scope type does not forbid
+    -- transformations from happening, as as long as all results of
+    -- the transformations are still covered by this tick or a copy of
+    -- it. For example
+    --
+    --   let x = tick<...> (let y = foo in bar) in baz
+    --     ===>
+    --   let x = tick<...> bar; y = tick<...> foo in baz
+    --
+    -- Is a valid transformation as far as "bar" and "foo" is
+    -- concerned, because both still are scoped over by the tick.
+    --
+    -- Note though that one might object to the "let" not being
+    -- covered by the tick any more. However, we are generally lax
+    -- with this - constant costs don't matter too much, and given
+    -- that the "let" was effectively merged we can view it as having
+    -- lost its identity anyway.
+    --
+    -- Also note that this scoping behaviour allows floating a tick
+    -- "upwards" in pretty much any situation. For example:
+    --
+    --   case foo of x -> tick<...> bar
+    --     ==>
+    --   tick<...> case foo of x -> bar
+    --
+    -- While this is always leagl, we want to make a best effort to
+    -- only make us of this where it exposes transformation
+    -- opportunities.
+  | SoftScope
+
+    -- | Cost centre scoping: We don't want any costs to move to other
+    -- cost-centre stacks. This means we not only want no code or cost
+    -- to get moved out of their cost centres, but we also object to
+    -- code getting associated with new cost-centre ticks - or
+    -- changing the order in which they get applied.
+    --
+    -- A rule of thumb is that we don't want any code to gain new
+    -- annotations. However, there are notable exceptions, for
+    -- example:
+    --
+    --   let f = \y -> foo in tick<...> ... (f x) ...
+    --     ==>
+    --   tick<...> ... foo[x/y] ...
+    --
+    -- In-lining lambdas like this is always legal, because inlining a
+    -- function does not change the cost-centre stack when the
+    -- function is called.
+  | CostCentreScope
+
+  deriving (Eq)
+
+-- | Returns the intended scoping rule for a Tickish
+tickishScoped :: Tickish id -> TickishScoping
+tickishScoped n@ProfNote{}
+  | profNoteScope n        = CostCentreScope
+  | otherwise              = NoScope
+tickishScoped HpcTick{}    = NoScope
+tickishScoped Breakpoint{} = CostCentreScope
    -- Breakpoints are scoped: eventually we're going to do call
    -- stacks, but also this helps prevent the simplifier from moving
    -- breakpoints around and changing their result type (see #1531).
+tickishScoped SourceNote{} = SoftScope
+tickishScoped CoreNote{}   = SoftScope
+
+-- | Returns whether the tick scoping rule is at least as permissive
+-- as the given scoping rule.
+tickishScopesLike :: Tickish id -> TickishScoping -> Bool
+tickishScopesLike t scope = tickishScoped t `like` scope
+  where NoScope         `like` _               = True
+        _               `like` NoScope         = False
+        SoftScope       `like` _               = True
+        _               `like` SoftScope       = False
+        CostCentreScope `like` _               = True
+
+-- | Returns @True@ for ticks that can be floated upwards easily even
+-- where it might change execution counts, such as:
+--
+--   Just (tick<...> foo)
+--     ==>
+--   tick<...> (Just foo)
+--
+-- This is a combination of @tickishSoftScope@ and
+-- @tickishCounts@. Note that in principle splittable ticks can become
+-- floatable using @mkNoTick@ -- even though there's currently no
+-- tickish for which that is the case.
+tickishFloatable :: Tickish id -> Bool
+tickishFloatable t = t `tickishScopesLike` SoftScope && not (tickishCounts t)
+
+-- | Returns @True@ for a tick that is both counting /and/ scoping and
+-- can be split into its (tick, scope) parts using 'mkNoScope' and
+-- 'mkNoTick' respectively.
+tickishCanSplit :: Tickish id -> Bool
+tickishCanSplit ProfNote{profNoteScope = True, profNoteCount = True}
+                   = True
+tickishCanSplit _  = False
 
 mkNoCount :: Tickish id -> Tickish id
-mkNoCount n@ProfNote{} = n {profNoteCount = False}
-mkNoCount Breakpoint{} = panic "mkNoCount: Breakpoint" -- cannot split a BP
-mkNoCount HpcTick{}    = panic "mkNoCount: HpcTick"
+mkNoCount n | not (tickishCounts n)   = n
+            | not (tickishCanSplit n) = panic "mkNoCount: Cannot split!"
+mkNoCount n@ProfNote{}                = n {profNoteCount = False}
+mkNoCount _                           = panic "mkNoCount: Undefined split!"
 
 mkNoScope :: Tickish id -> Tickish id
-mkNoScope n@ProfNote{} = n {profNoteScope = False}
-mkNoScope Breakpoint{} = panic "mkNoScope: Breakpoint" -- cannot split a BP
-mkNoScope HpcTick{}    = panic "mkNoScope: HpcTick"
+mkNoScope n | tickishScoped n == NoScope  = n
+            | not (tickishCanSplit n)     = panic "mkNoScope: Cannot split!"
+mkNoScope n@ProfNote{}                    = n {profNoteScope = False}
+mkNoScope _                               = panic "mkNoScope: Undefined split!"
 
--- | Return True if this source annotation compiles to some code, or will
--- disappear before the backend.
+-- | Return @True@ if this source annotation compiles to some backend
+-- code. Without this flag, the tickish is seen as a simple annotation
+-- that does not have any associated evaluation code.
+--
+-- What this means that we are allowed to disregard the tick if doing
+-- so means that we can skip generating any code in the first place. A
+-- typical example is top-level bindings:
+--
+--   foo = tick<...> \y -> ...
+--     ==>
+--   foo = \y -> tick<...> ...
+--
+-- Here there is just no operational difference between the first and
+-- the second version. Therefore code generation should simply
+-- translate the code as if it found the latter.
 tickishIsCode :: Tickish id -> Bool
-tickishIsCode _tickish = True  -- all of them for now
+tickishIsCode SourceNote{} = False
+tickishIsCode CoreNote{}   = False
+tickishIsCode _tickish     = True  -- all the rest for now
 
--- | Return True if this Tick can be split into (tick,scope) parts with
--- 'mkNoScope' and 'mkNoCount' respectively.
-tickishCanSplit :: Tickish Id -> Bool
-tickishCanSplit Breakpoint{} = False
-tickishCanSplit HpcTick{}    = False
-tickishCanSplit _ = True
+
+-- | Governs the kind of expression that the tick gets placed on when
+-- annotating for example using @mkTick@. If we find that we want to
+-- put a tickish on an expression ruled out here, we try to float it
+-- inwards until we find a suitable expression.
+data TickishPlacement =
+
+    -- | Place ticks exactly on run-time expressions. We can still
+    -- move the tick through pure compile-time constructs such as
+    -- other ticks, casts or type lambdas. This is the most
+    -- restrictive placement rule for ticks, as all tickishs have in
+    -- common that they want to track runtime processes. The only
+    -- legal placement rule for counting ticks.
+    PlaceRuntime
+
+    -- | As @PlaceRuntime@, but we float the tick through all
+    -- lambdas. This makes sense where there is little difference
+    -- between annotating the lambda and annotating the lambda's code.
+  | PlaceNonLam
+
+    -- | In addition to floating through lambdas, cost-centre style
+    -- tickishs can also be moved from constructors, non-function
+    -- variables and literals. For example:
+    --
+    --   let x = scc<...> C (scc<...> y) (scc<...> 3) in ...
+    --
+    -- Neither the constructor application, the variable or the
+    -- literal are likely to have any cost worth mentioning. And even
+    -- if y names a thunk, the call would not care about the
+    -- evaluation context. Therefore removing all annotations in the
+    -- above example is safe.
+  | PlaceCostCentre
+
+  deriving (Eq)
+
+-- | Placement behaviour we want for the ticks
+tickishPlace :: Tickish id -> TickishPlacement
+tickishPlace n@ProfNote{}
+  | profNoteCount n        = PlaceRuntime
+  | otherwise              = PlaceCostCentre
+tickishPlace HpcTick{}     = PlaceRuntime
+tickishPlace Breakpoint{}  = PlaceRuntime
+tickishPlace SourceNote{}  = PlaceNonLam
+tickishPlace CoreNote{}    = PlaceNonLam
+
+-- | Returns whether one tick "contains" the other one, therefore
+-- making the second tick redundant.
+tickishContains :: Tickish Id -> Tickish Id -> Bool
+tickishContains (SourceNote sp1 n1) (SourceNote sp2 n2)
+  = n1 == n2 && containsSpan sp1 sp2
+tickishContains t1 t2
+  = t1 == t2
+
+-- | Gives constructor of expr pointer or DEFAULT if not an
+-- alternative.
+exprPtrCons :: ExprPtr a -> AltCon
+exprPtrCons ExprPtr{}          = DEFAULT
+exprPtrCons (AltPtr (con,_,_)) = con
+
 \end{code}
 
 
@@ -1106,6 +1321,25 @@ instance Outputable b => OutputableBndr (TaggedBndr b) where
   pprBndr _ b = ppr b	-- Simple
   pprInfixOcc  b = ppr b
   pprPrefixOcc b = ppr b
+
+deTagExpr :: TaggedExpr t -> CoreExpr
+deTagExpr (Var v)                   = Var v
+deTagExpr (Lit l)                   = Lit l
+deTagExpr (Type ty)                 = Type ty
+deTagExpr (Coercion co)             = Coercion co
+deTagExpr (App e1 e2)               = App (deTagExpr e1) (deTagExpr e2)
+deTagExpr (Lam (TB b _) e)          = Lam b (deTagExpr e)
+deTagExpr (Let bind body)           = Let (deTagBind bind) (deTagExpr body)
+deTagExpr (Case e (TB b _) ty alts) = Case (deTagExpr e) b ty (map deTagAlt alts)
+deTagExpr (Tick t e)                = Tick t (deTagExpr e)
+deTagExpr (Cast e co)               = Cast (deTagExpr e) co
+
+deTagBind :: TaggedBind t -> CoreBind
+deTagBind (NonRec (TB b _) rhs) = NonRec b (deTagExpr rhs)
+deTagBind (Rec prs)             = Rec [(b, deTagExpr rhs) | (TB b _, rhs) <- prs]
+
+deTagAlt :: TaggedAlt t -> CoreAlt
+deTagAlt (con, bndrs, rhs) = (con, [b | TB b _ <- bndrs], deTagExpr rhs)
 \end{code}
 
 
@@ -1197,8 +1431,9 @@ mkDoubleLitDouble :: Double -> Expr b
 mkDoubleLit       d = Lit (mkMachDouble d)
 mkDoubleLitDouble d = Lit (mkMachDouble (toRational d))
 
--- | Bind all supplied binding groups over an expression in a nested let expression. Prefer to
--- use 'MkCore.mkCoreLets' if possible
+-- | Bind all supplied binding groups over an expression in a nested let expression. Assumes
+-- that the rhs satisfies the let/app invariant.  Prefer to use 'MkCore.mkCoreLets' if
+-- possible, which does guarantee the invariant
 mkLets	      :: [Bind b] -> Expr b -> Expr b
 -- | Bind all supplied binders over an expression in a nested lambda expression. Prefer to
 -- use 'MkCore.mkCoreLams' if possible
@@ -1375,8 +1610,8 @@ seqExpr (Lam b e)       = seqBndr b `seq` seqExpr e
 seqExpr (Let b e)       = seqBind b `seq` seqExpr e
 seqExpr (Case e b t as) = seqExpr e `seq` seqBndr b `seq` seqType t `seq` seqAlts as
 seqExpr (Cast e co)     = seqExpr e `seq` seqCo co
-seqExpr (Tick n e)    = seqTickish n `seq` seqExpr e
-seqExpr (Type t)       = seqType t
+seqExpr (Tick n e)      = seqTickish n `seq` seqExpr e
+seqExpr (Type t)        = seqType t
 seqExpr (Coercion co)   = seqCo co
 
 seqExprs :: [CoreExpr] -> ()
@@ -1387,6 +1622,8 @@ seqTickish :: Tickish Id -> ()
 seqTickish ProfNote{ profNoteCC = cc } = cc `seq` ()
 seqTickish HpcTick{} = ()
 seqTickish Breakpoint{ breakpointFVs = ids } = seqBndrs ids
+seqTickish SourceNote{} = ()
+seqTickish CoreNote{} = ()
 
 seqBndr :: CoreBndr -> ()
 seqBndr b = b `seq` ()

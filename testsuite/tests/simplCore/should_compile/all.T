@@ -15,8 +15,7 @@ test('simpl011', normal, compile, [''])
 test('simpl012', normal, compile, [''])
 test('simpl013', normal, compile, [''])
 test('simpl014', normal, compile, [''])
-test('simpl015', only_ways(['optasm']), compile, [''])
-test('simpl016', normal, compile, [''])
+test('simpl016', normal, compile, ['-dsuppress-uniques'])
 test('simpl017', normal, compile_fail, [''])
 test('simpl018', normal, compile, [''])
 test('simpl019', normal, compile, [''])
@@ -96,7 +95,7 @@ test('EvalTest',
 
 test('T3831', normal, compile, [''])
 test('T4345', normal, compile, [''])
-test('T4398', normal, compile, [''])
+test('T4398', normal, compile, ['-dsuppress-uniques'])
 
 test('T4903',
      extra_clean(['T4903a.hi', 'T4903a.o']),
@@ -198,3 +197,10 @@ test('T5996',
      run_command,
      ['$MAKE -s --no-print-directory T5996'])
 test('T8537', normal, compile, [''])
+test('T8832',
+     [when(wordsize(32), expect_fail), extra_clean(['T8832.hi', 'T8832a.o'])],
+     run_command,
+     ['$MAKE -s --no-print-directory T8832'])
+test('T8848', only_ways(['optasm']), compile, ['-ddump-rule-firings'])
+test('T8848a', only_ways(['optasm']), compile, ['-ddump-rules'])
+test('T8331', only_ways(['optasm']), compile, ['-ddump-rules'])

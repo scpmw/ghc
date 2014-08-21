@@ -79,6 +79,11 @@ struct Capability_ {
     // full pinned object blocks allocated since the last GC
     bdescr *pinned_object_blocks;
 
+    // per-capability weak pointer list associated with nursery (older
+    // lists stored in generation object)
+    StgWeak *weak_ptr_list_hd;
+    StgWeak *weak_ptr_list_tl;
+
     // Context switch flag.  When non-zero, this means: stop running
     // Haskell code, and switch threads.
     int context_switch;
@@ -92,6 +97,11 @@ struct Capability_ {
     // Haskell code, unlike the context_switch flag which is only
     // reset after we have executed the context switch.
     int interrupt;
+
+    // Heap instruction pointer profiling (only active with TRACING,
+    // but we need offsets to always be valid)
+    StgWord heap_ip_sample_count;
+    void **heap_ip_samples;
 
 #if defined(THREADED_RTS)
     // Worker Tasks waiting in the wings.  Singly-linked.
@@ -421,3 +431,11 @@ INLINE_HEADER rtsBool emptyInbox(Capability *cap)
 #include "EndPrivate.h"
 
 #endif /* CAPABILITY_H */
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

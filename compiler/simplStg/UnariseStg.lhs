@@ -27,6 +27,8 @@ which is the Arity taking into account any expanded arguments, and corresponds t
 the number of (possibly-void) *registers* arguments will arrive in.
 
 \begin{code}
+{-# LANGUAGE CPP #-}
+
 module UnariseStg (unarise) where
 
 #include "HsVersions.h"
@@ -128,10 +130,8 @@ unariseExpr us rho (StgLetNoEscape live_in_let live_in_bind bind e)
   where 
     (us1, us2) = splitUniqSupply us
 
-unariseExpr us rho (StgSCC cc bump_entry push_cc e)
-  = StgSCC cc bump_entry push_cc (unariseExpr us rho e)
-unariseExpr us rho (StgTick mod tick_n e)
-  = StgTick mod tick_n (unariseExpr us rho e)
+unariseExpr us rho (StgTick tick e)
+  = StgTick tick (unariseExpr us rho e)
 
 ------------------------
 unariseAlts :: UniqSupply -> UnariseEnv -> AltType -> Id -> RepType -> [StgAlt] -> (AltType, [StgAlt])

@@ -137,6 +137,18 @@ void postTaskMigrateEvent (EventTaskId taskId,
 
 void postTaskDeleteEvent (EventTaskId taskId);
 
+/*
+ * Sample-based profiling
+ */
+
+void postDebugData(EventTypeNum num, StgWord16 size, StgWord8 *dbg);
+void postDebugModule(char *unit_name);
+void postDebugBlock(char *label);
+void postSampleRange(void *low, void *high);
+void postSamples(Capability *cap, StgBool own_cap,
+                 StgWord32 sample_by, StgWord32 sample_type,
+                 StgWord32 cnt, void **samples, nat *weights);
+
 #else /* !TRACING */
 
 INLINE_HEADER void postSchedEvent (Capability *cap  STG_UNUSED,
@@ -170,3 +182,11 @@ INLINE_HEADER void postThreadLabel(Capability    *cap   STG_UNUSED,
 #include "EndPrivate.h"
 
 #endif /* TRACING_H */
+
+// Local Variables:
+// mode: C
+// fill-column: 80
+// indent-tabs-mode: nil
+// c-basic-offset: 4
+// buffer-file-coding-system: utf-8-unix
+// End:

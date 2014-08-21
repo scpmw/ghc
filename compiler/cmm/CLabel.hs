@@ -44,6 +44,8 @@ module CLabel (
         mkStringLitLabel,
 
         mkAsmTempLabel,
+        mkAsmTempDerivedLabel,
+        mkAsmTempEndLabel,
 
         mkPlainModuleInitLabel,
 
@@ -54,8 +56,13 @@ module CLabel (
         mkIndStaticInfoLabel,
         mkMainCapabilityLabel,
         mkMAP_FROZEN_infoLabel,
+        mkMAP_FROZEN0_infoLabel,
         mkMAP_DIRTY_infoLabel,
+        mkSMAP_FROZEN_infoLabel,
+        mkSMAP_FROZEN0_infoLabel,
+        mkSMAP_DIRTY_infoLabel,
         mkEMPTY_MVAR_infoLabel,
+        mkArrWords_infoLabel,
 
         mkTopTickyCtrLabel,
         mkCAFBlackHoleInfoTableLabel,
@@ -94,7 +101,7 @@ module CLabel (
         mkHpcTicksLabel,
 
         hasCAF,
-        needsCDecl, isAsmTemp, maybeAsmTemp, externallyVisibleCLabel,
+        needsCDecl, maybeAsmTemp, externallyVisibleCLabel,
         isMathFun,
         isCFunctionLabel, isGcPtrLabel, labelDynamic,
 
@@ -118,6 +125,7 @@ import FastString
 import DynFlags
 import Platform
 import UniqSet
+import PprCore ( {- instances -} )
 
 -- -----------------------------------------------------------------------------
 -- The CLabel type
@@ -153,14 +161,14 @@ data CLabel
 
   -- | A label from a .cmm file that is not associated with a .hs level Id.
   | CmmLabel
-        PackageId               -- what package the label belongs to.
+        PackageKey               -- what package the label belongs to.
         FastString              -- identifier giving the prefix of the label
         CmmLabelInfo            -- encodes the suffix of the label
 
   -- | A label with a baked-in \/ algorithmically generated name that definitely
   --    comes from the RTS. The code for it must compile into libHSrts.a \/ libHSrts.so
   --    If it doesn't have an algorithmically generated name then use a CmmLabel
-  --    instead and give it an appropriate PackageId argument.
+  --    instead and give it an appropriate PackageKey argument.
   | RtsLabel
         RtsLabelInfo
 
@@ -184,6 +192,10 @@ data CLabel
 
   | AsmTempLabel
         {-# UNPACK #-} !Unique
+
+  | AsmTempDerivedLabel
+        CLabel
+        FastString              -- suffix
 
   | StringLitLabel
         {-# UNPACK #-} !Unique
@@ -232,7 +244,7 @@ data CLabel
 data ForeignLabelSource
 
    -- | Label is in a named package
-   = ForeignLabelInPackage      PackageId
+   = ForeignLabelInPackage      PackageKey
 
    -- | Label is in some external, system package that doesn't also
    --   contain compiled Haskell code, and is not associated with any .hi files.
@@ -400,26 +412,33 @@ mkStaticConEntryLabel name  c     = IdLabel name c StaticConEntry
 -- Constructing Cmm Labels
 mkDirty_MUT_VAR_Label, mkSplitMarkerLabel, mkUpdInfoLabel,
     mkBHUpdInfoLabel, mkIndStaticInfoLabel, mkMainCapabilityLabel,
-    mkMAP_FROZEN_infoLabel, mkMAP_DIRTY_infoLabel,
+    mkMAP_FROZEN_infoLabel, mkMAP_FROZEN0_infoLabel, mkMAP_DIRTY_infoLabel,
     mkEMPTY_MVAR_infoLabel, mkTopTickyCtrLabel,
-    mkCAFBlackHoleInfoTableLabel, mkCAFBlackHoleEntryLabel :: CLabel
+    mkCAFBlackHoleInfoTableLabel, mkCAFBlackHoleEntryLabel,
+    mkArrWords_infoLabel, mkSMAP_FROZEN_infoLabel, mkSMAP_FROZEN0_infoLabel,
+    mkSMAP_DIRTY_infoLabel :: CLabel
 mkDirty_MUT_VAR_Label           = mkForeignLabel (fsLit "dirty_MUT_VAR") Nothing ForeignLabelInExternalPackage IsFunction
-mkSplitMarkerLabel              = CmmLabel rtsPackageId (fsLit "__stg_split_marker")    CmmCode
-mkUpdInfoLabel                  = CmmLabel rtsPackageId (fsLit "stg_upd_frame")         CmmInfo
-mkBHUpdInfoLabel                = CmmLabel rtsPackageId (fsLit "stg_bh_upd_frame" )     CmmInfo
-mkIndStaticInfoLabel            = CmmLabel rtsPackageId (fsLit "stg_IND_STATIC")        CmmInfo
-mkMainCapabilityLabel           = CmmLabel rtsPackageId (fsLit "MainCapability")        CmmData
-mkMAP_FROZEN_infoLabel          = CmmLabel rtsPackageId (fsLit "stg_MUT_ARR_PTRS_FROZEN0") CmmInfo
-mkMAP_DIRTY_infoLabel           = CmmLabel rtsPackageId (fsLit "stg_MUT_ARR_PTRS_DIRTY") CmmInfo
-mkEMPTY_MVAR_infoLabel          = CmmLabel rtsPackageId (fsLit "stg_EMPTY_MVAR")        CmmInfo
-mkTopTickyCtrLabel              = CmmLabel rtsPackageId (fsLit "top_ct")                CmmData
-mkCAFBlackHoleInfoTableLabel    = CmmLabel rtsPackageId (fsLit "stg_CAF_BLACKHOLE")     CmmInfo
-mkCAFBlackHoleEntryLabel        = CmmLabel rtsPackageId (fsLit "stg_CAF_BLACKHOLE")     CmmEntry
+mkSplitMarkerLabel              = CmmLabel rtsPackageKey (fsLit "__stg_split_marker")    CmmCode
+mkUpdInfoLabel                  = CmmLabel rtsPackageKey (fsLit "stg_upd_frame")         CmmInfo
+mkBHUpdInfoLabel                = CmmLabel rtsPackageKey (fsLit "stg_bh_upd_frame" )     CmmInfo
+mkIndStaticInfoLabel            = CmmLabel rtsPackageKey (fsLit "stg_IND_STATIC")        CmmInfo
+mkMainCapabilityLabel           = CmmLabel rtsPackageKey (fsLit "MainCapability")        CmmData
+mkMAP_FROZEN_infoLabel          = CmmLabel rtsPackageKey (fsLit "stg_MUT_ARR_PTRS_FROZEN") CmmInfo
+mkMAP_FROZEN0_infoLabel         = CmmLabel rtsPackageKey (fsLit "stg_MUT_ARR_PTRS_FROZEN0") CmmInfo
+mkMAP_DIRTY_infoLabel           = CmmLabel rtsPackageKey (fsLit "stg_MUT_ARR_PTRS_DIRTY") CmmInfo
+mkEMPTY_MVAR_infoLabel          = CmmLabel rtsPackageKey (fsLit "stg_EMPTY_MVAR")        CmmInfo
+mkTopTickyCtrLabel              = CmmLabel rtsPackageKey (fsLit "top_ct")                CmmData
+mkCAFBlackHoleInfoTableLabel    = CmmLabel rtsPackageKey (fsLit "stg_CAF_BLACKHOLE")     CmmInfo
+mkCAFBlackHoleEntryLabel        = CmmLabel rtsPackageKey (fsLit "stg_CAF_BLACKHOLE")     CmmEntry
+mkArrWords_infoLabel            = CmmLabel rtsPackageKey (fsLit "stg_ARR_WORDS")         CmmInfo
+mkSMAP_FROZEN_infoLabel         = CmmLabel rtsPackageKey (fsLit "stg_SMALL_MUT_ARR_PTRS_FROZEN") CmmInfo
+mkSMAP_FROZEN0_infoLabel        = CmmLabel rtsPackageKey (fsLit "stg_SMALL_MUT_ARR_PTRS_FROZEN0") CmmInfo
+mkSMAP_DIRTY_infoLabel          = CmmLabel rtsPackageKey (fsLit "stg_SMALL_MUT_ARR_PTRS_DIRTY") CmmInfo
 
 -----
 mkCmmInfoLabel,   mkCmmEntryLabel, mkCmmRetInfoLabel, mkCmmRetLabel,
   mkCmmCodeLabel, mkCmmDataLabel,  mkCmmClosureLabel
-        :: PackageId -> FastString -> CLabel
+        :: PackageKey -> FastString -> CLabel
 
 mkCmmInfoLabel      pkg str     = CmmLabel pkg str CmmInfo
 mkCmmEntryLabel     pkg str     = CmmLabel pkg str CmmEntry
@@ -535,6 +554,11 @@ mkStringLitLabel                = StringLitLabel
 mkAsmTempLabel :: Uniquable a => a -> CLabel
 mkAsmTempLabel a                = AsmTempLabel (getUnique a)
 
+mkAsmTempDerivedLabel :: CLabel -> FastString -> CLabel
+mkAsmTempDerivedLabel = AsmTempDerivedLabel
+
+mkAsmTempEndLabel :: CLabel -> CLabel
+mkAsmTempEndLabel l = mkAsmTempDerivedLabel l (fsLit "_end")
 mkPlainModuleInitLabel :: Module -> CLabel
 mkPlainModuleInitLabel mod      = PlainModuleInitLabel mod
 
@@ -622,12 +646,13 @@ needsCDecl (PlainModuleInitLabel _)     = True
 
 needsCDecl (StringLitLabel _)           = False
 needsCDecl (AsmTempLabel _)             = False
+needsCDecl (AsmTempDerivedLabel _ _)    = False
 needsCDecl (RtsLabel _)                 = False
 
 needsCDecl (CmmLabel pkgId _ _)
         -- Prototypes for labels defined in the runtime system are imported
         --      into HC files via includes/Stg.h.
-        | pkgId == rtsPackageId         = False
+        | pkgId == rtsPackageKey         = False
 
         -- For other labels we inline one into the HC file directly.
         | otherwise                     = True
@@ -639,12 +664,6 @@ needsCDecl (HpcTicksLabel _)            = True
 needsCDecl (DynamicLinkerLabel {})      = panic "needsCDecl DynamicLinkerLabel"
 needsCDecl PicBaseLabel                 = panic "needsCDecl PicBaseLabel"
 needsCDecl (DeadStripPreventer {})      = panic "needsCDecl DeadStripPreventer"
-
--- | Check whether a label is a local temporary for native code generation
-isAsmTemp  :: CLabel -> Bool
-isAsmTemp (AsmTempLabel _)              = True
-isAsmTemp _                             = False
-
 
 -- | If a label is a local temporary used for native code generation
 --      then return just its unique, otherwise nothing.
@@ -751,6 +770,7 @@ externallyVisibleCLabel :: CLabel -> Bool -- not C "static"
 externallyVisibleCLabel (CaseLabel _ _)         = False
 externallyVisibleCLabel (StringLitLabel _)      = False
 externallyVisibleCLabel (AsmTempLabel _)        = False
+externallyVisibleCLabel (AsmTempDerivedLabel _ _)= False
 externallyVisibleCLabel (PlainModuleInitLabel _)= True
 externallyVisibleCLabel (RtsLabel _)            = True
 externallyVisibleCLabel (CmmLabel _ _ _)        = True
@@ -837,11 +857,11 @@ idInfoLabelType info =
 -- @labelDynamic@ returns @True@ if the label is located
 -- in a DLL, be it a data reference or not.
 
-labelDynamic :: DynFlags -> PackageId -> Module -> CLabel -> Bool
+labelDynamic :: DynFlags -> PackageKey -> Module -> CLabel -> Bool
 labelDynamic dflags this_pkg this_mod lbl =
   case lbl of
    -- is the RTS in a DLL or not?
-   RtsLabel _           -> not (gopt Opt_Static dflags) && (this_pkg /= rtsPackageId)
+   RtsLabel _           -> not (gopt Opt_Static dflags) && (this_pkg /= rtsPackageKey)
 
    IdLabel n _ _        -> isDllName dflags this_pkg this_mod n
 
@@ -874,7 +894,9 @@ labelDynamic dflags this_pkg this_mod lbl =
             -- libraries
             True
 
-   PlainModuleInitLabel m -> not (gopt Opt_Static dflags) && this_pkg /= (modulePackageId m)
+   PlainModuleInitLabel m -> not (gopt Opt_Static dflags) && this_pkg /= (modulePackageKey m)
+
+   HpcTicksLabel m        -> not (gopt Opt_Static dflags) && this_pkg /= (modulePackageKey m)
 
    -- Note that DynamicLinkerLabels do NOT require dynamic linking themselves.
    _                 -> False
@@ -966,6 +988,13 @@ pprCLabel platform (AsmTempLabel u)
         ptext (asmTempLabelPrefix platform) <> pprUnique u
      else
         char '_' <> pprUnique u
+
+pprCLabel platform (AsmTempDerivedLabel l suf)
+ | cGhcWithNativeCodeGen == "YES"
+   = ptext (asmTempLabelPrefix platform)
+     <> case l of AsmTempLabel u -> pprUnique u
+                  _other         -> pprCLabel platform l
+     <> ftext suf
 
 pprCLabel platform (DynamicLinkerLabel info lbl)
  | cGhcWithNativeCodeGen == "YES"
@@ -1092,6 +1121,7 @@ pprCLbl (HpcTicksLabel mod)
   = ptext (sLit "_hpc_tickboxes_")  <> ppr mod <> ptext (sLit "_hpc")
 
 pprCLbl (AsmTempLabel {})       = panic "pprCLbl AsmTempLabel"
+pprCLbl (AsmTempDerivedLabel {})= panic "pprCLbl AsmTempDerivedLabel"
 pprCLbl (DynamicLinkerLabel {}) = panic "pprCLbl DynamicLinkerLabel"
 pprCLbl (PicBaseLabel {})       = panic "pprCLbl PicBaseLabel"
 pprCLbl (DeadStripPreventer {}) = panic "pprCLbl DeadStripPreventer"

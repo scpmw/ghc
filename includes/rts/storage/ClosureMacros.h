@@ -326,6 +326,10 @@ EXTERN_INLINE StgOffset mut_arr_ptrs_sizeW( StgMutArrPtrs* x );
 EXTERN_INLINE StgOffset mut_arr_ptrs_sizeW( StgMutArrPtrs* x )
 { return sizeofW(StgMutArrPtrs) + x->size; }
 
+EXTERN_INLINE StgOffset small_mut_arr_ptrs_sizeW( StgSmallMutArrPtrs* x );
+EXTERN_INLINE StgOffset small_mut_arr_ptrs_sizeW( StgSmallMutArrPtrs* x )
+{ return sizeofW(StgSmallMutArrPtrs) + x->ptrs; }
+
 EXTERN_INLINE StgWord stack_sizeW ( StgStack *stack );
 EXTERN_INLINE StgWord stack_sizeW ( StgStack *stack )
 { return sizeofW(StgStack) + stack->stack_size; }
@@ -334,6 +338,11 @@ EXTERN_INLINE StgWord bco_sizeW ( StgBCO *bco );
 EXTERN_INLINE StgWord bco_sizeW ( StgBCO *bco )
 { return bco->size; }
 
+/*
+ * TODO: Consider to switch return type from 'nat' to 'StgWord' #8742
+ *
+ * (Also for 'closure_sizeW' below)
+ */
 EXTERN_INLINE nat closure_sizeW_ (StgClosure *p, StgInfoTable *info);
 EXTERN_INLINE nat
 closure_sizeW_ (StgClosure *p, StgInfoTable *info)
@@ -378,6 +387,11 @@ closure_sizeW_ (StgClosure *p, StgInfoTable *info)
     case MUT_ARR_PTRS_FROZEN:
     case MUT_ARR_PTRS_FROZEN0:
 	return mut_arr_ptrs_sizeW((StgMutArrPtrs*)p);
+    case SMALL_MUT_ARR_PTRS_CLEAN:
+    case SMALL_MUT_ARR_PTRS_DIRTY:
+    case SMALL_MUT_ARR_PTRS_FROZEN:
+    case SMALL_MUT_ARR_PTRS_FROZEN0:
+	return small_mut_arr_ptrs_sizeW((StgSmallMutArrPtrs*)p);
     case TSO:
         return sizeofW(StgTSO);
     case STACK:
@@ -490,8 +504,11 @@ INLINE_HEADER StgWord8 *mutArrPtrsCard (StgMutArrPtrs *a, W_ n)
 
 #if ZERO_SLOP_FOR_LDV_PROF || ZERO_SLOP_FOR_SANITY_CHECK
 #define OVERWRITING_CLOSURE(c) overwritingClosure(c)
+#define OVERWRITING_CLOSURE_OFS(c,n) \
+    overwritingClosureOfs(c,n)
 #else
 #define OVERWRITING_CLOSURE(c) /* nothing */
+#define OVERWRITING_CLOSURE_OFS(c,n) /* nothing */
 #endif
 
 #ifdef PROFILING
@@ -518,6 +535,36 @@ EXTERN_INLINE void overwritingClosure (StgClosure *p)
     for (i = 0; i < size - sizeofW(StgThunkHeader); i++) {
         ((StgThunk *)(p))->payload[i] = 0;
     }
+}
+
+// Version of 'overwritingClosure' which overwrites only a suffix of a
+// closure.  The offset is expressed in words relative to 'p' and shall
+// be less than or equal to closure_sizeW(p), and usually at least as
+// large as the respective thunk header.
+//
+// Note: As this calls LDV_recordDead() you have to call LDV_RECORD()
+//       on the final state of the closure at the call-site
+EXTERN_INLINE void overwritingClosureOfs (StgClosure *p, nat offset);
+EXTERN_INLINE void overwritingClosureOfs (StgClosure *p, nat offset)
+{
+    nat size, i;
+
+#if ZERO_SLOP_FOR_LDV_PROF && !ZERO_SLOP_FOR_SANITY_CHECK
+    // see Note [zeroing slop], also #8402
+    if (era <= 0) return;
+#endif
+
+    size = closure_sizeW(p);
+
+    ASSERT(offset <= size);
+
+    // For LDV profiling, we need to record the closure as dead
+#if defined(PROFILING)
+    LDV_recordDead(p, size);
+#endif
+
+    for (i = offset; i < size; i++)
+        ((StgWord *)p)[i] = 0;
 }
 
 #endif /* RTS_STORAGE_CLOSUREMACROS_H */

@@ -197,6 +197,9 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
             GET_ARM_ISA()
             test -z "[$]2" || eval "[$]2=\"ArchARM {armISA = \$ARM_ISA, armISAExt = \$ARM_ISA_EXT, armABI = \$ARM_ABI}\""
             ;;
+        aarch64)
+            test -z "[$]2" || eval "[$]2=ArchARM64"
+            ;;
         alpha)
             test -z "[$]2" || eval "[$]2=ArchAlpha"
             ;;
@@ -206,7 +209,7 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
         mipsel)
             test -z "[$]2" || eval "[$]2=ArchMipsel"
             ;;
-        hppa|hppa1_1|ia64|m68k|rs6000|s390|s390x|sparc64|vax)
+        hppa|hppa1_1|ia64|m68k|powerpc64le|rs6000|s390|s390x|sparc64|vax)
             test -z "[$]2" || eval "[$]2=ArchUnknown"
             ;;
         *)
@@ -451,6 +454,8 @@ AC_DEFUN([FP_SETTINGS],
     then
         mingw_bin_prefix=mingw/bin/
         SettingsCCompilerCommand="\$topdir/../${mingw_bin_prefix}gcc.exe"
+        SettingsHaskellCPPCommand="\$topdir/../${mingw_bin_prefix}gcc.exe"
+        SettingsHaskellCPPFlags="$HaskellCPPArgs"
         SettingsLdCommand="\$topdir/../${mingw_bin_prefix}ld.exe"
         SettingsArCommand="\$topdir/../${mingw_bin_prefix}ar.exe"
         SettingsPerlCommand='$topdir/../perl/perl.exe'
@@ -459,6 +464,8 @@ AC_DEFUN([FP_SETTINGS],
         SettingsTouchCommand='$topdir/touchy.exe'
     else
         SettingsCCompilerCommand="$WhatGccIsCalled"
+        SettingsHaskellCPPCommand="$HaskellCPPCmd"
+        SettingsHaskellCPPFlags="$HaskellCPPArgs"
         SettingsLdCommand="$LdCmd"
         SettingsArCommand="$ArCmd"
         SettingsPerlCommand="$PerlCmd"
@@ -483,6 +490,8 @@ AC_DEFUN([FP_SETTINGS],
     SettingsCCompilerLinkFlags="$CONF_GCC_LINKER_OPTS_STAGE2"
     SettingsLdFlags="$CONF_LD_LINKER_OPTS_STAGE2"
     AC_SUBST(SettingsCCompilerCommand)
+    AC_SUBST(SettingsHaskellCPPCommand)
+    AC_SUBST(SettingsHaskellCPPFlags)
     AC_SUBST(SettingsCCompilerFlags)
     AC_SUBST(SettingsCCompilerLinkFlags)
     AC_SUBST(SettingsLdCommand)
@@ -517,6 +526,12 @@ AC_DEFUN([FPTOOLS_SET_C_LD_FLAGS],
     esac
 
     case $$1 in
+    i386-unknown-mingw32)
+        $2="$$2 -march=i686"
+        ;;
+    i386-portbld-freebsd*)
+        $2="$$2 -march=i686"
+        ;;
     i386-apple-darwin)
         $2="$$2 -m32"
         $3="$$3 -m32"
@@ -527,6 +542,12 @@ AC_DEFUN([FPTOOLS_SET_C_LD_FLAGS],
         $2="$$2 -m64"
         $3="$$3 -m64"
         $4="$$4 -arch x86_64"
+        $5="$$5 -m64"
+        ;;
+    x86_64-unknown-solaris2)
+        $2="$$2 -m64"
+        $3="$$3 -m64"
+        $4="$$4 -m64"
         $5="$$5 -m64"
         ;;
     alpha-*)
@@ -643,6 +664,10 @@ AC_ARG_WITH($2,
     else
         $1=$withval
     fi
+
+    # Remember that we set this manually.  Used to override CC_STAGE0
+    # and friends later, if we are not cross-compiling.
+    With_$2=$withval
 ],
 [
     if test "$HostOS" != "mingw32"
@@ -685,6 +710,10 @@ AC_ARG_WITH($2,
     else
         $1=$withval
     fi
+
+    # Remember that we set this manually.  Used to override CC_STAGE0
+    # and friends later, if we are not cross-compiling.
+    With_$2=$withval
 ],
 [
     if test "$HostOS" != "mingw32"
@@ -694,6 +723,8 @@ AC_ARG_WITH($2,
 ]
 )
 ]) # FP_ARG_WITH_PATH_GNU_PROG_OPTIONAL
+
+
 
 # FP_PROG_CONTEXT_DIFF
 # --------------------
@@ -864,7 +895,7 @@ else
 fi;
 changequote([, ])dnl
 ])
-if test ! -f compiler/parser/Parser.hs || test ! -f compiler/cmm/CmmParse.hs || test ! -f compiler/parser/ParserCore.hs
+if test ! -f compiler/parser/Parser.hs || test ! -f compiler/cmm/CmmParse.hs
 then
     FP_COMPARE_VERSIONS([$fptools_cv_happy_version],[-lt],[1.19],
       [AC_MSG_ERROR([Happy version 1.19 or later is required to compile GHC.])])[]
@@ -1137,6 +1168,16 @@ AC_DEFUN([FP_PROG_AR_NEEDS_RANLIB],[
         esac
     fi
 
+    # workaround for AC_PROG_RANLIB which sets RANLIB to `:' when
+    # ranlib is missing on the target OS. The problem is that
+    # ghc-cabal cannot execute `:' which is a shell built-in but can
+    # execute `true' which is usually simple program supported by the
+    # OS.
+    # Fixes #8795
+    if test "$RANLIB" = ":"
+    then
+        RANLIB="true"
+    fi
     REAL_RANLIB_CMD="$RANLIB"
     if test $fp_cv_prog_ar_needs_ranlib = yes
     then
@@ -1788,7 +1829,12 @@ AC_MSG_NOTICE(Building in-tree ghc-pwd)
     dnl except we don't want to have to know what make is called. Sigh.
     rm -rf utils/ghc-pwd/dist-boot
     mkdir  utils/ghc-pwd/dist-boot
-    if ! "$WithGhc" -v0 -no-user-$GHC_PACKAGE_DB_FLAG -hidir utils/ghc-pwd/dist-boot -odir utils/ghc-pwd/dist-boot -stubdir utils/ghc-pwd/dist-boot --make utils/ghc-pwd/Main.hs -o utils/ghc-pwd/dist-boot/ghc-pwd
+    dnl If special linker flags are needed to build things, then allow
+    dnl the user to pass them in via LDFLAGS.
+    changequote(, )dnl
+    GHC_LDFLAGS=`echo $LDFLAGS | sed -r 's/(^| )([^ ])/\1-optl\2/g'`
+    changequote([, ])dnl
+    if ! "$WithGhc" $GHC_LDFLAGS -v0 -no-user-$GHC_PACKAGE_DB_FLAG -hidir utils/ghc-pwd/dist-boot -odir utils/ghc-pwd/dist-boot -stubdir utils/ghc-pwd/dist-boot --make utils/ghc-pwd/Main.hs -o utils/ghc-pwd/dist-boot/ghc-pwd
     then
         AC_MSG_ERROR([Building ghc-pwd failed])
     fi
@@ -1831,6 +1877,9 @@ AC_MSG_CHECKING(for path to top of build tree)
 # converts cpu from gnu to ghc naming, and assigns the result to $target_var
 AC_DEFUN([GHC_CONVERT_CPU],[
 case "$1" in
+  aarch64*)
+    $2="aarch64"
+    ;;
   alpha*)
     $2="alpha"
     ;;
@@ -1860,6 +1909,9 @@ case "$1" in
     ;;
   mips*)
     $2="mips"
+    ;;
+  powerpc64le*)
+    $2="powerpc64le"
     ;;
   powerpc64*)
     $2="powerpc64"
@@ -2017,7 +2069,11 @@ AC_DEFUN([FIND_LLVM_PROG],[
         IFS=":;"
         for p in ${PATH}; do
             if test -d "${p}"; then
-                $1=`${FindCmd} "${p}" -type f -perm +111 -maxdepth 1 -regex '.*/$3-[[0-9]]\.[[0-9]]' -or -type l -perm +111 -maxdepth 1 -regex '.*/$3-[[0-9]]\.[[0-9]]' | ${SortCmd} -n | tail -1`
+                if test "$windows" = YES; then
+                    $1=`${FindCmd} "${p}" -type f -maxdepth 1 -regex '.*/$3-[[0-9]]\.[[0-9]]' -or -type l -maxdepth 1 -regex '.*/$3-[[0-9]]\.[[0-9]]' | ${SortCmd} -n | tail -1`
+                else
+                    $1=`${FindCmd} "${p}" -type f -perm +111 -maxdepth 1 -regex '.*/$3-[[0-9]]\.[[0-9]]' -or -type l -perm +111 -maxdepth 1 -regex '.*/$3-[[0-9]]\.[[0-9]]' | ${SortCmd} -n | tail -1`
+                fi
                 if test -n "$$1"; then
                     break
                 fi
@@ -2048,7 +2104,8 @@ AC_DEFUN([FIND_GCC],[
         $1="$CC"
     else
         FP_ARG_WITH_PATH_GNU_PROG_OPTIONAL([$1], [$2], [$3])
-        # From Xcode 5 on, OS X command line tools do not include gcc anymore. Use clang.
+        # From Xcode 5 on/, OS X command line tools do not include gcc
+        # anymore. Use clang.
         if test -z "$$1"
         then
             FP_ARG_WITH_PATH_GNU_PROG_OPTIONAL([$1], [clang], [clang])
@@ -2060,5 +2117,14 @@ AC_DEFUN([FIND_GCC],[
     fi
     AC_SUBST($1)
 ])
+
+AC_DEFUN([MAYBE_OVERRIDE_STAGE0],[
+  if test ! -z "$With_$1" -a "$CrossCompiling" != "YES"; then
+      AC_MSG_NOTICE([Not cross-compiling, so --with-$1 also sets $2])
+      $2=$With_$1
+  fi
+])
+
+
 
 # LocalWords:  fi
